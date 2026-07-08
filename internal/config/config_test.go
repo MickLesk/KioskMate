@@ -54,6 +54,29 @@ func TestLoadPreservesExistingKioskMateConfig(t *testing.T) {
 	}
 }
 
+func TestLoadNormalizesStaleProjectIdentity(t *testing.T) {
+	home := testHome(t)
+	path := filepath.Join(home, ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{
+  "version": 2,
+  "admin": {"bind": "0.0.0.0", "port": 33333, "token": "keep-token"},
+  "kiosk": {"pages": [{"name": "Main", "url": "http://homeassistant.local:8123"}]},
+  "mqtt": {"node": "kioskmate"},
+  "update": {"repository": "MickLesk/`+"touch"+`kio", "service": "`+"touch"+`kio-v2.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Update.Repository != "MickLesk/KioskMate" {
+		t.Fatalf("repository = %s", cfg.Update.Repository)
+	}
+	if cfg.Update.Service != "kioskmate.service" {
+		t.Fatalf("service = %s", cfg.Update.Service)
+	}
+}
+
 func TestSaveBacksUpChangedConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")

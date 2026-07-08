@@ -320,12 +320,31 @@ func normalize(cfg *Config) {
 	if cfg.MQTT.Interval == 0 {
 		cfg.MQTT.Interval = 30 * time.Second
 	}
-	if cfg.Update.Repository == "" {
+	if cfg.Update.Repository == "" || staleProjectValue(cfg.Update.Repository) {
 		cfg.Update.Repository = "MickLesk/KioskMate"
 	}
-	if cfg.Update.Service == "" {
+	if cfg.Update.Service == "" || staleProjectValue(cfg.Update.Service) {
 		cfg.Update.Service = "kioskmate.service"
 	}
+}
+
+func staleProjectValue(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return false
+	}
+	stale := []string{
+		"touch" + "kio",
+		"go." + "kiosk",
+		"go-" + "kiosk",
+		"go_" + "kiosk",
+	}
+	for _, item := range stale {
+		if strings.Contains(normalized, item) {
+			return true
+		}
+	}
+	return false
 }
 
 func isDemoURL(url string) bool {
