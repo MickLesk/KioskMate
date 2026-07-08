@@ -772,6 +772,7 @@
           safeModeHint: "Applies conservative browser settings for small Raspberry Pi devices and restarts the browser.",
           kioskStreaming: "Kiosk streaming",
           browserSettings: "Browser settings",
+          browserPreset: "Browser engine",
           browserCommand: "Browser command",
           browserProfile: "Browser profile",
           extraArgs: "Extra browser args, one per line",
@@ -891,6 +892,13 @@
           balanced: "Balanced",
           raspberry: "Raspberry",
           conservative: "Conservative",
+          chromium: "Chromium",
+          chromiumLite: "Chromium low resource",
+          firefox: "Firefox",
+          webkitCog: "Cog / WPE WebKit",
+          epiphany: "Epiphany / GNOME Web",
+          midori: "Midori",
+          custom: "Custom command",
           software: "Software",
           hardwareMode: "Hardware",
           rotationMode: "Rotation",
@@ -975,6 +983,7 @@
           safeModeHint: "Setzt konservative Browser-Optionen für kleine Raspberry-Pi-Geräte und startet den Browser neu.",
           kioskStreaming: "Kiosk-Streaming",
           browserSettings: "Browser-Einstellungen",
+          browserPreset: "Browser-Engine",
           browserCommand: "Browser-Befehl",
           browserProfile: "Browser-Profil",
           extraArgs: "Zusätzliche Browser-Argumente, eins pro Zeile",
@@ -1094,6 +1103,13 @@
           balanced: "Ausgewogen",
           raspberry: "Raspberry",
           conservative: "Konservativ",
+          chromium: "Chromium",
+          chromiumLite: "Chromium ressourcenschonend",
+          firefox: "Firefox",
+          webkitCog: "Cog / WPE WebKit",
+          epiphany: "Epiphany / GNOME Web",
+          midori: "Midori",
+          custom: "Eigener Befehl",
           software: "Software",
           hardwareMode: "Hardware",
           rotationMode: "Rotation",
@@ -1583,6 +1599,7 @@
               <div class="card">
                 <div class="head"><h3>${esc(t("browserSettings"))}</h3></div>
                 <div class="body form-grid">
+                  ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
                   ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
                   ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
                   ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")]])}
@@ -1935,6 +1952,7 @@
           cfg.watchdog = cfg.watchdog || {};
           cfg.kiosk.pages = collectPages();
           cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
+          cfg.kiosk.browser_preset = val("kiosk-browser-preset") || "chromium";
           cfg.kiosk.browser_command = val("kiosk-browser");
           cfg.kiosk.user_data_dir = val("kiosk-user-data");
           cfg.kiosk.theme = val("kiosk-theme");
@@ -2445,6 +2463,18 @@
         const base = String(val("mqtt-base-topic") || state.config?.mqtt?.base_topic || "kioskmate").replace(/^\/+|\/+$/g, "");
         const node = String(val("mqtt-node") || state.config?.mqtt?.node || "kioskmate").replace(/^\/+|\/+$/g, "");
         return `${base}/${node}/command`;
+      }
+
+      function browserPresetOptions() {
+        return [
+          ["chromium", t("chromium")],
+          ["chromium-lite", t("chromiumLite")],
+          ["firefox", t("firefox")],
+          ["webkit-cog", t("webkitCog")],
+          ["epiphany", t("epiphany")],
+          ["midori", t("midori")],
+          ["custom", t("custom")],
+        ];
       }
 
       function objectEntries(obj) {

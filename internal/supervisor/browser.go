@@ -288,15 +288,15 @@ func (b *Browser) shouldRestart(stats system.ProcessTreeStats) bool {
 }
 
 func (b *Browser) command() (string, []string, error) {
+	preset := browserPreset(b.cfg.Kiosk.BrowserPreset)
 	command := b.cfg.Kiosk.BrowserCommand
-	if command == "" {
-		command = findBrowser()
+	if command == "" || preset != "custom" {
+		command = findBrowser(preset)
 	}
 	if command == "" {
-		return "", nil, fmt.Errorf("no browser found, install chromium or set kiosk.browser_command")
+		return "", nil, fmt.Errorf("no browser found for preset %q, install a supported browser or use custom command", preset)
 	}
-	args := append(defaultBrowserArgs(b.cfg), b.cfg.Kiosk.ExtraArgs...)
-	args = append(args, b.activeURL())
+	args := browserArgs(b.cfg, preset, b.activeURL(), b.cfg.Kiosk.ExtraArgs)
 	return command, args, nil
 }
 
@@ -441,8 +441,17 @@ func clampPage(page int, count int) int {
 	return page
 }
 
-func findBrowser() string {
-	candidates := []string{"chromium-browser", "chromium", "google-chrome-stable", "google-chrome", "microsoft-edge"}
+func browserPreset(preset string) string {
+	switch strings.TrimSpace(strings.ToLower(preset)) {
+	case "chromium", "chromium-lite", "firefox", "webkit-cog", "epiphany", "midori", "custom":
+		return strings.TrimSpace(strings.ToLower(preset))
+	default:
+		return "chromium"
+	}
+}
+
+func findBrowser(preset string) string {
+	candidates := browserCandidates(preset)
 	for _, name := range candidates {
 		if path, err := exec.LookPath(name); err == nil {
 			return path
@@ -451,7 +460,42 @@ func findBrowser() string {
 	return ""
 }
 
-func defaultBrowserArgs(cfg *config.Config) []string {
+func browserCandidates(preset string) []string {
+	switch preset {
+	case "firefox":
+		return []string{"firefox-esr", "firefox"}
+	case "webkit-cog":
+		return []string{"cog"}
+	case "epiphany":
+		return []string{"epiphany-browser", "epiphany"}
+	case "midori":
+		return []string{"midori"}
+	default:
+		return []string{"chromium-browser", "chromium", "google-chrome-stable", "google-chrome", "microsoft-edge"}
+	}
+}
+
+func browserArgs(cfg *config.Config, preset string, url string, extra []string) []string {
+	switch preset {
+	case "firefox":
+		return append(firefoxArgs(cfg), append(extra, url)...)
+	case "webkit-cog":
+		return append(extra, url)
+	case "epiphany":
+		return append([]string{"--application-mode"}, append(extra, url)...)
+	case "midori":
+		return append([]string{"-e", "Fullscreen"}, append(extra, url)...)
+	case "custom":
+		return append(extra, url)
+	case "chromium-lite":
+		args := append(chromiumArgs(cfg), chromiumLiteArgs()...)
+		return append(args, append(extra, url)...)
+	default:
+		return append(chromiumArgs(cfg), append(extra, url)...)
+	}
+}
+
+func chromiumArgs(cfg *config.Config) []string {
 	args := []string{
 		"--kiosk",
 		"--user-data-dir=" + cfg.Kiosk.UserDataDir,
@@ -472,6 +516,29 @@ func defaultBrowserArgs(cfg *config.Config) []string {
 	}
 	if cfg.Performance.GPUMode == "software" {
 		args = append(args, "--disable-gpu", "--disable-gpu-compositing")
+	}
+	return args
+}
+
+func chromiumLiteArgs() []string {
+	return []string{
+		"--disable-dev-shm-usage",
+		"--disable-extensions",
+		"--disable-sync",
+		"--disable-print-preview",
+		"--disable-speech-api",
+		"--disable-notifications",
+		"--disable-background-timer-throttling",
+		"--disable-renderer-backgrounding",
+		"--renderer-process-limit=2",
+		"--process-per-site",
+	}
+}
+
+func firefoxArgs(cfg *config.Config) []string {
+	args := []string{"--kiosk"}
+	if cfg.Kiosk.UserDataDir != "" {
+		args = append(args, "--profile", cfg.Kiosk.UserDataDir)
 	}
 	return args
 }

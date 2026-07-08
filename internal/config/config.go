@@ -38,6 +38,7 @@ func (c AdminConfig) Addr() string {
 type KioskConfig struct {
 	URLs           []string       `json:"urls"`
 	Pages          []KioskPage    `json:"pages"`
+	BrowserPreset  string         `json:"browser_preset"`
 	BrowserCommand string         `json:"browser_command"`
 	ExtraArgs      []string       `json:"extra_args"`
 	UserDataDir    string         `json:"user_data_dir"`
@@ -236,11 +237,12 @@ func defaults(path string) Config {
 			Token: randomToken(),
 		},
 		Kiosk: KioskConfig{
-			URLs:        []string{"https://demo.home-assistant.io"},
-			Pages:       []KioskPage{{Name: "Home Assistant Demo", URL: "https://demo.home-assistant.io"}},
-			Theme:       "dark",
-			ZoomPercent: 125,
-			Widget:      true,
+			URLs:          []string{"https://demo.home-assistant.io"},
+			Pages:         []KioskPage{{Name: "Home Assistant Demo", URL: "https://demo.home-assistant.io"}},
+			BrowserPreset: "chromium",
+			Theme:         "dark",
+			ZoomPercent:   125,
+			Widget:        true,
 			Scheduler: KioskScheduler{
 				Enabled:      false,
 				Mode:         "rotation",
@@ -300,6 +302,9 @@ func normalize(cfg *Config) {
 		}
 	}
 	cfg.Kiosk.URLs = cfg.Kiosk.PageURLs()
+	if cfg.Kiosk.BrowserPreset == "" {
+		cfg.Kiosk.BrowserPreset = "chromium"
+	}
 	if cfg.Kiosk.UserDataDir == "" {
 		cfg.Kiosk.UserDataDir = defaultBrowserDataDir()
 	}

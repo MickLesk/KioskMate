@@ -71,6 +71,7 @@ func TestSchedulerOvernightRule(t *testing.T) {
 
 func TestExpectedBrowserStopDoesNotRecordLastError(t *testing.T) {
 	cfg := schedulerTestConfig()
+	cfg.Kiosk.BrowserPreset = "custom"
 	cfg.Kiosk.BrowserCommand = "go"
 	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	cmd := exec.Command("go", "env", "-badflag")
@@ -95,6 +96,7 @@ func TestExpectedBrowserStopDoesNotRecordLastError(t *testing.T) {
 
 func TestUnexpectedBrowserExitRecordsLastError(t *testing.T) {
 	cfg := schedulerTestConfig()
+	cfg.Kiosk.BrowserPreset = "custom"
 	cfg.Kiosk.BrowserCommand = "go"
 	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	cmd := exec.Command("go", "env", "-badflag")
@@ -111,6 +113,36 @@ func TestUnexpectedBrowserExitRecordsLastError(t *testing.T) {
 	if status.LastError == "" {
 		t.Fatal("expected last error after unexpected exit")
 	}
+}
+
+func TestBrowserPresetArgs(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.UserDataDir = t.TempDir()
+	cfg.Kiosk.ExtraArgs = []string{"--flag"}
+
+	chromium := browserArgs(cfg, "chromium-lite", "http://ha.local", cfg.Kiosk.ExtraArgs)
+	if !contains(chromium, "--renderer-process-limit=2") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
+		t.Fatalf("chromium-lite args = %#v", chromium)
+	}
+
+	firefox := browserArgs(cfg, "firefox", "http://ha.local", cfg.Kiosk.ExtraArgs)
+	if contains(firefox, "--disable-gpu") || !contains(firefox, "--kiosk") || firefox[len(firefox)-1] != "http://ha.local" {
+		t.Fatalf("firefox args = %#v", firefox)
+	}
+
+	cog := browserArgs(cfg, "webkit-cog", "http://ha.local", nil)
+	if len(cog) != 1 || cog[0] != "http://ha.local" {
+		t.Fatalf("cog args = %#v", cog)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func schedulerTestConfig() *config.Config {
