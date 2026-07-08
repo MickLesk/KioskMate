@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>KioskMate v2 Admin</title>
+    <title>KioskMate Admin</title>
     <style>
       :root {
         color-scheme: dark;
@@ -517,7 +517,7 @@
             <span class="logo-mark" aria-hidden="true"></span>
             <div>
               <h1>KioskMate</h1>
-              <div class="subtle">v2 control panel</div>
+              <div class="subtle">control panel</div>
             </div>
           </div>
         </div>
@@ -1068,7 +1068,7 @@
           "Recovery token": "Recovery-Token",
           "Use Recovery Token": "Recovery-Token nutzen",
           "Recovery:": "Recovery:",
-          "v2 control panel": "v2 Kontrollpanel",
+          "control panel": "Kontrollpanel",
           Refresh: "Aktualisieren",
           Logout: "Abmelden",
           Dashboard: "Dashboard",
@@ -2073,14 +2073,14 @@
                   <div class="subtle">${esc(item.kind)} / ${esc(item.path)}</div>
                 </div>
                 <div class="subtle">${new Date(item.modified).toLocaleString()} / ${Math.round((item.size || 0) / 1024)} KB</div>
-                ${item.kind === "v2" ? '<button onclick="restoreBackup(' + JSON.stringify(item.path).replace(/"/g, "&quot;") + ')">Restore</button>' : '<span class="subtle">Legacy source</span>'}
+                ${item.kind === "config" ? '<button onclick="restoreBackup(' + JSON.stringify(item.path).replace(/"/g, "&quot;") + ')">Restore</button>' : '<span class="subtle">Read only</span>'}
               </div>`)
               .join("")
           : '<div class="subtle">No backups found yet.</div>';
       }
 
       async function restoreBackup(path) {
-        if (!confirm("Restore this v2 config backup and reload the UI?")) return;
+        if (!confirm("Restore this KioskMate config backup and reload the UI?")) return;
         return runAction("Restore backup", async () => {
           await postJson("/api/config/restore", { path });
           await refreshAll();

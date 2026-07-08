@@ -645,7 +645,7 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	allowed := false
 	for _, file := range s.backupFiles() {
-		if file.Path == body.Path && (file.Kind == "v2" || file.Kind == "previous") {
+		if file.Path == body.Path && file.Kind == "config" {
 			allowed = true
 			break
 		}

@@ -93,7 +93,7 @@ body:
       label: Used arguments
       placeholder: arguments json
       description: |
-        You can use `cat ~/.config/kioskmate/Arguments.json` to get the file content.
+        You can use `cat ~/.config/kioskmate/config.json` to get the file content.
       render: json
   - type: textarea
     id: log_file
