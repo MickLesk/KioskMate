@@ -714,6 +714,7 @@
           node: "Node",
           interval: "Interval seconds",
           commandTopic: "Command topic",
+          publishedTopics: "Published topics",
           testConnection: "Test connection",
           connected: "Connected",
           disconnected: "Disconnected",
@@ -908,6 +909,7 @@
           node: "Node",
           interval: "Intervall Sekunden",
           commandTopic: "Command-Topic",
+          publishedTopics: "Veröffentlichte Topics",
           testConnection: "Verbindung testen",
           connected: "Verbunden",
           disconnected: "Getrennt",
@@ -1453,7 +1455,7 @@
               ${switchHtml("mqtt-enabled", t("enabled"), !!mqtt.enabled)}
               <div class="form-grid">
                 ${field("mqtt-url", t("mqttUrl"), "text", "", mqtt.url || "")}
-                ${selectHtml("mqtt-version", t("mqttVersion"), mqtt.version || "3.1.1", [["3.1.1", "MQTT 3.1.1"], ["5.0", "MQTT 5.0 (" + t("unsupported") + ")"]])}
+                ${selectHtml("mqtt-version", t("mqttVersion"), mqtt.version || "3.1.1", [["3.1.1", "MQTT 3.1.1"], ["5.0", "MQTT 5.0"]])}
                 ${field("mqtt-user", t("username"), "text", "username", mqtt.username || "")}
                 ${field("mqtt-password", t("password"), "password", "current-password", mqtt.password || "")}
                 ${field("mqtt-discovery", t("discoveryPrefix"), "text", "", mqtt.discovery || "homeassistant")}
@@ -1461,7 +1463,7 @@
                 ${field("mqtt-interval", t("interval"), "number", "", secondsToDuration(mqtt.interval, 30))}
               </div>
               <div class="metric"><span class="muted">${esc(t("commandTopic"))}</span><strong id="mqtt-topic">${esc(commandTopic())}</strong></div>
-              <div id="mqtt-result" class="hint"></div>
+              <pre id="mqtt-result" class="logbox"></pre>
             </div>
           </div>`;
       }
@@ -1868,9 +1870,13 @@
             version: val("mqtt-version"),
             username: val("mqtt-user"),
             password: val("mqtt-password"),
+            discovery: val("mqtt-discovery") || "homeassistant",
             node: val("mqtt-node"),
           });
-          output.textContent = result.ok ? `${t("connected")} (${result.latency_ms} ms)` : `${t("disconnected")}: ${result.error}`;
+          const topics = (result.published_topics || []).join("\n");
+          output.textContent = result.ok
+            ? `${t("connected")} (${result.latency_ms} ms)\n${t("publishedTopics")}:\n${topics}`
+            : `${t("disconnected")}: ${result.error || t("unknown")}`;
         }, t("testConnection"));
       }
 

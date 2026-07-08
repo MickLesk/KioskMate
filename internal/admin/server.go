@@ -911,11 +911,12 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		URL      string `json:"url"`
-		Version  string `json:"version"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Node     string `json:"node"`
+		URL       string `json:"url"`
+		Version   string `json:"version"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		Node      string `json:"node"`
+		Discovery string `json:"discovery"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -928,19 +929,49 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 	if body.Version == "" {
 		body.Version = "3.1.1"
 	}
-	if body.Version != "3.1.1" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "internal MQTT client currently supports MQTT 3.1.1; MQTT 5.0 is planned"})
+	if body.Version != "3.1.1" && body.Version != "5.0" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "supported MQTT versions are 3.1.1 and 5.0"})
 		return
 	}
-	client := &mqttclient.Client{URL: body.URL, ClientID: firstNonEmpty(body.Node, "kioskmate") + "_test", Username: body.Username, Password: body.Password}
+	node := strings.Trim(firstNonEmpty(body.Node, "kioskmate"), "/")
+	discovery := strings.Trim(firstNonEmpty(body.Discovery, "homeassistant"), "/")
+	client := &mqttclient.Client{URL: body.URL, ClientID: node + "_test", Username: body.Username, Password: body.Password, Version: body.Version}
 	start := time.Now()
-	err := client.Ping()
-	_ = client.Close()
-	if err != nil {
+	published := []string{}
+	if err := client.Ping(); err != nil {
+		_ = client.Close()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
+	stateTopic := node + "/connection_test/state"
+	if err := client.Publish(stateTopic, []byte(time.Now().UTC().Format(time.RFC3339)), true); err != nil {
+		_ = client.Close()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
+		return
+	}
+	published = append(published, stateTopic)
+	configTopic := discovery + "/sensor/" + node + "/connection_test/config"
+	payload, _ := json.Marshal(map[string]any{
+		"name":               "Connection Test",
+		"unique_id":          node + "_connection_test",
+		"state_topic":        stateTopic,
+		"icon":               "mdi:lan-connect",
+		"entity_category":    "diagnostic",
+		"availability_topic": node + "/availability",
+		"device": map[string]any{
+			"identifiers":  []string{node},
+			"name":         "KioskMate",
+			"manufacturer": "KioskMate",
+		},
+	})
+	if err := client.Publish(configTopic, payload, true); err != nil {
+		_ = client.Close()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version, "published_topics": published})
+		return
+	}
+	published = append(published, configTopic)
+	_ = client.Close()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": time.Since(start).Milliseconds(), "version": body.Version, "published_topics": published})
 }
 
 func (s *Server) browserPage(w http.ResponseWriter, r *http.Request) {

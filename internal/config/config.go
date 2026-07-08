@@ -333,7 +333,7 @@ func normalize(cfg *Config) {
 	if cfg.MQTT.Discovery == "" {
 		cfg.MQTT.Discovery = "homeassistant"
 	}
-	if cfg.MQTT.Version == "" || cfg.MQTT.Version != "3.1.1" {
+	if cfg.MQTT.Version == "" || !supportedMQTTVersion(cfg.MQTT.Version) {
 		cfg.MQTT.Version = "3.1.1"
 	}
 	if cfg.MQTT.Node == "" {
@@ -378,9 +378,9 @@ func Repair(cfg *Config) RepairReport {
 		cfg.MQTT.Node = "kioskmate"
 		add("mqtt_node", "MQTT node reset to kioskmate.", true)
 	}
-	if cfg.MQTT.Version == "" || cfg.MQTT.Version != "3.1.1" {
+	if cfg.MQTT.Version == "" || !supportedMQTTVersion(cfg.MQTT.Version) {
 		cfg.MQTT.Version = "3.1.1"
-		add("mqtt_version", "MQTT protocol reset to 3.1.1, the currently supported internal client version.", true)
+		add("mqtt_version", "MQTT protocol reset to 3.1.1 because the configured version is unsupported.", true)
 	}
 	if len(cfg.Kiosk.PageURLs()) == 0 {
 		cfg.Kiosk.Pages = []KioskPage{{Name: "Home Assistant Demo", URL: "https://demo.home-assistant.io"}}
@@ -431,6 +431,15 @@ func appendUnique(values []string, additions ...string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func supportedMQTTVersion(version string) bool {
+	switch strings.TrimSpace(version) {
+	case "3.1.1", "5.0":
+		return true
+	default:
+		return false
+	}
 }
 
 func staleProjectValue(value string) bool {

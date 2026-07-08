@@ -16,6 +16,7 @@ type Client struct {
 	ClientID string
 	Username string
 	Password string
+	Version  string
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -52,7 +53,7 @@ func (c *Client) Connect() error {
 		return err
 	}
 	c.conn = conn
-	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, 30)); err != nil {
+	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, 30, c.Version)); err != nil {
 		_ = c.Close()
 		return err
 	}
@@ -78,7 +79,7 @@ func (c *Client) Publish(topic string, payload []byte, retained bool) error {
 	if retained {
 		flags |= 1
 	}
-	if err := writePacket(c.conn, packetPublish, flags, publishPayload(topic, payload)); err != nil {
+	if err := writePacket(c.conn, packetPublish, flags, publishPayload(topic, payload, c.Version)); err != nil {
 		_ = c.Close()
 		return err
 	}
@@ -119,7 +120,7 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 		c.next = 1
 	}
 	id := c.next
-	if err := writePacket(c.conn, packetSubscribe, 2, subscribePayload(id, topics)); err != nil {
+	if err := writePacket(c.conn, packetSubscribe, 2, subscribePayload(id, topics, c.Version)); err != nil {
 		c.mu.Unlock()
 		_ = c.Close()
 		return err
@@ -133,7 +134,7 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 		}
 		switch packet {
 		case packetPublish:
-			topic, body, err := parsePublish(payload)
+			topic, body, err := parsePublish(payload, c.Version)
 			if err == nil {
 				handler(topic, body)
 			}

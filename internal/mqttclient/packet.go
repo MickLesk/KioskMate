@@ -83,10 +83,14 @@ func mqttString(value string) []byte {
 	return buf.Bytes()
 }
 
-func connectPayload(clientID, username, password string, keepAlive uint16) []byte {
+func connectPayload(clientID, username, password string, keepAlive uint16, version string) []byte {
 	var buf bytes.Buffer
 	buf.Write(mqttString("MQTT"))
-	buf.WriteByte(4)
+	if protocolLevel(version) == 5 {
+		buf.WriteByte(5)
+	} else {
+		buf.WriteByte(4)
+	}
 	flags := byte(0x02)
 	if username != "" {
 		flags |= 0x80
@@ -96,6 +100,9 @@ func connectPayload(clientID, username, password string, keepAlive uint16) []byt
 	}
 	buf.WriteByte(flags)
 	_ = binary.Write(&buf, binary.BigEndian, keepAlive)
+	if protocolLevel(version) == 5 {
+		buf.WriteByte(0)
+	}
 	buf.Write(mqttString(clientID))
 	if username != "" {
 		buf.Write(mqttString(username))
@@ -106,16 +113,22 @@ func connectPayload(clientID, username, password string, keepAlive uint16) []byt
 	return buf.Bytes()
 }
 
-func publishPayload(topic string, payload []byte) []byte {
+func publishPayload(topic string, payload []byte, version string) []byte {
 	var buf bytes.Buffer
 	buf.Write(mqttString(topic))
+	if protocolLevel(version) == 5 {
+		buf.WriteByte(0)
+	}
 	buf.Write(payload)
 	return buf.Bytes()
 }
 
-func subscribePayload(id uint16, topics []string) []byte {
+func subscribePayload(id uint16, topics []string, version string) []byte {
 	var buf bytes.Buffer
 	_ = binary.Write(&buf, binary.BigEndian, id)
+	if protocolLevel(version) == 5 {
+		buf.WriteByte(0)
+	}
 	for _, topic := range topics {
 		buf.Write(mqttString(topic))
 		buf.WriteByte(0)
@@ -123,7 +136,7 @@ func subscribePayload(id uint16, topics []string) []byte {
 	return buf.Bytes()
 }
 
-func parsePublish(payload []byte) (string, []byte, error) {
+func parsePublish(payload []byte, version string) (string, []byte, error) {
 	if len(payload) < 2 {
 		return "", nil, errors.New("short publish")
 	}
@@ -131,5 +144,39 @@ func parsePublish(payload []byte) (string, []byte, error) {
 	if len(payload) < 2+size {
 		return "", nil, errors.New("short publish topic")
 	}
-	return string(payload[2 : 2+size]), payload[2+size:], nil
+	body := payload[2+size:]
+	if protocolLevel(version) == 5 {
+		propertyLength, used, err := decodeRemainingLengthBytes(body)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(body) < used+propertyLength {
+			return "", nil, errors.New("short publish properties")
+		}
+		body = body[used+propertyLength:]
+	}
+	return string(payload[2 : 2+size]), body, nil
+}
+
+func protocolLevel(version string) byte {
+	if version == "5.0" || version == "5" {
+		return 5
+	}
+	return 4
+}
+
+func decodeRemainingLengthBytes(data []byte) (int, int, error) {
+	multiplier := 1
+	value := 0
+	for i := 0; i < 4; i++ {
+		if len(data) <= i {
+			return 0, 0, errors.New("malformed remaining length")
+		}
+		value += int(data[i]&127) * multiplier
+		if data[i]&128 == 0 {
+			return value, i + 1, nil
+		}
+		multiplier *= 128
+	}
+	return 0, 0, errors.New("malformed remaining length")
 }

@@ -77,6 +77,35 @@ func TestLoadNormalizesStaleProjectIdentity(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesMQTT5(t *testing.T) {
+	home := testHome(t)
+	path := filepath.Join(home, ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{
+  "version": 2,
+  "admin": {"bind": "0.0.0.0", "port": 33333},
+  "kiosk": {"pages": [{"name": "Main", "url": "http://homeassistant.local:8123"}]},
+  "mqtt": {"enabled": true, "url": "mqtt://ha.local:1883", "node": "panel", "version": "5.0"},
+  "update": {"repository": "MickLesk/KioskMate", "service": "kioskmate.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MQTT.Version != "5.0" {
+		t.Fatalf("mqtt version = %s, want 5.0", cfg.MQTT.Version)
+	}
+	report := Repair(cfg)
+	if cfg.MQTT.Version != "5.0" {
+		t.Fatalf("repair reset mqtt version to %s", cfg.MQTT.Version)
+	}
+	for _, issue := range report.Issues {
+		if issue.ID == "mqtt_version" && issue.Fixed {
+			t.Fatalf("repair unexpectedly fixed mqtt_version: %#v", report)
+		}
+	}
+}
+
 func TestSaveBacksUpChangedConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")

@@ -54,13 +54,43 @@ func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, u
 }
 
 func (s *MQTTService) Run(ctx context.Context) {
-	if !s.cfg.MQTT.Enabled || s.cfg.MQTT.URL == "" {
-		return
-	}
-	ticker := time.NewTicker(s.cfg.MQTT.Interval)
-	defer ticker.Stop()
-	go s.commands(ctx)
+	var commandCancel context.CancelFunc
+	activeKey := ""
+	defer func() {
+		if commandCancel != nil {
+			commandCancel()
+		}
+		s.closeClients()
+	}()
 	for {
+		if !s.cfg.MQTT.Enabled || s.cfg.MQTT.URL == "" {
+			if activeKey != "" {
+				s.closeClients()
+				if commandCancel != nil {
+					commandCancel()
+					commandCancel = nil
+				}
+				activeKey = ""
+				s.logger.Info("mqtt disabled")
+			}
+			if !sleepContext(ctx, 5*time.Second) {
+				return
+			}
+			continue
+		}
+		key := s.connectionKey()
+		if key != activeKey {
+			s.closeClients()
+			if commandCancel != nil {
+				commandCancel()
+			}
+			commandCtx, cancel := context.WithCancel(ctx)
+			commandCancel = cancel
+			activeKey = key
+			s.cache = map[string]string{}
+			go s.commands(commandCtx)
+			s.logger.Info("mqtt connection configured", "root", s.root(), "discovery", s.cfg.MQTT.Discovery, "version", s.cfg.MQTT.Version)
+		}
 		if err := s.publishAll(); err != nil {
 			s.logger.Warn("mqtt publish failed", "error", err)
 			if s.client != nil {
@@ -68,15 +98,56 @@ func (s *MQTTService) Run(ctx context.Context) {
 				s.client = nil
 			}
 		}
-		select {
-		case <-ctx.Done():
+		if !sleepContext(ctx, mqttInterval(s.cfg.MQTT.Interval)) {
 			if s.client != nil {
 				_ = s.client.Publish(s.root()+"/availability", []byte("offline"), true)
-				_ = s.client.Close()
 			}
 			return
-		case <-ticker.C:
 		}
+	}
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func mqttInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 30 * time.Second
+	}
+	if interval < 5*time.Second {
+		return 5 * time.Second
+	}
+	return interval
+}
+
+func (s *MQTTService) connectionKey() string {
+	return strings.Join([]string{
+		s.cfg.MQTT.URL,
+		s.cfg.MQTT.Username,
+		s.cfg.MQTT.Password,
+		s.cfg.MQTT.Node,
+		s.cfg.MQTT.Discovery,
+		s.cfg.MQTT.Version,
+	}, "\x00")
+}
+
+func (s *MQTTService) closeClients() {
+	if s.client != nil {
+		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), true)
+		_ = s.client.Close()
+		s.client = nil
+	}
+	if s.command != nil {
+		_ = s.command.Close()
+		s.command = nil
 	}
 }
 
@@ -86,6 +157,7 @@ func (s *MQTTService) commands(ctx context.Context) {
 		ClientID: s.cfg.MQTT.Node + "_cmd",
 		Username: s.cfg.MQTT.Username,
 		Password: s.cfg.MQTT.Password,
+		Version:  s.cfg.MQTT.Version,
 	}
 	s.command = client
 	topics := []string{
@@ -128,7 +200,10 @@ func (s *MQTTService) commands(ctx context.Context) {
 			return
 		}
 		s.logger.Warn("mqtt command subscription failed", "error", err)
-		time.Sleep(5 * time.Second)
+		if !sleepContext(ctx, 5*time.Second) {
+			_ = client.Close()
+			return
+		}
 	}
 }
 
@@ -983,6 +1058,7 @@ func (s *MQTTService) mqtt() *mqttclient.Client {
 			ClientID: s.cfg.MQTT.Node,
 			Username: s.cfg.MQTT.Username,
 			Password: s.cfg.MQTT.Password,
+			Version:  s.cfg.MQTT.Version,
 		}
 	}
 	return s.client
