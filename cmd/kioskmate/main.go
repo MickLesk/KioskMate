@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MickLesk/KioskMate/v2/internal/actions"
-	"github.com/MickLesk/KioskMate/v2/internal/admin"
-	"github.com/MickLesk/KioskMate/v2/internal/config"
-	"github.com/MickLesk/KioskMate/v2/internal/hardware"
-	"github.com/MickLesk/KioskMate/v2/internal/integration"
-	"github.com/MickLesk/KioskMate/v2/internal/supervisor"
-	"github.com/MickLesk/KioskMate/v2/internal/updater"
+	"github.com/MickLesk/KioskMate/internal/actions"
+	"github.com/MickLesk/KioskMate/internal/admin"
+	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/hardware"
+	"github.com/MickLesk/KioskMate/internal/integration"
+	"github.com/MickLesk/KioskMate/internal/supervisor"
+	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
 var version = "dev"
@@ -75,7 +75,7 @@ func main() {
 	go browser.RunScheduler(ctx)
 	go mqttService.Run(ctx)
 
-	logger.Info("go.kiosk core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
+	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
 	for _, url := range adminURLs(cfg.Admin.Bind, cfg.Admin.Port) {
 		logger.Info("admin ui", "url", url)
 	}

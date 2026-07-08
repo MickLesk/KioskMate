@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MickLesk/KioskMate/v2/internal/config"
-	"github.com/MickLesk/KioskMate/v2/internal/system"
+	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/system"
 )
 
 type Browser struct {

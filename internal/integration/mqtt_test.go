@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MickLesk/KioskMate/v2/internal/config"
-	"github.com/MickLesk/KioskMate/v2/internal/hardware"
-	"github.com/MickLesk/KioskMate/v2/internal/supervisor"
+	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/hardware"
+	"github.com/MickLesk/KioskMate/internal/supervisor"
 )
 
 type fakeBrowser struct {

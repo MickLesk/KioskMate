@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -161,15 +160,8 @@ func Load(path string) (*Config, error) {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return nil, err
 		}
-		if legacy := loadLegacy(path); legacy != nil {
-			mergeLegacy(&cfg, legacy)
-		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
-	} else if previous := loadPreviousV2(path); previous != nil {
-		cfg = *previous
-	} else if legacy := loadLegacy(path); legacy != nil {
-		cfg = *legacy
 	}
 	cfg.Path = path
 	normalize(&cfg)
@@ -336,150 +328,6 @@ func normalize(cfg *Config) {
 	}
 }
 
-type legacyArgs struct {
-	WebURL             any    `json:"web_url"`
-	MQTTURL            string `json:"mqtt_url"`
-	MQTTUser           string `json:"mqtt_user"`
-	MQTTPassword       string `json:"mqtt_password"`
-	MQTTDiscovery      string `json:"mqtt_discovery"`
-	AppPerformanceMode string `json:"app_performance_mode"`
-	AppGPUMode         string `json:"app_gpu_mode"`
-	AppReduceMotion    string `json:"app_reduce_motion"`
-	WebTheme           string `json:"web_theme"`
-	WebZoom            string `json:"web_zoom"`
-	WebWidget          string `json:"web_widget"`
-	AdminBind          string `json:"admin_bind"`
-	AdminPort          string `json:"admin_port"`
-	AdminPasswordHash  string `json:"admin_password_hash"`
-}
-
-func loadLegacy(path string) *Config {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return nil
-	}
-	legacyPath := filepath.Join(home, ".config", LegacyAppLower(), "Arguments.json")
-	data, err := os.ReadFile(legacyPath)
-	if err != nil {
-		return nil
-	}
-	var legacy legacyArgs
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return nil
-	}
-	cfg := defaults(path)
-	if urls := legacyURLs(legacy.WebURL); len(urls) > 0 {
-		cfg.Kiosk.URLs = urls
-		cfg.Kiosk.Pages = nil
-		for i, url := range urls {
-			cfg.Kiosk.Pages = append(cfg.Kiosk.Pages, KioskPage{Name: fmt.Sprintf("Kiosk %d", i+1), URL: url})
-		}
-	}
-	cfg.MQTT.URL = legacy.MQTTURL
-	cfg.MQTT.Username = legacy.MQTTUser
-	cfg.MQTT.Password = legacy.MQTTPassword
-	cfg.MQTT.Enabled = legacy.MQTTURL != ""
-	if legacy.MQTTDiscovery != "" {
-		cfg.MQTT.Discovery = legacy.MQTTDiscovery
-	}
-	if legacy.AppPerformanceMode != "" {
-		cfg.Performance.Profile = legacy.AppPerformanceMode
-	}
-	if legacy.AppGPUMode != "" {
-		cfg.Performance.GPUMode = legacy.AppGPUMode
-	}
-	if legacy.AppReduceMotion != "" {
-		cfg.Performance.ReduceMotion = legacy.AppReduceMotion == "true"
-	}
-	if legacy.WebTheme != "" {
-		cfg.Kiosk.Theme = legacy.WebTheme
-	}
-	if legacy.WebZoom != "" {
-		if zoom, err := strconv.ParseFloat(legacy.WebZoom, 64); err == nil && zoom > 0 {
-			cfg.Kiosk.ZoomPercent = int(zoom * 100)
-		}
-	}
-	cfg.Kiosk.Widget = legacy.WebWidget != "false"
-	if legacy.AdminBind != "" {
-		cfg.Admin.Bind = legacy.AdminBind
-	}
-	if legacy.AdminPort != "" {
-		if port, err := strconv.Atoi(legacy.AdminPort); err == nil && port > 0 {
-			cfg.Admin.Port = port
-		}
-	}
-	cfg.Admin.PasswordHash = legacy.AdminPasswordHash
-	return &cfg
-}
-
-func loadPreviousV2(path string) *Config {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return nil
-	}
-	for _, previousPath := range []string{
-		filepath.Join(home, ".config", PreviousBrandLower(), "config.json"),
-		filepath.Join(home, ".config", LegacyAppLower()+"-v2", "config.json"),
-	} {
-		data, err := os.ReadFile(previousPath)
-		if err != nil {
-			continue
-		}
-		cfg := defaults(path)
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return nil
-		}
-		cfg.Path = path
-		return &cfg
-	}
-	return nil
-}
-
-func mergeLegacy(cfg *Config, legacy *Config) {
-	if legacy == nil {
-		return
-	}
-	if shouldUseLegacyKiosk(cfg, legacy) {
-		cfg.Kiosk.URLs = append([]string(nil), legacy.Kiosk.URLs...)
-		cfg.Kiosk.Pages = append([]KioskPage(nil), legacy.Kiosk.Pages...)
-	}
-	if cfg.MQTT.URL == "" && legacy.MQTT.URL != "" {
-		cfg.MQTT = legacy.MQTT
-	}
-	if isDefaultPerformance(cfg.Performance) && !isDefaultPerformance(legacy.Performance) {
-		cfg.Performance = legacy.Performance
-	}
-	if isDefaultKioskPresentation(cfg.Kiosk) {
-		cfg.Kiosk.Theme = legacy.Kiosk.Theme
-		cfg.Kiosk.ZoomPercent = legacy.Kiosk.ZoomPercent
-		cfg.Kiosk.Widget = legacy.Kiosk.Widget
-	}
-	if cfg.Admin.PasswordHash == "" && legacy.Admin.PasswordHash != "" {
-		cfg.Admin.PasswordHash = legacy.Admin.PasswordHash
-	}
-}
-
-func shouldUseLegacyKiosk(cfg *Config, legacy *Config) bool {
-	if legacy == nil || len(legacy.Kiosk.PageURLs()) == 0 {
-		return false
-	}
-	urls := cfg.Kiosk.PageURLs()
-	if len(urls) == 0 {
-		return true
-	}
-	return len(urls) == 1 && isDemoURL(urls[0])
-}
-
-func isDefaultKioskPresentation(kiosk KioskConfig) bool {
-	return (kiosk.Theme == "" || kiosk.Theme == "dark") && (kiosk.ZoomPercent == 0 || kiosk.ZoomPercent == 125)
-}
-
-func isDefaultPerformance(perf PerfConfig) bool {
-	return (perf.Profile == "" || perf.Profile == defaultProfile() || perf.Profile == "balanced" || perf.Profile == "raspberry") &&
-		(perf.GPUMode == "" || perf.GPUMode == "auto") &&
-		perf.ReduceMotion
-}
-
 func isDemoURL(url string) bool {
 	normalized := strings.TrimRight(strings.ToLower(strings.TrimSpace(url)), "/")
 	return normalized == "https://demo.home-assistant.io" || normalized == "http://homeassistant.local:8123"
@@ -503,33 +351,6 @@ func backupIfChanged(path string, next []byte) error {
 	return os.WriteFile(path+".bak", current, info.Mode().Perm())
 }
 
-func legacyURLs(value any) []string {
-	switch v := value.(type) {
-	case string:
-		return splitCSV(v)
-	case []any:
-		var out []string
-		for _, item := range v {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func splitCSV(value string) []string {
-	var out []string
-	for _, item := range strings.Split(value, ",") {
-		if s := strings.TrimSpace(item); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 func defaultBrowserDataDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "kioskmate", "Browser")
@@ -539,22 +360,6 @@ func defaultBrowserDataDir() string {
 		return "kioskmate-browser"
 	}
 	return filepath.Join(home, ".config", "kioskmate", "Browser")
-}
-
-func LegacyAppLower() string {
-	return "touch" + "kio"
-}
-
-func LegacyAppTitle() string {
-	return "Touch" + "Kio"
-}
-
-func PreviousBrandLower() string {
-	return "go-" + "kiosk"
-}
-
-func PreviousBrandNode() string {
-	return "go_" + "kiosk"
 }
 
 func saveIfMissing(path string, cfg *Config) error {

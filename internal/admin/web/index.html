@@ -2090,7 +2090,7 @@
 
       async function downloadConfig() {
         return runAction("Download config", async () => {
-          const response = await fetch(api + "/api/config/export", { headers: token ? { "X-Go-Kiosk-Token": token } : {} });
+          const response = await fetch(api + "/api/config/export", { headers: token ? { "X-KioskMate-Token": token } : {} });
           if (!response.ok) throw new Error(await response.text());
           const blob = await response.blob();
           const url = URL.createObjectURL(blob);
@@ -2369,14 +2369,14 @@
       }
 
       async function fetchJson(path, requireAuth = true) {
-        const response = await fetch(api + path, { headers: token ? { "X-Go-Kiosk-Token": token } : {} });
+        const response = await fetch(api + path, { headers: token ? { "X-KioskMate-Token": token } : {} });
         if (!response.ok && requireAuth) throw new Error(await responseError(response));
         return response.json();
       }
 
       async function postJson(path, body, includeToken = true) {
         const headers = { "Content-Type": "application/json" };
-        if (includeToken && token) headers["X-Go-Kiosk-Token"] = token;
+        if (includeToken && token) headers["X-KioskMate-Token"] = token;
         const response = await fetch(api + path, { method: "POST", headers, body: JSON.stringify(body || {}) });
         if (!response.ok) throw new Error(await responseError(response));
         return response.json();

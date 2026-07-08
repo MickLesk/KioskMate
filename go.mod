@@ -1,3 +1,3 @@
-module github.com/MickLesk/KioskMate/v2
+module github.com/MickLesk/KioskMate
 
 go 1.26.4

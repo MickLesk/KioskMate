@@ -115,15 +115,7 @@ backup_config() {
 }
 for HOME_DIR in /home/*; do
   [ -d "$HOME_DIR" ] || continue
-  OLD_LOWER="touch""kio"
-  OLD_TITLE="Touch""Kio"
-  OLD_V2="$OLD_LOWER-v2"
-  OLD_BRAND="go-""kiosk"
   backup_config "$HOME_DIR/.config/kioskmate/config.json"
-  backup_config "$HOME_DIR/.config/$OLD_BRAND/config.json"
-  backup_config "$HOME_DIR/.config/$OLD_V2/config.json"
-  backup_config "$HOME_DIR/.config/$OLD_LOWER/Arguments.json"
-  backup_config "$HOME_DIR/.config/$OLD_TITLE/Arguments.json"
 done
 exit 0
 """
@@ -139,16 +131,8 @@ backup_config() {
 }
 for HOME_DIR in /home/*; do
   [ -d "$HOME_DIR" ] || continue
-  OLD_LOWER="touch""kio"
-  OLD_TITLE="Touch""Kio"
-  OLD_V2="$OLD_LOWER-v2"
-  OLD_BRAND="go-""kiosk"
   CONFIG="$HOME_DIR/.config/kioskmate/config.json"
   backup_config "$CONFIG"
-  backup_config "$HOME_DIR/.config/$OLD_BRAND/config.json"
-  backup_config "$HOME_DIR/.config/$OLD_V2/config.json"
-  backup_config "$HOME_DIR/.config/$OLD_LOWER/Arguments.json"
-  backup_config "$HOME_DIR/.config/$OLD_TITLE/Arguments.json"
   if [ -f "$CONFIG" ]; then
     sed -i 's/"bind": "127\\.0\\.0\\.1"/"bind": "0.0.0.0"/' "$CONFIG" || true
     sed -i 's/"bind": "localhost"/"bind": "0.0.0.0"/' "$CONFIG" || true
@@ -164,12 +148,6 @@ reload_user_units() {
   done
 }
 if command -v systemctl >/dev/null 2>&1; then
-  OLD_SERVICE="touch""kio.service"
-  OLD_V2_SERVICE="touch""kio-v2.service"
-  OLD_BRAND_SERVICE="go-""kiosk.service"
-  systemctl --global disable "$OLD_SERVICE" >/dev/null 2>&1 || true
-  systemctl --global disable "$OLD_V2_SERVICE" >/dev/null 2>&1 || true
-  systemctl --global disable "$OLD_BRAND_SERVICE" >/dev/null 2>&1 || true
   systemctl --global enable kioskmate.service >/dev/null 2>&1 || true
   reload_user_units
 fi

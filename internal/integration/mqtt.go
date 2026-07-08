@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MickLesk/KioskMate/v2/internal/actions"
-	"github.com/MickLesk/KioskMate/v2/internal/config"
-	"github.com/MickLesk/KioskMate/v2/internal/hardware"
-	"github.com/MickLesk/KioskMate/v2/internal/mqttclient"
-	"github.com/MickLesk/KioskMate/v2/internal/supervisor"
-	"github.com/MickLesk/KioskMate/v2/internal/updater"
+	"github.com/MickLesk/KioskMate/internal/actions"
+	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/hardware"
+	"github.com/MickLesk/KioskMate/internal/mqttclient"
+	"github.com/MickLesk/KioskMate/internal/supervisor"
+	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
 type Browser interface {
@@ -783,7 +783,7 @@ func (s *MQTTService) diagnosticSensor(device map[string]any, id string, name st
 
 func (s *MQTTService) cleanupLegacyDiscovery(client *mqttclient.Client, current []discoveryItem) error {
 	status := s.hardware.Status(context.Background())
-	nodes := []string{config.PreviousBrandNode(), config.LegacyAppLower() + "_v2"}
+	var nodes []string
 	if node := legacyRpiNode(status.Device["serial_number"]); node != "" {
 		nodes = append(nodes, node)
 	}

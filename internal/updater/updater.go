@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MickLesk/KioskMate/v2/internal/config"
+	"github.com/MickLesk/KioskMate/internal/config"
 )
 
 type Service struct {

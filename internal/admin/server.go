@@ -24,12 +24,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MickLesk/KioskMate/v2/internal/actions"
-	"github.com/MickLesk/KioskMate/v2/internal/config"
-	"github.com/MickLesk/KioskMate/v2/internal/hardware"
-	"github.com/MickLesk/KioskMate/v2/internal/mqttclient"
-	"github.com/MickLesk/KioskMate/v2/internal/supervisor"
-	"github.com/MickLesk/KioskMate/v2/internal/updater"
+	"github.com/MickLesk/KioskMate/internal/actions"
+	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/hardware"
+	"github.com/MickLesk/KioskMate/internal/mqttclient"
+	"github.com/MickLesk/KioskMate/internal/supervisor"
+	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
 //go:embed web/index.html
@@ -697,45 +697,7 @@ func (s *Server) backupFiles() []backupFile {
 		path string
 		kind string
 	}{
-		{s.cfg.Path + ".bak", "v2"},
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		previousV2 := filepath.Join(home, ".config", config.LegacyAppLower()+"-v2", "config.json")
-		previousBrand := filepath.Join(home, ".config", config.PreviousBrandLower(), "config.json")
-		paths = append(paths,
-			struct {
-				path string
-				kind string
-			}{previousBrand, "previous"},
-			struct {
-				path string
-				kind string
-			}{previousBrand + ".bak", "previous"},
-			struct {
-				path string
-				kind string
-			}{previousV2, "previous"},
-			struct {
-				path string
-				kind string
-			}{previousV2 + ".bak", "previous"},
-			struct {
-				path string
-				kind string
-			}{filepath.Join(home, ".config", config.LegacyAppLower(), "Arguments.json"), "legacy"},
-			struct {
-				path string
-				kind string
-			}{filepath.Join(home, ".config", config.LegacyAppLower(), "Arguments.json.bak"), "legacy"},
-			struct {
-				path string
-				kind string
-			}{filepath.Join(home, ".config", config.LegacyAppTitle(), "Arguments.json"), "legacy"},
-			struct {
-				path string
-				kind string
-			}{filepath.Join(home, ".config", config.LegacyAppTitle(), "Arguments.json.bak"), "legacy"},
-		)
+		{s.cfg.Path + ".bak", "config"},
 	}
 	var files []backupFile
 	seen := map[string]bool{}
@@ -971,7 +933,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 }
 
 func (s *Server) validToken(r *http.Request) bool {
-	token := r.Header.Get("X-Go-Kiosk-Token")
+	token := r.Header.Get("X-KioskMate-Token")
 	if token == "" {
 		token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	}
