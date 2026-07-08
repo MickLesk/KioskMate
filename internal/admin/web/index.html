@@ -1016,7 +1016,10 @@
           openPreview: "Open in new tab",
           clearPreview: "Clear preview",
           checkPage: "Check page",
+          renderCheck: "Render check",
           pageReachable: "Page reachable",
+          pageVisible: "Page renders visibly",
+          pageBlank: "Page looks blank",
           pageFailed: "Page check failed",
           haForbiddenHint: "HTTP 403 from Home Assistant. Clear the Kiosk IP from ip_bans.yaml and reset the HA browser session.",
           diagnostics: "Diagnostics",
@@ -1090,6 +1093,7 @@
           close: "Close",
           testConnection: "Test connection",
           publishDiscovery: "Publish discovery",
+          resetDiscovery: "Reset discovery",
           connected: "Connected",
           disconnected: "Disconnected",
           hardwareStatus: "Hardware status",
@@ -1131,6 +1135,8 @@
           logStatus: "Service status",
           logPaths: "Paths",
           refreshLogs: "Refresh logs",
+          downloadLogs: "Download logs",
+          diagnosticBundle: "Diagnostic bundle",
           adminSettings: "Admin settings",
           bindAddress: "Bind address",
           port: "Port",
@@ -1282,7 +1288,10 @@
           openPreview: "In neuem Tab öffnen",
           clearPreview: "Vorschau leeren",
           checkPage: "Seite prüfen",
+          renderCheck: "Render prüfen",
           pageReachable: "Seite erreichbar",
+          pageVisible: "Seite rendert sichtbar",
+          pageBlank: "Seite wirkt leer",
           pageFailed: "Seitenprüfung fehlgeschlagen",
           haForbiddenHint: "HTTP 403 von Home Assistant. Entferne die Kiosk-IP aus ip_bans.yaml und setze die HA-Browsersitzung zurück.",
           diagnostics: "Diagnose",
@@ -1356,6 +1365,7 @@
           close: "Schließen",
           testConnection: "Verbindung testen",
           publishDiscovery: "Discovery veröffentlichen",
+          resetDiscovery: "Discovery zurücksetzen",
           connected: "Verbunden",
           disconnected: "Getrennt",
           hardwareStatus: "Hardware-Status",
@@ -1397,6 +1407,8 @@
           logStatus: "Service-Status",
           logPaths: "Pfade",
           refreshLogs: "Logs aktualisieren",
+          downloadLogs: "Logs herunterladen",
+          diagnosticBundle: "Diagnosepaket",
           adminSettings: "Admin-Einstellungen",
           bindAddress: "Bind-Adresse",
           port: "Port",
@@ -1671,6 +1683,10 @@
 
       function durationToNs(seconds) {
         return Math.max(0, Number(seconds || 0)) * 1_000_000_000;
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
       }
 
       function cloneConfig() {
@@ -2020,6 +2036,7 @@
                   <div class="primary-actions">
                     ${button("activatePage", "page-activate", "primary")}
                     ${button("checkPage", "page-check")}
+                    ${button("renderCheck", "render-check")}
                     ${button("openPreview", "preview-open")}
                     ${button("previousPage", "browser-previous")}
                     ${button("nextPage", "browser-next")}
@@ -2122,7 +2139,7 @@
         const mqtt = state.config?.mqtt || {};
         return `
           <div class="card">
-            <div class="head"><h3>${esc(t("mqttSettings"))}</h3><div class="actions">${button("testConnection", "mqtt-test")}${button("publishDiscovery", "mqtt-discovery")}${button("save", "mqtt-save", "primary")}</div></div>
+            <div class="head"><h3>${esc(t("mqttSettings"))}</h3><div class="actions">${button("testConnection", "mqtt-test")}${button("publishDiscovery", "mqtt-discovery")}${button("resetDiscovery", "mqtt-discovery-reset")}${button("save", "mqtt-save", "primary")}</div></div>
             <div class="body grid">
               ${switchHtml("mqtt-enabled", t("enabled"), !!mqtt.enabled)}
               <div class="form-grid">
@@ -2252,6 +2269,8 @@
                 <input id="log-lines" type="number" min="20" max="2000" value="300" />
                 <select id="log-source">${sources.map(([value, label]) => `<option value="${esc(value)}" ${state.logSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
                 <button data-busy="logs-refresh" data-action="logs-refresh">${esc(t("refreshLogs"))}</button>
+                <button data-action="logs-download">${esc(t("downloadLogs"))}</button>
+                <button data-action="diagnostics-download">${esc(t("diagnosticBundle"))}</button>
               </div>
             </div>
             <div class="body grid">
@@ -2364,6 +2383,7 @@
               <div class="head"><h3>${esc(t("update"))}</h3><div class="actions">${button("checkUpdate", "update-check")}${button("installUpdate", "update-install", "primary")}</div></div>
               <div class="body grid">
                 ${kvTable([[t("installed"), state.update?.current_version || state.update?.current || state.auth?.version || "-"], [t("latest"), state.update?.latest_version || state.update?.latest || "-"], [t("url"), state.update?.asset?.url || state.update?.asset_url || state.update?.url || "-"]])}
+                <pre class="terminal">${esc(renderJobs())}</pre>
                 <div>
                   <label>${esc(t("changelog"))}</label>
                   <pre class="jsonbox">${esc(state.update?.changelog || "")}</pre>
@@ -2455,6 +2475,7 @@
         document.querySelector('[data-action="kiosk-save"]')?.addEventListener("click", () => saveKiosk(false));
         document.querySelector('[data-action="kiosk-save-restart"]')?.addEventListener("click", () => saveKiosk(true));
         document.querySelector('[data-action="page-check"]')?.addEventListener("click", checkSelectedPage);
+        document.querySelector('[data-action="render-check"]')?.addEventListener("click", renderCheckSelectedPage);
         document.querySelector('[data-action="page-check-all"]')?.addEventListener("click", checkAllPages);
         document.querySelector('[data-action="page-enable-all"]')?.addEventListener("click", () => bulkSetPagesDisabled(false));
         document.querySelector('[data-action="page-disable-all"]')?.addEventListener("click", () => bulkSetPagesDisabled(true));
@@ -2584,6 +2605,19 @@
           const detail = result.hint || (result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || ""));
           out.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${detail}`;
         }, t("checkPage"));
+      }
+
+      async function renderCheckSelectedPage() {
+        const pages = collectPages();
+        const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
+        const out = document.getElementById("page-check-output");
+        await runAction("render-check", async () => {
+          if (out) out.textContent = `${t("loading")}...`;
+          const result = await postJSON("/api/browser/render-check", { index: active, url: pages[active]?.url || "" });
+          const ratio = result.analysis?.blank_ratio !== undefined ? ` (${Math.round(result.analysis.blank_ratio * 1000) / 10}% blank)` : "";
+          if (out) out.textContent = result.ok ? `${t("pageVisible")}${ratio}` : `${t("pageBlank")}${ratio}: ${result.error || result.output_tail || ""}`;
+          if (!result.ok) throw new Error(result.error || t("pageBlank"));
+        }, t("renderCheck"));
       }
 
       async function checkAllPages() {
@@ -2771,6 +2805,7 @@
         document.querySelector('[data-action="mqtt-save"]')?.addEventListener("click", saveMQTT);
         document.querySelector('[data-action="mqtt-test"]')?.addEventListener("click", testMQTT);
         document.querySelector('[data-action="mqtt-discovery"]')?.addEventListener("click", publishMQTTDiscovery);
+        document.querySelector('[data-action="mqtt-discovery-reset"]')?.addEventListener("click", resetMQTTDiscovery);
       }
 
       async function saveMQTT() {
@@ -2858,6 +2893,15 @@
             `${t("pageEntities")}: ${result.page_entities ?? "-"}`,
           ].join("\n");
         }, t("publishDiscovery"));
+      }
+
+      async function resetMQTTDiscovery() {
+        const output = document.getElementById("mqtt-result");
+        await runAction("mqtt-discovery-reset", async () => {
+          const result = await postJSON("/api/mqtt/discovery-reset", {});
+          if (!result.ok) throw new Error(result.error || t("failed"));
+          if (output) output.textContent = `${t("success")}: ${t("resetDiscovery")}\n${t("publishedTopics")}: ${result.cleared || 0}`;
+        }, t("resetDiscovery"));
       }
 
       function bindHardware() {
@@ -2950,6 +2994,14 @@
 
       function bindLogs() {
         document.querySelector('[data-action="logs-refresh"]')?.addEventListener("click", refreshLogs);
+        document.querySelector('[data-action="logs-download"]')?.addEventListener("click", () => {
+          const source = encodeURIComponent(state.logSource || "combined");
+          const lines = encodeURIComponent(val("log-lines") || "300");
+          window.location.href = `/api/logs/download?source=${source}&lines=${lines}`;
+        });
+        document.querySelector('[data-action="diagnostics-download"]')?.addEventListener("click", () => {
+          window.location.href = "/api/diagnostics/export";
+        });
         document.getElementById("log-source")?.addEventListener("change", (event) => {
           state.logSource = event.target.value;
           localStorage.setItem("kioskmate.logSource", state.logSource);
@@ -3132,7 +3184,22 @@
           const job = await postJSON("/api/update/install");
           state.jobs.unshift(job);
           toast(t("actionStarted"), job.id || "", "ok");
+          pollUpdateJob(job.id);
+          renderApp();
         }, t("actionStarted"));
+      }
+
+      async function pollUpdateJob(id) {
+        if (!id) return;
+        for (let i = 0; i < 180; i++) {
+          const job = await getJSON("/api/update/jobs/" + encodeURIComponent(id));
+          const index = state.jobs.findIndex((item) => item.id === id);
+          if (index >= 0) state.jobs[index] = job;
+          else state.jobs.unshift(job);
+          if (state.view === "settings-maintenance") renderApp();
+          if (job.finished || job.exit_code >= 0) return;
+          await sleep(1000);
+        }
       }
 
       function renderPages(pages) {

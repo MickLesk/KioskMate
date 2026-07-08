@@ -81,6 +81,29 @@ func (s *MQTTService) PublishNow() error {
 	return s.publishAll()
 }
 
+func (s *MQTTService) ResetDiscovery() (int, error) {
+	if !s.cfg.MQTT.Enabled {
+		return 0, errors.New("mqtt is disabled")
+	}
+	if s.cfg.MQTT.URL == "" {
+		return 0, errors.New("mqtt url is empty")
+	}
+	client := s.mqtt()
+	count := 0
+	for _, entry := range s.discoveryResetEntries() {
+		topic := strings.Trim(s.cfg.MQTT.Discovery, "/") + "/" + entry[0] + "/" + s.cfg.MQTT.Node + "/" + entry[1] + "/config"
+		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
+			return count, err
+		}
+		count++
+	}
+	s.cleaned = false
+	if err := s.publishAll(); err != nil {
+		return count, err
+	}
+	return count, nil
+}
+
 func (s *MQTTService) Run(ctx context.Context) {
 	var commandCancel context.CancelFunc
 	activeKey := ""
@@ -1026,6 +1049,78 @@ func legacyDiscoveryEntries() [][2]string {
 		{"sensor", "errors"},
 		{"sensor", "version"},
 	}
+}
+
+func (s *MQTTService) discoveryResetEntries() [][2]string {
+	entries := append([][2]string{}, legacyDiscoveryEntries()...)
+	entries = append(entries,
+		[2]string{"binary_sensor", "browser"},
+		[2]string{"button", "start"},
+		[2]string{"button", "stop"},
+		[2]string{"button", "previous"},
+		[2]string{"button", "next"},
+		[2]string{"button", "reset_session"},
+		[2]string{"button", "restart_service"},
+		[2]string{"switch", "reduce_motion"},
+		[2]string{"switch", "watchdog_enabled"},
+		[2]string{"switch", "scheduler_enabled"},
+		[2]string{"switch", "isolate_page_sessions"},
+		[2]string{"select", "page_name"},
+		[2]string{"select", "scheduler_mode"},
+		[2]string{"select", "performance_profile"},
+		[2]string{"select", "gpu_mode"},
+		[2]string{"number", "scheduler_tick"},
+		[2]string{"sensor", "rss"},
+		[2]string{"sensor", "cpu"},
+		[2]string{"sensor", "browser_pid"},
+		[2]string{"sensor", "browser_started"},
+		[2]string{"sensor", "browser_start_count"},
+		[2]string{"sensor", "browser_restart_count"},
+		[2]string{"sensor", "browser_command"},
+		[2]string{"sensor", "browser_last_error"},
+		[2]string{"sensor", "page_count"},
+		[2]string{"sensor", "page_name"},
+		[2]string{"sensor", "scheduler_state"},
+		[2]string{"sensor", "scheduler_mode"},
+		[2]string{"sensor", "scheduler_tick"},
+		[2]string{"sensor", "scheduler_active_rule"},
+		[2]string{"sensor", "scheduler_next_switch"},
+		[2]string{"sensor", "performance_profile"},
+		[2]string{"sensor", "gpu_mode"},
+		[2]string{"sensor", "watchdog_pressure"},
+		[2]string{"sensor", "watchdog_last_reason"},
+		[2]string{"sensor", "watchdog_last_restart"},
+		[2]string{"sensor", "watchdog_rss_limit"},
+		[2]string{"sensor", "watchdog_cpu_limit"},
+		[2]string{"sensor", "last_command"},
+		[2]string{"sensor", "last_command_status"},
+		[2]string{"sensor", "last_command_error"},
+		[2]string{"sensor", "last_command_json"},
+	)
+	for _, page := range s.pageEntities() {
+		object := "page_" + page.ID
+		entries = append(entries,
+			[2]string{"button", object},
+			[2]string{"binary_sensor", object + "_active"},
+			[2]string{"binary_sensor", object + "_reachable"},
+			[2]string{"sensor", object + "_status_code"},
+			[2]string{"sensor", object + "_last_error"},
+			[2]string{"sensor", object + "_last_checked"},
+			[2]string{"sensor", object + "_index"},
+			[2]string{"sensor", object + "_name"},
+			[2]string{"sensor", object + "_url"},
+		)
+	}
+	seen := map[[2]string]bool{}
+	var unique [][2]string
+	for _, entry := range entries {
+		if seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		unique = append(unique, entry)
+	}
+	return unique
 }
 
 func legacyRpiNode(serial any) string {

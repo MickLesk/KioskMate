@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.0.1-alpha18
+
+- Added render health checks for kiosk pages using a short-lived headless browser screenshot.
+- Added blank/white page detection to distinguish HTTP reachability from visible rendering.
+- Added diagnostic bundle export with redacted config, status and logs.
+- Added plain-text log download from the Logs page.
+- Added MQTT discovery reset to clear known KioskMate discovery topics and republish current entities.
+- Improved update install feedback by polling the install job directly in the Maintenance view.
+- Updated README with HA 403, render-check, diagnostics, MQTT page-health and page-session guidance.
+
 ## v0.0.1-alpha17
 
 - Added browser start and restart counters to Admin UI and MQTT state.

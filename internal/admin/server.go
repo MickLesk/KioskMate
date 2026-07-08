@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -11,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"io"
 	"log/slog"
 	"net"
@@ -51,6 +54,7 @@ type Browser interface {
 
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
+	ResetDiscovery() (int, error)
 }
 
 type Server struct {
@@ -104,6 +108,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/auth/password", s.auth(s.authPassword))
 	mux.HandleFunc("/api/status", s.auth(s.status))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
+	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
+	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
 	mux.HandleFunc("/api/terminal/run", s.auth(s.terminalRun))
 	mux.HandleFunc("/api/ssh-key", s.auth(s.sshKey))
 	mux.HandleFunc("/api/config", s.auth(s.config))
@@ -114,6 +120,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/mqtt/test", s.auth(s.mqttTest))
 	mux.HandleFunc("/api/mqtt/test/live", s.auth(s.mqttTestLive))
 	mux.HandleFunc("/api/mqtt/discovery", s.auth(s.mqttDiscovery))
+	mux.HandleFunc("/api/mqtt/discovery-reset", s.auth(s.mqttDiscoveryReset))
 	mux.HandleFunc("/api/browser/start", s.auth(s.browserAction("start")))
 	mux.HandleFunc("/api/browser/stop", s.auth(s.browserAction("stop")))
 	mux.HandleFunc("/api/browser/restart", s.auth(s.browserAction("restart")))
@@ -123,6 +130,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/reset-session", s.auth(s.browserAction("reset-session")))
 	mux.HandleFunc("/api/browser/page", s.auth(s.browserPage))
 	mux.HandleFunc("/api/browser/check-page", s.auth(s.browserCheckPage))
+	mux.HandleFunc("/api/browser/render-check", s.auth(s.browserRenderCheck))
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
@@ -476,6 +484,52 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) logsDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	source := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
+	if source == "" {
+		source = "combined"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	result := s.logLines(ctx, source, 2000)
+	lines, _ := result["lines"].([]string)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="kioskmate-logs.txt"`)
+	_, _ = io.WriteString(w, strings.Join(lines, "\n"))
+}
+
+func (s *Server) diagnosticsExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	addZipText(zw, "summary.txt", strings.Join(s.logPathLines(), "\n"))
+	addZipJSON(zw, "config.redacted.json", redactSecrets(s.cfg))
+	addZipJSON(zw, "status.json", map[string]any{
+		"version":  s.version,
+		"browser":  s.browser.Status(),
+		"hardware": s.hardware.Status(ctx),
+	})
+	addZipText(zw, "logs.combined.txt", strings.Join(s.combinedLogs(ctx, 1500), "\n"))
+	addZipText(zw, "logs.core.txt", strings.Join(labeledTail("core", config.LogFilePath(s.cfg.Path), 1500), "\n"))
+	addZipText(zw, "logs.browser.txt", strings.Join(labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 1500), "\n"))
+	if err := zw.Close(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="kioskmate-diagnostics.zip"`)
+	_, _ = w.Write(buf.Bytes())
+}
+
 func (s *Server) logLines(ctx context.Context, source string, limit int) map[string]any {
 	sources := []string{"combined", "core", "browser", "journal", "status", "paths"}
 	result := map[string]any{"source": source, "sources": sources}
@@ -591,6 +645,62 @@ func readTail(path string, limit int) []string {
 		parts = parts[len(parts)-limit:]
 	}
 	return parts
+}
+
+func addZipText(zw *zip.Writer, name string, text string) {
+	file, err := zw.Create(name)
+	if err != nil {
+		return
+	}
+	_, _ = io.WriteString(file, text)
+}
+
+func addZipJSON(zw *zip.Writer, name string, value any) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		data = []byte(`{"error":"json marshal failed"}`)
+	}
+	addZipText(zw, name, string(data))
+}
+
+func redactSecrets(value any) any {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	var generic any
+	if err := json.Unmarshal(data, &generic); err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	return redactValue("", generic)
+}
+
+func redactValue(key string, value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for childKey, childValue := range typed {
+			out[childKey] = redactValue(childKey, childValue)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = redactValue(key, item)
+		}
+		return out
+	case string:
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "hash") {
+			if typed == "" {
+				return ""
+			}
+			return "<redacted>"
+		}
+		return typed
+	default:
+		return typed
+	}
 }
 
 func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
@@ -1067,6 +1177,23 @@ func (s *Server) mqttDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) mqttDiscoveryReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mqtt == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "mqtt service unavailable"})
+		return
+	}
+	count, err := s.mqtt.ResetDiscovery()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "cleared": count})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": count})
+}
+
 func parseMQTTTestRequest(r *http.Request) (mqttTestRequest, error) {
 	var body mqttTestRequest
 	err := json.NewDecoder(r.Body).Decode(&body)
@@ -1245,6 +1372,119 @@ func (s *Server) browserCheckPage(w http.ResponseWriter, r *http.Request) {
 		"category":   category,
 		"hint":       hint,
 	})
+}
+
+func (s *Server) browserRenderCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Index int    `json:"index"`
+		URL   string `json:"url"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	target := strings.TrimSpace(body.URL)
+	if target == "" {
+		urls := s.cfg.Kiosk.PageURLs()
+		if body.Index < 0 || body.Index >= len(urls) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "page index out of range"})
+			return
+		}
+		target = urls[body.Index]
+	}
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only http and https URLs can be rendered"})
+		return
+	}
+	status := s.browser.Status()
+	command := status.Command
+	if command == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "browser command is empty"})
+		return
+	}
+	tmp, err := os.MkdirTemp("", "kioskmate-render-*")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer os.RemoveAll(tmp)
+	screenshot := filepath.Join(tmp, "render.png")
+	profile := filepath.Join(tmp, "profile")
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	args := []string{
+		"--headless=new",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--hide-scrollbars",
+		"--no-first-run",
+		"--window-size=1024,768",
+		"--user-data-dir=" + profile,
+		"--screenshot=" + screenshot,
+		target,
+	}
+	start := time.Now()
+	out, err := exec.CommandContext(ctx, command, args...).CombinedOutput()
+	analysis := analyzeScreenshot(screenshot)
+	result := map[string]any{
+		"ok":          err == nil && analysis["visible"].(bool),
+		"url":         target,
+		"command":     command,
+		"latency_ms":  time.Since(start).Milliseconds(),
+		"screenshot":  filepath.Base(screenshot),
+		"analysis":    analysis,
+		"output_tail": tailText(string(out), 2000),
+	}
+	if err != nil {
+		result["error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func analyzeScreenshot(path string) map[string]any {
+	file, err := os.Open(path)
+	if err != nil {
+		return map[string]any{"visible": false, "error": err.Error()}
+	}
+	defer file.Close()
+	img, err := png.Decode(file)
+	if err != nil {
+		return map[string]any{"visible": false, "error": err.Error()}
+	}
+	bounds := img.Bounds()
+	total := bounds.Dx() * bounds.Dy()
+	if total <= 0 {
+		return map[string]any{"visible": false, "error": "empty image"}
+	}
+	blank := 0
+	for y := bounds.Min.Y; y < bounds.Max.Y; y += 4 {
+		for x := bounds.Min.X; x < bounds.Max.X; x += 4 {
+			r, g, b, _ := img.At(x, y).RGBA()
+			r8, g8, b8 := uint8(r>>8), uint8(g>>8), uint8(b>>8)
+			if (r8 > 245 && g8 > 245 && b8 > 245) || (r8 < 8 && g8 < 8 && b8 < 8) {
+				blank++
+			}
+		}
+	}
+	samplesX := (bounds.Dx() + 3) / 4
+	samplesY := (bounds.Dy() + 3) / 4
+	samples := max(1, samplesX*samplesY)
+	blankRatio := float64(blank) / float64(samples)
+	return map[string]any{
+		"visible":     blankRatio < 0.985,
+		"blank_ratio": blankRatio,
+		"width":       bounds.Dx(),
+		"height":      bounds.Dy(),
+	}
+}
+
+func tailText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit > 0 && len(text) > limit {
+		return text[len(text)-limit:]
+	}
+	return text
 }
 
 func pageCheckHint(target string, resp *http.Response) (string, string) {

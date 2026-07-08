@@ -13,8 +13,11 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Performance profiles for Raspberry Pi and small kiosk hardware.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.
+- HTTP and render checks for kiosk pages, including Home Assistant 403/auth hints.
+- Optional separate browser profiles per kiosk page to isolate Home Assistant sessions.
 - Hardware controls for display power, brightness, audio, microphone and keyboard where supported by the OS.
-- Home Assistant MQTT discovery for sensors, diagnostics and controls.
+- Home Assistant MQTT discovery for sensors, diagnostics, page health and controls.
+- Diagnostic bundle export with redacted config, logs and runtime status.
 - System actions for service restart, reboot, shutdown and apt jobs.
 - GitHub release updater with Debian package download and digest verification.
 - Debian packages for `arm64` and `amd64`.
@@ -87,6 +90,7 @@ For amd64, use the `_amd64.deb` asset.
     "browser_command": "chromium-browser",
     "extra_args": [],
     "user_data_dir": "~/.config/kioskmate/Browser",
+    "isolate_page_sessions": false,
     "theme": "dark",
     "zoom_percent": 125
   },
@@ -138,6 +142,33 @@ Supported command payloads:
 - `shutdown`
 - `apt-update`
 - `apt-upgrade`
+
+KioskMate also publishes per-page Home Assistant entities for:
+
+- page activation
+- active page state
+- page URL/name/index
+- HTTP reachability
+- HTTP status code
+- last page-health error
+- last page-health check time
+
+If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
+
+## Home Assistant 403 / White Page Troubleshooting
+
+If Home Assistant returns `403 Forbidden`, check `ip_bans.yaml` on the Home Assistant host and remove the kiosk IP if it was banned. Then use **Kiosk -> HA session repair** in KioskMate to clear the browser session and reload the active dashboard.
+
+If HTTP checks are OK but the display is white, use **Kiosk -> Render check**. It starts a short-lived headless browser, captures a screenshot and reports whether the page looks blank. This checks rendering separately from plain HTTP reachability.
+
+For multi-dashboard setups, enable **Settings -> Browser and performance -> Separate browser profile per page** when one broken Home Assistant session should not affect every page.
+
+## Diagnostics
+
+The Logs page can show core logs, browser logs, systemd journal, service status and paths. Use:
+
+- **Download logs** for a plain-text log export.
+- **Diagnostic bundle** for a ZIP containing redacted config, runtime status and logs.
 
 ## Packaging
 
