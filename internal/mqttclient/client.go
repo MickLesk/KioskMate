@@ -32,6 +32,12 @@ func (c *Client) timeout() time.Duration {
 }
 
 func (c *Client) Connect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connectLocked()
+}
+
+func (c *Client) connectLocked() error {
 	if c.conn != nil {
 		return nil
 	}
@@ -62,21 +68,21 @@ func (c *Client) Connect() error {
 	}
 	c.conn = conn
 	if err := conn.SetDeadline(time.Now().Add(c.timeout())); err != nil {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return err
 	}
 	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, 30, c.Version)); err != nil {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return err
 	}
 	packet, payload, err := readPacket(conn)
 	if err != nil {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return err
 	}
 	_ = conn.SetDeadline(time.Time{})
 	if packet != packetConnAck || len(payload) < 2 || payload[1] != 0 {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return fmt.Errorf("mqtt connack failed: packet=%d payload=%v", packet, payload)
 	}
 	return nil
@@ -85,7 +91,7 @@ func (c *Client) Connect() error {
 func (c *Client) Publish(topic string, payload []byte, retained bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.Connect(); err != nil {
+	if err := c.connectLocked(); err != nil {
 		return err
 	}
 	flags := byte(0)
@@ -94,7 +100,7 @@ func (c *Client) Publish(topic string, payload []byte, retained bool) error {
 	}
 	_ = c.conn.SetWriteDeadline(time.Now().Add(c.timeout()))
 	if err := writePacket(c.conn, packetPublish, flags, publishPayload(topic, payload, c.Version)); err != nil {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return err
 	}
 	_ = c.conn.SetWriteDeadline(time.Time{})
@@ -104,18 +110,18 @@ func (c *Client) Publish(topic string, payload []byte, retained bool) error {
 func (c *Client) Ping() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.Connect(); err != nil {
+	if err := c.connectLocked(); err != nil {
 		return err
 	}
 	_ = c.conn.SetDeadline(time.Now().Add(c.timeout()))
 	if err := writePacket(c.conn, packetPingReq, 0, nil); err != nil {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return err
 	}
 	packet, _, err := readPacket(c.conn)
 	_ = c.conn.SetDeadline(time.Time{})
 	if err != nil && !errors.Is(err, io.EOF) {
-		_ = c.Close()
+		_ = c.closeLocked()
 		return err
 	}
 	if packet != packetPingResp {
@@ -126,7 +132,7 @@ func (c *Client) Ping() error {
 
 func (c *Client) Subscribe(topics []string, handler func(topic string, payload []byte)) error {
 	c.mu.Lock()
-	if err := c.Connect(); err != nil {
+	if err := c.connectLocked(); err != nil {
 		c.mu.Unlock()
 		return err
 	}
@@ -137,8 +143,8 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 	id := c.next
 	_ = c.conn.SetWriteDeadline(time.Now().Add(c.timeout()))
 	if err := writePacket(c.conn, packetSubscribe, 2, subscribePayload(id, topics, c.Version)); err != nil {
+		_ = c.closeLocked()
 		c.mu.Unlock()
-		_ = c.Close()
 		return err
 	}
 	_ = c.conn.SetWriteDeadline(time.Time{})
@@ -163,6 +169,10 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.closeLocked()
+}
+
+func (c *Client) closeLocked() error {
 	if c.conn == nil {
 		return nil
 	}
