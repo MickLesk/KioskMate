@@ -1027,6 +1027,7 @@
           browserPreset: "Browser engine",
           browserCommand: "Browser command",
           browserProfile: "Browser profile",
+          isolatePageSessions: "Separate browser profile per page",
           extraArgs: "Extra browser args, one per line",
           themeField: "Kiosk theme",
           zoomPercent: "Zoom percent",
@@ -1079,6 +1080,8 @@
           forceDisableRetain: "Disable retained messages",
           interval: "Interval seconds",
           commandTopic: "Command topic",
+          rootTopic: "Root topic",
+          pageEntities: "Page entities",
           publishedTopics: "Published topics",
           mqttLiveTitle: "MQTT connection test",
           mqttLiveHint: "Live protocol log. Each line is sent by the KioskMate backend while the test runs.",
@@ -1165,6 +1168,8 @@
           balanced: "Balanced",
           raspberry: "Raspberry",
           conservative: "Conservative",
+          minimal: "Minimal",
+          quality: "Quality",
           chromium: "Chromium",
           chromiumLite: "Chromium low resource",
           firefox: "Firefox",
@@ -1286,6 +1291,7 @@
           browserPreset: "Browser-Engine",
           browserCommand: "Browser-Befehl",
           browserProfile: "Browser-Profil",
+          isolatePageSessions: "Eigenes Browser-Profil pro Seite",
           extraArgs: "Zusätzliche Browser-Argumente, eins pro Zeile",
           themeField: "Kiosk-Theme",
           zoomPercent: "Zoom in Prozent",
@@ -1338,6 +1344,8 @@
           forceDisableRetain: "Retained Messages deaktivieren",
           interval: "Intervall Sekunden",
           commandTopic: "Command-Topic",
+          rootTopic: "Root-Topic",
+          pageEntities: "Seiten-Entitäten",
           publishedTopics: "Veröffentlichte Topics",
           mqttLiveTitle: "MQTT-Verbindungstest",
           mqttLiveHint: "Live-Protokoll. Jede Zeile kommt während des Tests direkt vom KioskMate-Backend.",
@@ -1424,6 +1432,8 @@
           balanced: "Ausgewogen",
           raspberry: "Raspberry",
           conservative: "Konservativ",
+          minimal: "Minimal",
+          quality: "Qualität",
           chromium: "Chromium",
           chromiumLite: "Chromium ressourcenschonend",
           firefox: "Firefox",
@@ -2297,9 +2307,10 @@
                 ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
                 ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
                 ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
+                <div class="span-2">${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}</div>
                 ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")]])}
                 ${field("kiosk-zoom", t("zoomPercent"), "number", "", kiosk.zoom_percent || 125)}
-                ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "raspberry", [["raspberry", t("raspberry")], ["balanced", t("balanced")], ["conservative", t("conservative")]])}
+                ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "raspberry", [["raspberry", t("raspberry")], ["minimal", t("minimal")], ["balanced", t("balanced")], ["quality", t("quality")], ["conservative", t("conservative")]])}
                 ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
                 <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
                 <div class="span-2">${switchHtml("kiosk-widget", t("widgetFlag"), kiosk.widget !== false)}</div>
@@ -2832,7 +2843,14 @@
         await runAction("mqtt-discovery", async () => {
           const result = await postJSON("/api/mqtt/discovery", {});
           if (!result.ok) throw new Error(result.error || t("failed"));
-          if (output) output.textContent = `${t("success")}: ${t("publishDiscovery")}\n${t("commandTopic")}: ${commandTopic()}`;
+          if (output) output.textContent = [
+            `${t("success")}: ${t("publishDiscovery")}`,
+            `${t("discoveryPrefix")}: ${result.discovery_prefix || val("mqtt-discovery")}`,
+            `${t("rootTopic")}: ${result.root_topic || commandTopic().replace("/command", "")}`,
+            `${t("commandTopic")}: ${commandTopic()}`,
+            `${t("pages")}: ${result.page_count ?? "-"}`,
+            `${t("pageEntities")}: ${result.page_entities ?? "-"}`,
+          ].join("\n");
         }, t("publishDiscovery"));
       }
 
@@ -3012,6 +3030,7 @@
           cfg.kiosk.browser_preset = val("kiosk-browser-preset") || "chromium";
           cfg.kiosk.browser_command = val("kiosk-browser");
           cfg.kiosk.user_data_dir = val("kiosk-user-data");
+          cfg.kiosk.isolate_page_sessions = checked("kiosk-isolate-sessions");
           cfg.kiosk.theme = val("kiosk-theme");
           cfg.kiosk.zoom_percent = Number(val("kiosk-zoom") || 125);
           cfg.kiosk.extra_args = lines("kiosk-extra-args");

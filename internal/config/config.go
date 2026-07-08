@@ -37,18 +37,19 @@ func (c AdminConfig) Addr() string {
 }
 
 type KioskConfig struct {
-	URLs           []string       `json:"urls"`
-	Pages          []KioskPage    `json:"pages"`
-	BrowserPreset  string         `json:"browser_preset"`
-	BrowserCommand string         `json:"browser_command"`
-	ExtraArgs      []string       `json:"extra_args"`
-	UserDataDir    string         `json:"user_data_dir"`
-	Theme          string         `json:"theme"`
-	ZoomPercent    int            `json:"zoom_percent"`
-	Widget         bool           `json:"widget"`
-	Scheduler      KioskScheduler `json:"scheduler"`
-	Rotation       []RotationItem `json:"rotation"`
-	TimeRules      []TimeRule     `json:"time_rules"`
+	URLs            []string       `json:"urls"`
+	Pages           []KioskPage    `json:"pages"`
+	BrowserPreset   string         `json:"browser_preset"`
+	BrowserCommand  string         `json:"browser_command"`
+	ExtraArgs       []string       `json:"extra_args"`
+	UserDataDir     string         `json:"user_data_dir"`
+	IsolateSessions bool           `json:"isolate_page_sessions"`
+	Theme           string         `json:"theme"`
+	ZoomPercent     int            `json:"zoom_percent"`
+	Widget          bool           `json:"widget"`
+	Scheduler       KioskScheduler `json:"scheduler"`
+	Rotation        []RotationItem `json:"rotation"`
+	TimeRules       []TimeRule     `json:"time_rules"`
 }
 
 type KioskPage struct {
@@ -339,6 +340,9 @@ func normalize(cfg *Config) {
 	if cfg.Performance.Profile == "" {
 		cfg.Performance.Profile = defaultProfile()
 	}
+	if !supportedPerformanceProfile(cfg.Performance.Profile) {
+		cfg.Performance.Profile = defaultProfile()
+	}
 	if cfg.Performance.GPUMode == "" {
 		cfg.Performance.GPUMode = "auto"
 	}
@@ -481,6 +485,15 @@ func appendUnique(values []string, additions ...string) []string {
 func supportedMQTTVersion(version string) bool {
 	switch strings.TrimSpace(version) {
 	case "3.1.1", "5.0":
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedPerformanceProfile(profile string) bool {
+	switch strings.TrimSpace(strings.ToLower(profile)) {
+	case "quality", "balanced", "raspberry", "minimal", "conservative":
 		return true
 	default:
 		return false

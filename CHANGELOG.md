@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.1-alpha16
+
+- Added optional separate browser profiles per kiosk page to isolate Home Assistant sessions and cookies.
+- Added Admin UI and MQTT switch support for separate page sessions.
+- Made performance profiles affect Chromium flags instead of only storing a config value.
+- Added `minimal` and `quality` profiles to the Admin UI and aligned UI/MQTT/profile validation.
+- Added improved MQTT discovery publish feedback with discovery prefix, root topic, page count and page entity count.
+- Added tests for isolated page profile paths and performance profile Chromium arguments.
+
 ## v0.0.1-alpha15
 
 - Added watchdog diagnostics to browser status, including pressure, limits, last restart and last restart reason.

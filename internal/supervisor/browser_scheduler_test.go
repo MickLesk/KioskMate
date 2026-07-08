@@ -121,7 +121,7 @@ func TestBrowserPresetArgs(t *testing.T) {
 	cfg.Kiosk.UserDataDir = t.TempDir()
 	cfg.Kiosk.ExtraArgs = []string{"--flag"}
 
-	chromium := browserArgs(cfg, "chromium-lite", "http://ha.local", cfg.Kiosk.ExtraArgs)
+	chromium := browserArgs(cfg, "chromium-lite", "http://ha.local", cfg.Kiosk.ExtraArgs, 0)
 	if !contains(chromium, "--renderer-process-limit=2") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
 		t.Fatalf("chromium-lite args = %#v", chromium)
 	}
@@ -129,14 +129,47 @@ func TestBrowserPresetArgs(t *testing.T) {
 		t.Fatalf("chromium-lite args missing local network feature disables: %#v", chromium)
 	}
 
-	firefox := browserArgs(cfg, "firefox", "http://ha.local", cfg.Kiosk.ExtraArgs)
+	firefox := browserArgs(cfg, "firefox", "http://ha.local", cfg.Kiosk.ExtraArgs, 0)
 	if contains(firefox, "--disable-gpu") || !contains(firefox, "--kiosk") || firefox[len(firefox)-1] != "http://ha.local" {
 		t.Fatalf("firefox args = %#v", firefox)
 	}
 
-	cog := browserArgs(cfg, "webkit-cog", "http://ha.local", nil)
+	cog := browserArgs(cfg, "webkit-cog", "http://ha.local", nil, 0)
 	if len(cog) != 1 || cog[0] != "http://ha.local" {
 		t.Fatalf("cog args = %#v", cog)
+	}
+}
+
+func TestBrowserIsolatedPageSessionArgs(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.UserDataDir = t.TempDir()
+	cfg.Kiosk.IsolateSessions = true
+
+	main := browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
+	calendar := browserArgs(cfg, "chromium", "http://ha.local/calendar", nil, 1)
+
+	if !containsPrefix(main, "--user-data-dir="+cfg.Kiosk.UserDataDir) || !containsPrefix(calendar, "--user-data-dir="+cfg.Kiosk.UserDataDir) {
+		t.Fatalf("isolated args missing base dir: %#v %#v", main, calendar)
+	}
+	if main[1] == calendar[1] {
+		t.Fatalf("expected different user-data dirs, got %#v", main[1])
+	}
+}
+
+func TestPerformanceProfileArgs(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.UserDataDir = t.TempDir()
+	cfg.Performance.Profile = "minimal"
+
+	args := browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
+	if !contains(args, "--renderer-process-limit=1") || !contains(args, "--disable-extensions") {
+		t.Fatalf("minimal profile args = %#v", args)
+	}
+
+	cfg.Performance.Profile = "quality"
+	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
+	if contains(args, "--renderer-process-limit=1") || contains(args, "--renderer-process-limit=2") {
+		t.Fatalf("quality profile should not limit renderers: %#v", args)
 	}
 }
 

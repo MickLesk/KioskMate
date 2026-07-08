@@ -961,6 +961,7 @@ func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"page_name":        status.PageName,
 		"url":              status.URL,
 		"page_count":       s.cfg.Kiosk.PageCount(),
+		"isolated_pages":   s.cfg.Kiosk.IsolateSessions,
 		"profile":          s.cfg.Performance.Profile,
 		"gpu_mode":         s.cfg.Performance.GPUMode,
 		"reduce_motion":    s.cfg.Performance.ReduceMotion,
@@ -1055,7 +1056,15 @@ func (s *Server) mqttDiscovery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	pageCount := s.cfg.Kiosk.PageCount()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"discovery_prefix": strings.Trim(s.cfg.MQTT.Discovery, "/"),
+		"root_topic":       strings.Trim(s.cfg.MQTT.BaseTopic, "/") + "/" + strings.Trim(s.cfg.MQTT.Node, "/"),
+		"node":             s.cfg.MQTT.Node,
+		"page_count":       pageCount,
+		"page_entities":    pageCount * 4,
+	})
 }
 
 func parseMQTTTestRequest(r *http.Request) (mqttTestRequest, error) {

@@ -202,10 +202,13 @@ func (b *Browser) SetActive(ctx context.Context, index int) error {
 }
 
 func (b *Browser) ResetSession(ctx context.Context) error {
+	b.mu.Lock()
+	active := b.active
+	b.mu.Unlock()
 	if err := b.Stop(ctx); err != nil {
 		return err
 	}
-	dir := b.cfg.Kiosk.UserDataDir
+	dir := browserUserDataDir(b.cfg, active)
 	if dir == "" {
 		return nil
 	}
@@ -378,7 +381,7 @@ func (b *Browser) command() (string, []string, error) {
 	if command == "" {
 		return "", nil, fmt.Errorf("no browser found for preset %q, install a supported browser or use custom command", preset)
 	}
-	args := browserArgs(b.cfg, preset, b.activeURL(), b.cfg.Kiosk.ExtraArgs)
+	args := browserArgs(b.cfg, preset, b.activeURL(), b.cfg.Kiosk.ExtraArgs, b.active)
 	return command, args, nil
 }
 
@@ -557,10 +560,10 @@ func browserCandidates(preset string) []string {
 	}
 }
 
-func browserArgs(cfg *config.Config, preset string, url string, extra []string) []string {
+func browserArgs(cfg *config.Config, preset string, url string, extra []string, page int) []string {
 	switch preset {
 	case "firefox":
-		return append(firefoxArgs(cfg), append(extra, url)...)
+		return append(firefoxArgs(cfg, page), append(extra, url)...)
 	case "webkit-cog":
 		return append(extra, url)
 	case "epiphany":
@@ -570,17 +573,17 @@ func browserArgs(cfg *config.Config, preset string, url string, extra []string) 
 	case "custom":
 		return append(extra, url)
 	case "chromium-lite":
-		args := append(chromiumArgs(cfg), chromiumLiteArgs()...)
+		args := append(chromiumArgs(cfg, page), chromiumLiteArgs()...)
 		return append(args, append(extra, url)...)
 	default:
-		return append(chromiumArgs(cfg), append(extra, url)...)
+		return append(chromiumArgs(cfg, page), append(extra, url)...)
 	}
 }
 
-func chromiumArgs(cfg *config.Config) []string {
+func chromiumArgs(cfg *config.Config, page int) []string {
 	args := []string{
 		"--kiosk",
-		"--user-data-dir=" + cfg.Kiosk.UserDataDir,
+		"--user-data-dir=" + browserUserDataDir(cfg, page),
 		"--no-first-run",
 		"--disable-translate",
 		"--disable-session-crashed-bubble",
@@ -593,6 +596,7 @@ func chromiumArgs(cfg *config.Config) []string {
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
 	}
+	args = append(args, performanceArgs(cfg.Performance.Profile)...)
 	if cfg.Kiosk.ZoomPercent > 0 && cfg.Kiosk.ZoomPercent != 100 {
 		args = append(args, fmt.Sprintf("--force-device-scale-factor=%.2f", float64(cfg.Kiosk.ZoomPercent)/100.0))
 	}
@@ -600,6 +604,43 @@ func chromiumArgs(cfg *config.Config) []string {
 		args = append(args, "--disable-gpu", "--disable-gpu-compositing")
 	}
 	return args
+}
+
+func performanceArgs(profile string) []string {
+	switch strings.TrimSpace(strings.ToLower(profile)) {
+	case "minimal", "conservative":
+		return []string{
+			"--disable-dev-shm-usage",
+			"--disable-extensions",
+			"--disable-sync",
+			"--disable-print-preview",
+			"--disable-speech-api",
+			"--disable-notifications",
+			"--disable-background-timer-throttling",
+			"--disable-renderer-backgrounding",
+			"--renderer-process-limit=1",
+			"--process-per-site",
+		}
+	case "raspberry":
+		return []string{
+			"--disable-dev-shm-usage",
+			"--disable-extensions",
+			"--disable-sync",
+			"--disable-print-preview",
+			"--disable-speech-api",
+			"--disable-notifications",
+			"--renderer-process-limit=2",
+			"--process-per-site",
+		}
+	case "quality":
+		return nil
+	default:
+		return []string{
+			"--disable-sync",
+			"--disable-print-preview",
+			"--disable-speech-api",
+		}
+	}
 }
 
 func chromiumLiteArgs() []string {
@@ -617,10 +658,44 @@ func chromiumLiteArgs() []string {
 	}
 }
 
-func firefoxArgs(cfg *config.Config) []string {
+func browserUserDataDir(cfg *config.Config, page int) string {
+	base := cfg.Kiosk.UserDataDir
+	if base == "" || !cfg.Kiosk.IsolateSessions {
+		return base
+	}
+	name := cfg.Kiosk.PageName(page)
+	if name == "" {
+		name = fmt.Sprintf("page-%d", page+1)
+	}
+	return filepath.Join(base, "pages", pathSegment(name, page))
+}
+
+func pathSegment(value string, page int) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	text := strings.Trim(b.String(), "-")
+	if text == "" {
+		text = fmt.Sprintf("page-%d", page+1)
+	}
+	return fmt.Sprintf("%02d-%s", page+1, text)
+}
+
+func firefoxArgs(cfg *config.Config, page int) []string {
 	args := []string{"--kiosk"}
 	if cfg.Kiosk.UserDataDir != "" {
-		args = append(args, "--profile", cfg.Kiosk.UserDataDir)
+		args = append(args, "--profile", browserUserDataDir(cfg, page))
 	}
 	return args
 }

@@ -117,12 +117,13 @@ func TestMQTTCommandsUpdateConfigControls(t *testing.T) {
 	service.handleCommand(context.Background(), service.root()+"/performance_profile/set", "raspberry")
 	service.handleCommand(context.Background(), service.root()+"/gpu_mode/set", "software")
 	service.handleCommand(context.Background(), service.root()+"/reduce_motion/set", "ON")
+	service.handleCommand(context.Background(), service.root()+"/isolate_page_sessions/set", "ON")
 	service.handleCommand(context.Background(), service.root()+"/watchdog_enabled/set", "OFF")
 
 	if cfg.Kiosk.Scheduler.TickInterval != 45*time.Second {
 		t.Fatalf("scheduler tick = %s, want 45s", cfg.Kiosk.Scheduler.TickInterval)
 	}
-	if cfg.Performance.Profile != "raspberry" || cfg.Performance.GPUMode != "software" || !cfg.Performance.ReduceMotion || cfg.Watchdog.Enabled {
+	if cfg.Performance.Profile != "raspberry" || cfg.Performance.GPUMode != "software" || !cfg.Performance.ReduceMotion || !cfg.Kiosk.IsolateSessions || cfg.Watchdog.Enabled {
 		t.Fatalf("config controls not updated: %#v %#v", cfg.Performance, cfg.Watchdog)
 	}
 }

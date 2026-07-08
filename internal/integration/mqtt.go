@@ -212,6 +212,7 @@ func (s *MQTTService) commands(ctx context.Context) {
 		s.root() + "/performance_profile/set",
 		s.root() + "/gpu_mode/set",
 		s.root() + "/reduce_motion/set",
+		s.root() + "/isolate_page_sessions/set",
 		s.root() + "/watchdog_enabled/set",
 	}
 	for _, page := range s.pageEntities() {
@@ -332,6 +333,9 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	case strings.HasSuffix(topic, "/reduce_motion/set"):
 		s.cfg.Performance.ReduceMotion = boolCommand(command)
 		err = config.Save(s.cfg)
+	case strings.HasSuffix(topic, "/isolate_page_sessions/set"):
+		s.cfg.Kiosk.IsolateSessions = boolCommand(command)
+		err = config.Save(s.cfg)
 	case strings.HasSuffix(topic, "/watchdog_enabled/set"):
 		s.cfg.Watchdog.Enabled = boolCommand(command)
 		err = config.Save(s.cfg)
@@ -444,6 +448,7 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "performance_profile", s.cfg.Performance.Profile, true)
 	_ = s.publishState(client, "gpu_mode", s.cfg.Performance.GPUMode, true)
 	_ = s.publishState(client, "reduce_motion", boolState(s.cfg.Performance.ReduceMotion), true)
+	_ = s.publishState(client, "isolate_page_sessions", boolState(s.cfg.Kiosk.IsolateSessions), true)
 	_ = s.publishState(client, "watchdog_enabled", boolState(s.cfg.Watchdog.Enabled), true)
 	_ = s.publishState(client, "watchdog_pressure", firstString(status.Watchdog.Pressure, "normal"), false)
 	_ = s.publishState(client, "watchdog_last_reason", firstString(status.Watchdog.LastReason, "none"), false)
@@ -769,6 +774,20 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 			},
 		},
 		{
+			Topic: s.discoveryTopic("switch", "isolate_page_sessions"),
+			Data: map[string]any{
+				"name":            "Separate Page Sessions",
+				"unique_id":       s.cfg.MQTT.Node + "_isolate_page_sessions",
+				"command_topic":   s.root() + "/isolate_page_sessions/set",
+				"state_topic":     s.root() + "/isolate_page_sessions/state",
+				"payload_on":      "ON",
+				"payload_off":     "OFF",
+				"icon":            "mdi:account-box-multiple",
+				"entity_category": "config",
+				"device":          device,
+			},
+		},
+		{
 			Topic: s.discoveryTopic("switch", "watchdog_enabled"),
 			Data: map[string]any{
 				"name":            "Browser Watchdog",
@@ -832,7 +851,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 				"unique_id":       s.cfg.MQTT.Node + "_performance_profile_select",
 				"command_topic":   s.root() + "/performance_profile/set",
 				"state_topic":     s.root() + "/performance_profile/state",
-				"options":         []string{"quality", "balanced", "raspberry", "minimal"},
+				"options":         []string{"quality", "balanced", "raspberry", "minimal", "conservative"},
 				"icon":            "mdi:speedometer",
 				"entity_category": "config",
 				"device":          device,
@@ -1322,7 +1341,7 @@ func validSchedulerMode(mode string) bool {
 
 func validPerformanceProfile(profile string) bool {
 	switch profile {
-	case "quality", "balanced", "raspberry", "minimal":
+	case "quality", "balanced", "raspberry", "minimal", "conservative":
 		return true
 	default:
 		return false
