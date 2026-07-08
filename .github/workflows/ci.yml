@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "yarn"
+
+      - name: Install yarn
+        run: npm install --global yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Check formatting
+        run: yarn prettier --check .
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check index.js
+          node --check forge.config.js
+          node --check js/admin.js
+          node --check js/hardware.js
+          node --check js/integration.js
+          node --check js/preload.js
+          node --check js/webview.js

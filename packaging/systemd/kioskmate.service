@@ -1,0 +1,15 @@
+[Unit]
+Description=KioskMate Supervisor
+After=graphical-session.target
+Wants=network-online.target
+
+[Service]
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=%t
+ExecStart=/usr/bin/kioskmate
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=default.target

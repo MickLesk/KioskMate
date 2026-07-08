@@ -1,0 +1,2599 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KioskMate v2 Admin</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1113;
+        --surface: #171b1f;
+        --surface-2: #20262b;
+        --field: #0b0d0f;
+        --line: #303940;
+        --text: #eef3f5;
+        --muted: #9aa6ad;
+        --green: #37c48a;
+        --cyan: #38bdf8;
+        --amber: #f2b84b;
+        --red: #f87171;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--field);
+        color: var(--text);
+        font: inherit;
+      }
+      button {
+        min-height: 38px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      button[disabled] {
+        cursor: wait;
+        opacity: 0.62;
+      }
+      button.primary {
+        border-color: transparent;
+        background: var(--green);
+        color: #03110b;
+        font-weight: 700;
+      }
+      button.secondary {
+        border-color: #35505e;
+        background: #12202a;
+      }
+      button.danger {
+        border-color: transparent;
+        background: var(--red);
+        color: #1d0707;
+        font-weight: 700;
+      }
+      input,
+      select,
+      textarea {
+        width: 100%;
+        min-height: 40px;
+        padding: 9px 11px;
+      }
+      textarea {
+        min-height: 128px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      label {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      code {
+        color: #d9f99d;
+      }
+      .login {
+        max-width: 520px;
+        margin: 9vh auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .login .head,
+      .panel .head {
+        border-bottom: 1px solid var(--line);
+        padding: 13px 16px;
+      }
+      .login .body,
+      .panel .body {
+        padding: 16px;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 230px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      .sidebar {
+        border-right: 1px solid var(--line);
+        background: #121518;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+      .brand {
+        padding: 18px 16px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+      }
+      .logo-mark {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background:
+          radial-gradient(circle at 32% 38%, rgba(248, 113, 113, 0.78) 0 31%, transparent 32%),
+          radial-gradient(circle at 62% 38%, rgba(239, 68, 68, 0.6) 0 31%, transparent 32%),
+          radial-gradient(circle at 48% 68%, rgba(234, 88, 12, 0.52) 0 31%, transparent 32%);
+      }
+      .brand h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .brand .subtle {
+        margin-top: 3px;
+      }
+      .nav {
+        padding: 10px;
+        display: grid;
+        align-content: start;
+        gap: 4px;
+      }
+      .nav button {
+        width: 100%;
+        border-color: transparent;
+        background: transparent;
+        text-align: left;
+        color: var(--muted);
+      }
+      .nav button.active {
+        background: var(--surface-2);
+        color: var(--text);
+      }
+      .side-actions {
+        padding: 12px;
+        border-top: 1px solid var(--line);
+        display: grid;
+        gap: 8px;
+      }
+      .content {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+      .topbar {
+        min-height: 64px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .topbar h2 {
+        margin: 0;
+        font-size: 19px;
+      }
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 4px 9px;
+        border: 1px solid rgba(55, 196, 138, 0.42);
+        border-radius: 5px;
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .view {
+        padding: 18px;
+        display: none;
+      }
+      .view.active {
+        display: block;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .dashboard-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .stat-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 14px;
+        min-height: 96px;
+      }
+      .stat-card strong {
+        display: block;
+        margin-top: 9px;
+        font-size: 20px;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .wide {
+        grid-column: 1 / -1;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .head h3 {
+        margin: 0;
+        font-size: 15px;
+      }
+      .body {
+        display: grid;
+        gap: 13px;
+      }
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 13px;
+      }
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+      .field.full {
+        grid-column: 1 / -1;
+      }
+      .switch-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 40px;
+      }
+      .switch-row input {
+        width: 20px;
+        min-height: 20px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+      .tabs button.active {
+        background: var(--surface-2);
+        color: var(--text);
+      }
+      .settings-pane {
+        display: none;
+      }
+      .settings-pane.active {
+        display: block;
+      }
+      .preview-frame {
+        width: 100%;
+        min-height: 420px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #050607;
+      }
+      .activity-feed {
+        display: grid;
+        gap: 8px;
+        max-height: 360px;
+        overflow: auto;
+      }
+      .activity-item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .activity-item.ok {
+        border-color: rgba(55, 196, 138, 0.45);
+      }
+      .activity-item.bad {
+        border-color: rgba(248, 113, 113, 0.45);
+      }
+      .actions label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 38px;
+      }
+      .actions input[type="checkbox"] {
+        width: auto;
+        min-height: auto;
+      }
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+      .list-row {
+        display: grid;
+        grid-template-columns: 32px 1fr 2fr auto;
+        gap: 8px;
+        align-items: end;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .list-row.rotation {
+        grid-template-columns: 1fr 160px auto;
+      }
+      .list-row.time-rule {
+        grid-template-columns: 32px 1fr 1fr 120px 120px 1fr auto;
+      }
+      .icon-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: var(--green);
+        box-shadow: 0 0 0 6px rgba(55, 196, 138, 0.1);
+        margin: 13px auto;
+      }
+      .kv {
+        display: grid;
+        gap: 8px;
+      }
+      .kv div {
+        display: grid;
+        grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+        gap: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        padding-bottom: 8px;
+      }
+      .kv span:first-child {
+        color: var(--muted);
+      }
+      .kv span:last-child {
+        text-align: right;
+        overflow-wrap: anywhere;
+      }
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 4px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .ok {
+        border-color: rgba(55, 196, 138, 0.45);
+        color: #86efac;
+      }
+      .warn {
+        border-color: rgba(242, 184, 75, 0.45);
+        color: #facc15;
+      }
+      .info {
+        border-color: rgba(96, 165, 250, 0.45);
+        color: #93c5fd;
+      }
+      .bad {
+        border-color: rgba(248, 113, 113, 0.45);
+        color: #fca5a5;
+      }
+      .subtle {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+      }
+      .toast-stack {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        display: grid;
+        gap: 8px;
+        z-index: 20;
+      }
+      .toast {
+        max-width: min(460px, calc(100vw - 32px));
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-2);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+      }
+      .toast.ok {
+        border-color: rgba(53, 208, 127, 0.45);
+      }
+      .toast.warn {
+        border-color: rgba(255, 194, 87, 0.5);
+      }
+      .toast.bad {
+        border-color: rgba(255, 99, 99, 0.55);
+      }
+      button.busy {
+        cursor: wait;
+        opacity: 0.72;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 900px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .nav {
+          grid-auto-flow: column;
+          grid-auto-columns: max-content;
+          overflow-x: auto;
+        }
+        .side-actions {
+          display: none;
+        }
+        .grid,
+        .dashboard-grid,
+        .form-grid,
+        .list-row,
+        .list-row.rotation,
+        .list-row.time-rule {
+          grid-template-columns: 1fr;
+        }
+        .view {
+          padding: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="login" id="auth">
+      <div class="head">
+        <div>
+          <h2 id="auth-title">Sign In</h2>
+          <div class="subtle" id="config-path"></div>
+        </div>
+        <select id="auth-language" onchange="setLanguage(this.value)" aria-label="Language">
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+        </select>
+      </div>
+      <div class="body">
+        <div class="form-grid">
+          <div class="field full setup-only" hidden>
+            <label for="setup-token">Setup token</label>
+            <input id="setup-token" type="password" autocomplete="one-time-code" />
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" type="password" autocomplete="current-password" />
+          </div>
+          <div class="field setup-only" hidden>
+            <label for="password-confirm">Confirm password</label>
+            <input id="password-confirm" type="password" autocomplete="new-password" />
+          </div>
+          <div class="field full">
+            <label for="token">Recovery token</label>
+            <input id="token" type="password" autocomplete="one-time-code" />
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="login()">Sign In</button>
+          <button onclick="saveToken()">Use Recovery Token</button>
+        </div>
+        <div class="subtle">Recovery: <code>kioskmate --admin-info</code></div>
+      </div>
+    </section>
+
+    <section class="app" id="app" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-row">
+            <span class="logo-mark" aria-hidden="true"></span>
+            <div>
+              <h1>KioskMate</h1>
+              <div class="subtle">v2 control panel</div>
+            </div>
+          </div>
+        </div>
+        <nav class="nav" id="nav"></nav>
+        <div class="side-actions">
+          <select id="language" onchange="setLanguage(this.value)" aria-label="Language">
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+          </select>
+          <button onclick="refreshAll()">Refresh</button>
+          <button onclick="logout()">Logout</button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <h2 id="view-title">Dashboard</h2>
+            <div class="subtle" id="view-subtitle"></div>
+          </div>
+          <div class="topbar-status">
+            <span class="chip" id="chip-browser">BROWSER</span>
+            <span class="chip" id="chip-mqtt">MQTT</span>
+            <span class="chip" id="chip-ha">HA</span>
+            <span class="status-pill" id="service-state">Loading</span>
+          </div>
+        </header>
+
+        <section class="view active" id="view-dashboard">
+          <div class="grid">
+            <div class="wide grid dashboard-grid">
+              <div class="stat-card"><span class="subtle">Browser</span><strong id="dash-browser">-</strong><div class="subtle" id="dash-browser-detail">-</div></div>
+              <div class="stat-card"><span class="subtle">Current Page</span><strong id="dash-page">-</strong><div class="subtle" id="dash-page-detail">-</div></div>
+              <div class="stat-card"><span class="subtle">MQTT</span><strong id="dash-mqtt">-</strong><div class="subtle" id="dash-mqtt-detail">-</div></div>
+              <div class="stat-card"><span class="subtle">System Load</span><strong id="dash-load">-</strong><div class="subtle" id="dash-load-detail">-</div></div>
+            </div>
+            <div class="panel">
+              <div class="head"><h3>Browser</h3><span class="status-pill" id="browser-state">Unknown</span></div>
+              <div class="body">
+                <div class="kv" id="browser-kv"></div>
+                <div class="actions">
+                  <button class="primary" onclick="browserAction('start')">Start</button>
+                  <button onclick="browserAction('reload')">Reload</button>
+                  <button onclick="browserAction('restart')">Restart</button>
+                  <button onclick="browserAction('previous')">Previous</button>
+                  <button onclick="browserAction('next')">Next</button>
+                  <button class="danger" onclick="browserAction('stop')">Stop</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="head"><h3>System</h3><span class="status-pill" id="system-state">Unknown</span></div>
+              <div class="body">
+                <div class="kv" id="system-kv"></div>
+                <div class="actions">
+                  <button onclick="showView('system')">System Actions</button>
+                  <button onclick="showView('logs')">Logs</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Current Kiosk Page</h3><button onclick="showView('kiosk')">Edit Kiosk</button></div>
+              <div class="body">
+                <div class="kv" id="kiosk-summary"></div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Activity</h3><div class="actions"><button onclick="exportActivity()">Export</button><button onclick="clearActivity()">Clear</button></div></div>
+              <div class="body"><div class="activity-feed" id="activity-feed"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-kiosk">
+          <div class="grid">
+            <div class="panel wide">
+              <div class="head"><h3>Kiosk Streaming</h3><span class="subtle">Main runtime target</span></div>
+              <div class="body">
+                <div class="form-grid">
+                  <div class="field full">
+                    <label>Kiosk Pages</label>
+                    <div class="list" id="pages-list"></div>
+                  </div>
+                  <div class="field full">
+                    <div class="actions">
+                      <button onclick="addPage()">Add Kiosk Page</button>
+                      <button onclick="addHomeAssistantPage()">Add HA Page</button>
+                      <button onclick="duplicateSelectedPage()">Duplicate Selected</button>
+                      <button onclick="moveSelectedPage(-1)">Move Up</button>
+                      <button onclick="moveSelectedPage(1)">Move Down</button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="kiosk-theme">Theme</label>
+                    <select id="kiosk-theme">
+                      <option value="dark">Dark</option>
+                      <option value="light">Light</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="kiosk-zoom">Zoom percent</label>
+                    <input id="kiosk-zoom" type="number" min="25" max="400" step="5" />
+                  </div>
+                  <div class="field">
+                    <label for="kiosk-browser">Browser command</label>
+                    <input id="kiosk-browser" placeholder="auto" />
+                  </div>
+                  <div class="field">
+                    <label for="kiosk-user-data">Browser profile</label>
+                    <input id="kiosk-user-data" />
+                  </div>
+                  <div class="field full">
+                    <label for="kiosk-extra-args">Extra browser args, one per line</label>
+                    <textarea id="kiosk-extra-args" placeholder="--disable-features=TranslateUI"></textarea>
+                  </div>
+                  <div class="field">
+                    <label for="kiosk-page">Active page</label>
+                    <select id="kiosk-page"></select>
+                  </div>
+                  <div class="field">
+                    <label>Widget</label>
+                    <div class="switch-row"><span class="subtle">Enable kiosk widget config flag</span><input id="kiosk-widget" type="checkbox" /></div>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button class="primary" onclick="saveKiosk(true)">Save and Restart Browser</button>
+                  <button onclick="saveKiosk(false)">Save</button>
+                  <button onclick="browserAction('reset-session')">Reset HA Session</button>
+                  <button onclick="setActivePage()">Open Selected Page</button>
+                  <button onclick="checkSelectedPage()">Check Selected Page</button>
+                  <button onclick="checkAllPages()">Check All Pages</button>
+                  <button onclick="openSelectedPageExternal()">Open in New Tab</button>
+                  <button onclick="copySelectedPageURL()">Copy URL</button>
+                </div>
+                <div class="subtle" id="kiosk-check-result"></div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Kiosk Preview</h3><span class="subtle" id="preview-status">No preview loaded</span></div>
+              <div class="body">
+                <div class="actions">
+                  <button onclick="previewSelectedPage()">Preview Selected Page</button>
+                  <button onclick="refreshPreview()">Refresh Preview</button>
+                  <button onclick="clearPreview()">Clear Preview</button>
+                </div>
+                <iframe id="kiosk-preview" class="preview-frame" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Performance</h3><span class="subtle">Raspberry first</span></div>
+              <div class="body">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="perf-profile">Profile</label>
+                    <select id="perf-profile">
+                      <option value="quality">Quality</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="raspberry">Raspberry</option>
+                      <option value="minimal">Minimal</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="perf-gpu">GPU mode</label>
+                    <select id="perf-gpu">
+                      <option value="auto">Auto</option>
+                      <option value="software">Software</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Reduce motion</label>
+                    <div class="switch-row"><span class="subtle">Lower animation work where possible</span><input id="perf-reduce-motion" type="checkbox" /></div>
+                  </div>
+                  <div class="field">
+                    <label>Watchdog</label>
+                    <div class="switch-row"><span class="subtle">Restart browser on sustained load</span><input id="watchdog-enabled" type="checkbox" /></div>
+                  </div>
+                  <div class="field">
+                    <label for="watchdog-rss">Max browser RSS MB</label>
+                    <input id="watchdog-rss" type="number" min="0" step="50" />
+                  </div>
+                  <div class="field">
+                    <label for="watchdog-cpu">Max browser CPU percent</label>
+                    <input id="watchdog-cpu" type="number" min="0" step="10" />
+                  </div>
+                </div>
+                <div class="actions">
+                  <button class="primary" onclick="saveKiosk(true)">Save Performance and Restart</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-scheduler">
+          <div class="grid">
+            <div class="panel wide">
+              <div class="head"><h3>Kiosk Scheduler</h3><span class="status-pill" id="scheduler-state">Disabled</span></div>
+              <div class="body">
+                <div class="form-grid">
+                  <div class="field">
+                    <label>Enabled</label>
+                    <div class="switch-row"><span class="subtle">Automatically switch kiosk pages</span><input id="scheduler-enabled" type="checkbox" /></div>
+                  </div>
+                  <div class="field">
+                    <label for="scheduler-mode">Mode</label>
+                    <select id="scheduler-mode">
+                      <option value="rotation">Rotation only</option>
+                      <option value="time">Time rules only</option>
+                      <option value="hybrid">Time rules, then rotation</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="scheduler-tick">Check interval seconds</label>
+                    <input id="scheduler-tick" type="number" min="5" step="5" />
+                  </div>
+                </div>
+                <div class="actions">
+                  <button class="primary" onclick="saveScheduler()">Save Scheduler</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Rotation</h3><span class="subtle">Example: 60 min, 2 min, 60 min</span></div>
+              <div class="body">
+                <div class="list" id="rotation-list"></div>
+                <div class="actions"><button onclick="addRotation()">Add Rotation Item</button></div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Time Rules</h3><span class="subtle">Time windows override rotation in hybrid mode</span></div>
+              <div class="body">
+                <div class="list" id="time-rules-list"></div>
+                <div class="actions"><button onclick="addTimeRule()">Add Time Rule</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-mqtt">
+          <div class="grid">
+            <div class="panel wide">
+              <div class="head"><h3>MQTT</h3><span class="status-pill" id="mqtt-state">Disabled</span></div>
+              <div class="body">
+                <div class="form-grid">
+                  <div class="field">
+                    <label>Enabled</label>
+                    <div class="switch-row"><span class="subtle">Home Assistant discovery and commands</span><input id="mqtt-enabled" type="checkbox" /></div>
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-protocol">Protocol</label>
+                    <select id="mqtt-protocol">
+                      <option value="mqtt">mqtt</option>
+                      <option value="mqtts">mqtts</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-host">Broker host</label>
+                    <input id="mqtt-host" placeholder="homeassistant.local" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-port">Broker port</label>
+                    <input id="mqtt-port" type="number" min="1" max="65535" placeholder="1883" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-version">MQTT version</label>
+                    <select id="mqtt-version">
+                      <option value="3.1.1">3.1.1</option>
+                      <option value="5.0" disabled>5.0 planned</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-url">Broker URL</label>
+                    <input id="mqtt-url" placeholder="mqtt://homeassistant.local:1883" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-username">Username</label>
+                    <input id="mqtt-username" autocomplete="username" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-password">Password</label>
+                    <input id="mqtt-password" type="password" autocomplete="current-password" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-discovery">Discovery prefix</label>
+                    <input id="mqtt-discovery" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-node">Node ID</label>
+                    <input id="mqtt-node" />
+                  </div>
+                  <div class="field">
+                    <label for="mqtt-interval">Publish interval seconds</label>
+                    <input id="mqtt-interval" type="number" min="5" step="5" />
+                  </div>
+                </div>
+                <div class="actions">
+                  <button class="primary" onclick="saveMqtt(true)">Save and Restart Service</button>
+                  <button onclick="saveMqtt(false)">Save</button>
+                  <button onclick="testMqtt()">Test Connection</button>
+                </div>
+                <div class="subtle" id="mqtt-test-result"></div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Home Assistant Discovery</h3><span class="subtle">MQTT entities and command topics</span></div>
+              <div class="body">
+                <div class="kv" id="ha-kv"></div>
+                <textarea id="mqtt-topics" readonly></textarea>
+                <div class="actions">
+                  <button onclick="copyMqttRoot()">Copy Root Topic</button>
+                  <button onclick="copyMqttTopics()">Copy Topic List</button>
+                  <button onclick="showView('settings'); showSettingsTab('update')">Open Updater</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-hardware">
+          <div class="grid">
+            <div class="panel">
+              <div class="head"><h3>Display</h3><span class="status-pill" id="display-state">Unknown</span></div>
+              <div class="body">
+                <div class="kv" id="display-kv"></div>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="brightness">Brightness</label>
+                    <input id="brightness" type="number" min="1" max="100" value="80" />
+                  </div>
+                </div>
+                <div class="actions">
+                  <button onclick="hardwareAction('display','ON')">Display On</button>
+                  <button onclick="hardwareAction('display','OFF')">Display Off</button>
+                  <button onclick="hardwareAction('brightness', Number(document.getElementById('brightness').value))">Set Brightness</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="head"><h3>Audio and Keyboard</h3><span class="status-pill" id="input-state">Unknown</span></div>
+              <div class="body">
+                <div class="kv" id="audio-kv"></div>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="volume">Volume</label>
+                    <input id="volume" type="number" min="0" max="100" value="50" />
+                  </div>
+                  <div class="field">
+                    <label for="microphone">Microphone</label>
+                    <input id="microphone" type="number" min="0" max="100" value="50" />
+                  </div>
+                </div>
+                <div class="actions">
+                  <button onclick="hardwareAction('volume', Number(document.getElementById('volume').value))">Set Volume</button>
+                  <button onclick="hardwareAction('microphone', Number(document.getElementById('microphone').value))">Set Microphone</button>
+                  <button onclick="hardwareAction('keyboard','ON')">Keyboard On</button>
+                  <button onclick="hardwareAction('keyboard','OFF')">Keyboard Off</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Detected Support</h3></div>
+              <div class="body"><div class="kv" id="support-kv"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-system">
+          <div class="grid">
+            <div class="panel">
+              <div class="head"><h3>Actions</h3></div>
+              <div class="body">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="priv-mode">Privilege mode</label>
+                    <select id="priv-mode">
+                      <option value="">passwordless sudo</option>
+                      <option value="sudo">sudo password</option>
+                      <option value="su">root password</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="priv-password">Password</label>
+                    <input id="priv-password" type="password" autocomplete="current-password" />
+                  </div>
+                  <div class="field full">
+                    <label>Session credential</label>
+                    <div class="switch-row"><span class="subtle" id="priv-status">No password cached</span><input id="priv-remember" type="checkbox" /></div>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button onclick="systemAction('apt-update')">Apt Update</button>
+                  <button onclick="systemAction('apt-upgrade')">Apt Upgrade</button>
+                  <button onclick="systemAction('restart-service')">Restart Service</button>
+                  <button onclick="clearPrivilege()">Forget Password</button>
+                  <button class="danger" onclick="systemAction('reboot')">Reboot</button>
+                  <button class="danger" onclick="systemAction('shutdown')">Shutdown</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="head"><h3>System Status</h3></div>
+              <div class="body"><div class="kv" id="full-system-kv"></div></div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>Job Output</h3><span class="status-pill" id="job-state">Idle</span></div>
+              <div class="body"><textarea id="job-output" readonly></textarea></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-terminal">
+          <div class="grid">
+            <div class="panel wide">
+              <div class="head"><h3>Terminal</h3><span class="subtle">Authenticated command runner</span></div>
+              <div class="body">
+                <div class="field">
+                  <label for="terminal-command">Command</label>
+                  <input id="terminal-command" value="systemctl --user status kioskmate.service --no-pager" />
+                </div>
+                <div class="actions"><button class="primary" onclick="runTerminal()">Run</button></div>
+                <textarea id="terminal-output" readonly></textarea>
+              </div>
+            </div>
+            <div class="panel wide">
+              <div class="head"><h3>SSH Key</h3><button onclick="loadSshKey()">Reload Key</button></div>
+              <div class="body">
+                <div class="kv" id="ssh-kv"></div>
+                <textarea id="ssh-public-key" readonly></textarea>
+                <div class="actions"><button class="primary" onclick="generateSshKey()">Generate Key</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-logs">
+          <div class="grid">
+            <div class="panel wide">
+              <div class="head"><h3>Logs</h3><button onclick="loadLogs()">Reload Logs</button></div>
+              <div class="body"><textarea id="logs" readonly></textarea></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings">
+          <div class="tabs" id="settings-tabs">
+            <button data-settings-tab="admin" class="active">Admin</button>
+            <button data-settings-tab="update">Update</button>
+            <button data-settings-tab="backup">Backup</button>
+            <button data-settings-tab="security">Security</button>
+            <button data-settings-tab="raw">Raw Config</button>
+          </div>
+          <div class="grid settings-pane active" id="settings-admin">
+            <div class="panel wide">
+              <div class="head"><h3>Admin</h3></div>
+              <div class="body">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="admin-bind">Bind address</label>
+                    <input id="admin-bind" />
+                  </div>
+                  <div class="field">
+                    <label for="admin-port">Port</label>
+                    <input id="admin-port" type="number" min="1" max="65535" />
+                  </div>
+                  <div class="field">
+                    <label for="admin-current-password">Current password</label>
+                    <input id="admin-current-password" type="password" autocomplete="current-password" />
+                  </div>
+                  <div class="field">
+                    <label for="admin-new-password">New password</label>
+                    <input id="admin-new-password" type="password" autocomplete="new-password" />
+                  </div>
+                </div>
+                <div class="actions">
+                  <button class="primary" onclick="saveAdmin()">Save Admin Settings</button>
+                  <button onclick="changePassword()">Change Password</button>
+                  <button class="danger" onclick="logoutAll()">Logout All Sessions</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid settings-pane" id="settings-update">
+            <div class="panel wide">
+              <div class="head"><h3>Updater</h3><span class="status-pill" id="update-state">Not checked</span></div>
+              <div class="body">
+                <div class="kv" id="update-kv"></div>
+                <textarea id="release-notes" readonly></textarea>
+                <div class="actions">
+                  <button onclick="checkUpdate()">Check Update</button>
+                  <button class="primary" onclick="installUpdate()">Install Update</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid settings-pane" id="settings-raw">
+            <div class="panel wide">
+              <div class="head"><h3>Raw Config</h3></div>
+              <div class="body">
+                <textarea id="config-json" spellcheck="false"></textarea>
+                <div class="actions">
+                  <button onclick="loadConfig()">Reload Config</button>
+                  <button class="primary" onclick="saveRawConfig()">Save Raw Config</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid settings-pane" id="settings-backup">
+            <div class="panel wide">
+              <div class="head"><h3>Backup and Restore</h3><span class="subtle" id="backup-path">-</span></div>
+              <div class="body">
+                <div class="actions">
+                  <button onclick="downloadConfig()">Export Config</button>
+                  <button onclick="document.getElementById('config-import').click()">Import Config</button>
+                  <button onclick="loadBackups()">Refresh Backups</button>
+                  <input id="config-import" type="file" accept="application/json,.json" hidden onchange="importConfigFile(this)" />
+                </div>
+                <div class="list" id="backup-list"></div>
+              </div>
+            </div>
+          </div>
+          <div class="grid settings-pane" id="settings-security">
+            <div class="panel wide">
+              <div class="head"><h3>Privileges</h3><span class="subtle" id="priv-status-settings">No password cached</span></div>
+              <div class="body">
+                <div class="actions">
+                  <button onclick="testPrivilege('apt-update')">Test sudo with apt update</button>
+                  <button onclick="clearPrivilege()">Forget Cached Password</button>
+                </div>
+                <div class="subtle">Passwords are cached only in daemon memory and disappear after service restart.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+
+    <div class="toast-stack" id="toast-stack"></div>
+
+    <script>
+      const api = location.origin;
+      const i18n = {
+        de: {
+          "Sign In": "Anmelden",
+          "Create Admin Password": "Admin-Passwort erstellen",
+          "Setup token": "Setup-Token",
+          "Password": "Passwort",
+          "Confirm password": "Passwort bestätigen",
+          "Recovery token": "Recovery-Token",
+          "Use Recovery Token": "Recovery-Token nutzen",
+          "Recovery:": "Recovery:",
+          "v2 control panel": "v2 Kontrollpanel",
+          Refresh: "Aktualisieren",
+          Logout: "Abmelden",
+          Dashboard: "Dashboard",
+          Kiosk: "Kiosk",
+          Scheduler: "Zeitsteuerung",
+          Hardware: "Hardware",
+          System: "System",
+          Terminal: "Terminal",
+          Logs: "Logs",
+          Settings: "Einstellungen",
+          Browser: "Browser",
+          "Browser Running": "Browser läuft",
+          "Browser Stopped": "Browser gestoppt",
+          Running: "Läuft",
+          Stopped: "Gestoppt",
+          "Sudo Ready": "Sudo bereit",
+          "Sudo Locked": "Sudo gesperrt",
+          "Keyboard Ready": "Tastatur bereit",
+          "Keyboard Optional": "Tastatur optional",
+          "BROWSER ON": "BROWSER AN",
+          "BROWSER OFF": "BROWSER AUS",
+          "MQTT ON": "MQTT AN",
+          "MQTT OFF": "MQTT AUS",
+          WEB: "WEB",
+          "Current Page": "Aktuelle Seite",
+          MQTT: "MQTT",
+          "System Load": "Systemlast",
+          Unknown: "Unbekannt",
+          Start: "Starten",
+          Reload: "Neu laden",
+          Restart: "Neustarten",
+          Previous: "Zurück",
+          Next: "Weiter",
+          Stop: "Stoppen",
+          "System Actions": "Systemaktionen",
+          "Current Kiosk Page": "Aktuelle Kiosk-Seite",
+          "Edit Kiosk": "Kiosk bearbeiten",
+          Activity: "Aktivität",
+          Export: "Exportieren",
+          Clear: "Leeren",
+          "Kiosk Streaming": "Kiosk-Streaming",
+          "Main runtime target": "Aktives Laufzeit-Ziel",
+          "Kiosk Pages": "Kiosk-Seiten",
+          Page: "Seite",
+          Preview: "Vorschau",
+          Check: "Prüfen",
+          Remove: "Entfernen",
+          Name: "Name",
+          Start: "Start",
+          End: "Ende",
+          Days: "Tage",
+          "Duration seconds": "Dauer in Sekunden",
+          "Add Kiosk Page": "Kiosk-Seite hinzufügen",
+          "Add HA Page": "HA-Seite hinzufügen",
+          "Duplicate Selected": "Auswahl duplizieren",
+          "Move Up": "Nach oben",
+          "Move Down": "Nach unten",
+          Theme: "Theme",
+          Dark: "Dunkel",
+          Light: "Hell",
+          "Zoom percent": "Zoom in Prozent",
+          "Browser command": "Browser-Befehl",
+          "Browser profile": "Browser-Profil",
+          "Extra browser args, one per line": "Zusätzliche Browser-Argumente, eins pro Zeile",
+          "Active page": "Aktive Seite",
+          Widget: "Widget",
+          "Enable kiosk widget config flag": "Kiosk-Widget-Option aktivieren",
+          "Save and Restart Browser": "Speichern und Browser neustarten",
+          Save: "Speichern",
+          "Reset HA Session": "HA-Sitzung zurücksetzen",
+          "Open Selected Page": "Ausgewählte Seite öffnen",
+          "Check Selected Page": "Ausgewählte Seite prüfen",
+          "Check All Pages": "Alle Seiten prüfen",
+          "Open in New Tab": "In neuem Tab öffnen",
+          "Copy URL": "URL kopieren",
+          "Kiosk Preview": "Kiosk-Vorschau",
+          "No preview loaded": "Keine Vorschau geladen",
+          "Preview Selected Page": "Ausgewählte Seite anzeigen",
+          "Refresh Preview": "Vorschau aktualisieren",
+          "Clear Preview": "Vorschau leeren",
+          Performance: "Performance",
+          "Raspberry first": "Raspberry optimiert",
+          Profile: "Profil",
+          Quality: "Qualität",
+          Balanced: "Ausgewogen",
+          Raspberry: "Raspberry",
+          Minimal: "Minimal",
+          "GPU mode": "GPU-Modus",
+          Auto: "Automatisch",
+          Software: "Software",
+          "Reduce motion": "Bewegung reduzieren",
+          "Lower animation work where possible": "Reduziert Animationen, wo möglich",
+          Watchdog: "Watchdog",
+          "Restart browser on sustained load": "Browser bei dauerhafter Last neustarten",
+          "Max browser RSS MB": "Max. Browser-RSS MB",
+          "Max browser CPU percent": "Max. Browser-CPU Prozent",
+          "Save Performance and Restart": "Performance speichern und neu starten",
+          "Kiosk Scheduler": "Kiosk-Zeitsteuerung",
+          Disabled: "Deaktiviert",
+          Enabled: "Aktiviert",
+          "Automatically switch kiosk pages": "Kiosk-Seiten automatisch wechseln",
+          Mode: "Modus",
+          "Rotation only": "Nur Rotation",
+          "Time rules only": "Nur Zeitregeln",
+          "Time rules, then rotation": "Zeitregeln, dann Rotation",
+          "Check interval seconds": "Prüfintervall in Sekunden",
+          "Save Scheduler": "Zeitsteuerung speichern",
+          Rotation: "Rotation",
+          "Example: 60 min, 2 min, 60 min": "Beispiel: 60 Min., 2 Min., 60 Min.",
+          "Add Rotation Item": "Rotationseintrag hinzufügen",
+          "Time Rules": "Zeitregeln",
+          "Time windows override rotation in hybrid mode": "Zeitfenster überschreiben Rotation im Hybridmodus",
+          "Add Time Rule": "Zeitregel hinzufügen",
+          "Home Assistant discovery and commands": "Home-Assistant-Discovery und Befehle",
+          Protocol: "Protokoll",
+          "Broker host": "Broker-Host",
+          "Broker port": "Broker-Port",
+          "MQTT version": "MQTT-Version",
+          "5.0 planned": "5.0 geplant",
+          "Broker URL": "Broker-URL",
+          Username: "Benutzername",
+          "Discovery prefix": "Discovery-Präfix",
+          "Node ID": "Node-ID",
+          "Publish interval seconds": "Publish-Intervall in Sekunden",
+          "Save and Restart Service": "Speichern und Service neustarten",
+          "Test Connection": "Verbindung testen",
+          "Home Assistant Discovery": "Home-Assistant-Discovery",
+          "MQTT entities and command topics": "MQTT-Entitäten und Befehlstopics",
+          "Copy Root Topic": "Root-Topic kopieren",
+          "Copy Topic List": "Topic-Liste kopieren",
+          "Open Updater": "Updater öffnen",
+          Display: "Display",
+          Brightness: "Helligkeit",
+          "Display On": "Display ein",
+          "Display Off": "Display aus",
+          "Set Brightness": "Helligkeit setzen",
+          "Audio and Keyboard": "Audio und Tastatur",
+          Volume: "Lautstärke",
+          Microphone: "Mikrofon",
+          "Set Volume": "Lautstärke setzen",
+          "Set Microphone": "Mikrofon setzen",
+          "Keyboard On": "Tastatur ein",
+          "Keyboard Off": "Tastatur aus",
+          "Detected Support": "Erkannte Unterstützung",
+          Actions: "Aktionen",
+          "Privilege mode": "Rechte-Modus",
+          "passwordless sudo": "sudo ohne Passwort",
+          "sudo password": "sudo-Passwort",
+          "root password": "Root-Passwort",
+          "Session credential": "Sitzungszugang",
+          "No password cached": "Kein Passwort zwischengespeichert",
+          PID: "PID",
+          URL: "URL",
+          RSS: "RSS",
+          CPU: "CPU",
+          "Last Error": "Letzter Fehler",
+          "Last Exit": "Letzter Exit",
+          Host: "Host",
+          IP: "IP",
+          Model: "Modell",
+          "CPU Temp": "CPU-Temperatur",
+          RAM: "RAM",
+          Disk: "Datenträger",
+          Pages: "Seiten",
+          "Active Page": "Aktive Seite",
+          "Active Rule": "Aktive Regel",
+          "Next Switch": "Nächster Wechsel",
+          Zoom: "Zoom",
+          GPU: "GPU",
+          Power: "Power",
+          Path: "Pfad",
+          Exists: "Existiert",
+          Yes: "Ja",
+          No: "Nein",
+          "Apt Update": "Apt Update",
+          "Apt Upgrade": "Apt Upgrade",
+          "Restart Service": "Service neustarten",
+          "Forget Password": "Passwort vergessen",
+          Reboot: "Neustart",
+          Shutdown: "Herunterfahren",
+          "System Status": "Systemstatus",
+          "Job Output": "Job-Ausgabe",
+          Idle: "Inaktiv",
+          "Authenticated command runner": "Authentifizierter Command Runner",
+          Command: "Befehl",
+          Run: "Ausführen",
+          "SSH Key": "SSH-Key",
+          "Reload Key": "Key neu laden",
+          "Generate Key": "Key erzeugen",
+          "Reload Logs": "Logs neu laden",
+          Admin: "Admin",
+          Update: "Update",
+          Backup: "Backup",
+          Security: "Sicherheit",
+          "Raw Config": "Raw Config",
+          "Bind address": "Bind-Adresse",
+          Port: "Port",
+          "Current password": "Aktuelles Passwort",
+          "New password": "Neues Passwort",
+          "Save Admin Settings": "Admin-Einstellungen speichern",
+          "Change Password": "Passwort ändern",
+          "Logout All Sessions": "Alle Sessions abmelden",
+          Updater: "Updater",
+          "Not checked": "Nicht geprüft",
+          "Check Update": "Update prüfen",
+          "Install Update": "Update installieren",
+          "Reload Config": "Config neu laden",
+          "Save Raw Config": "Raw Config speichern",
+          "Backup and Restore": "Backup und Wiederherstellung",
+          "Export Config": "Config exportieren",
+          "Import Config": "Config importieren",
+          "Refresh Backups": "Backups aktualisieren",
+          Privileges: "Rechte",
+          "Test sudo with apt update": "sudo mit apt update testen",
+          "Forget Cached Password": "Gespeichertes Passwort löschen",
+          "Passwords are cached only in daemon memory and disappear after service restart.": "Passwörter werden nur im Daemon-Speicher gehalten und verschwinden nach einem Service-Neustart.",
+          Working: "Arbeite",
+          "Passwords do not match": "Passwörter stimmen nicht überein",
+          "No page to duplicate": "Keine Seite zum Duplizieren",
+          "Page cannot move further": "Seite kann nicht weiter verschoben werden",
+          "Kiosk page added": "Kiosk-Seite hinzugefügt",
+          "Home Assistant page added": "Home-Assistant-Seite hinzugefügt",
+          "Page duplicated": "Seite dupliziert",
+          "Page moved up": "Seite nach oben verschoben",
+          "Page moved down": "Seite nach unten verschoben",
+          "Page removed": "Seite entfernt",
+          "Rotation item added": "Rotationseintrag hinzugefügt",
+          "Rotation item removed": "Rotationseintrag entfernt",
+          "Time rule added": "Zeitregel hinzugefügt",
+          "Time rule removed": "Zeitregel entfernt",
+          "No active pages": "Keine aktiven Seiten",
+          "No selected page URL": "Keine ausgewählte Seiten-URL",
+          "Preview refreshed": "Vorschau aktualisiert",
+          "Preview cleared": "Vorschau geleert",
+          "Activity exported": "Aktivität exportiert",
+          "Nothing to copy": "Nichts zum Kopieren",
+          Copied: "Kopiert",
+          "saved": "gespeichert",
+          "saved and restart requested": "gespeichert und Neustart angefordert",
+          "page selected": "Seite ausgewählt",
+          requested: "angefordert",
+          "Config:": "Config:",
+          "Runtime overview": "Laufzeitübersicht",
+          "Streaming target and browser performance": "Streaming-Ziel und Browser-Performance",
+          "Kiosk page automation and time control": "Kiosk-Seitenautomation und Zeitsteuerung",
+          "Home Assistant discovery and remote control": "Home-Assistant-Discovery und Fernsteuerung",
+          "Display, audio and input controls": "Display-, Audio- und Eingabesteuerung",
+          "Package, service and power actions": "Paket-, Service- und Power-Aktionen",
+          "Shell commands and SSH key": "Shell-Befehle und SSH-Key",
+          "User service journal": "User-Service-Journal",
+          "Admin, update, backup and security": "Admin, Update, Backup und Sicherheit",
+          "Language updated": "Sprache aktualisiert",
+        },
+      };
+      const reverseI18n = { de: Object.fromEntries(Object.entries(i18n.de).map(([key, value]) => [value, key])) };
+      let uiLang = localStorage.getItem("kioskmate-lang") || ((navigator.language || "").toLowerCase().startsWith("de") ? "de" : "en");
+      if (uiLang !== "de") uiLang = "en";
+
+      function t(text) {
+        return uiLang === "de" ? i18n.de[text] || text : reverseI18n.de[text] || text;
+      }
+
+      function setLanguage(lang) {
+        uiLang = lang === "de" ? "de" : "en";
+        localStorage.setItem("kioskmate-lang", uiLang);
+        applyTranslations();
+        showView(activeView);
+        toast(t("Language updated"), "ok");
+      }
+
+      function applyTranslations(root = document.body) {
+        document.getElementById("language").value = uiLang;
+        document.getElementById("auth-language").value = uiLang;
+        document.documentElement.lang = uiLang;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            const parent = node.parentElement;
+            if (!parent || ["SCRIPT", "STYLE", "CODE", "TEXTAREA"].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+            return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          },
+        });
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        for (const node of nodes) {
+          const before = node.nodeValue;
+          const trimmed = before.trim();
+          const translated = t(trimmed);
+          if (translated !== trimmed) node.nodeValue = before.replace(trimmed, translated);
+        }
+      }
+
+      const navItems = [
+        ["dashboard", "Dashboard"],
+        ["kiosk", "Kiosk"],
+        ["scheduler", "Scheduler"],
+        ["mqtt", "MQTT"],
+        ["hardware", "Hardware"],
+        ["system", "System"],
+        ["terminal", "Terminal"],
+        ["logs", "Logs"],
+        ["settings", "Settings"],
+      ];
+      const subtitles = {
+        dashboard: "Runtime overview",
+        kiosk: "Streaming target and browser performance",
+        scheduler: "Kiosk page automation and time control",
+        mqtt: "Home Assistant discovery and remote control",
+        hardware: "Display, audio and input controls",
+        system: "Package, service and power actions",
+        terminal: "Shell commands and SSH key",
+        logs: "User service journal",
+        settings: "Admin, update, backup and security",
+      };
+      let token = localStorage.getItem("kioskmate-token") || "";
+      let setupRequired = false;
+      let currentConfig = null;
+      let lastStatus = null;
+      let activeView = localStorage.getItem("kioskmate-view") || "dashboard";
+      let previewURL = "";
+      const activity = JSON.parse(localStorage.getItem("kioskmate-activity") || "[]");
+      document.getElementById("token").value = token;
+      document.getElementById("language").value = uiLang;
+      document.getElementById("nav").innerHTML = navItems
+        .map(([id, label]) => '<button id="nav-' + id + '" data-view="' + id + '">' + t(label) + "</button>")
+        .join("");
+      document.getElementById("nav").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-view]");
+        if (button) showView(button.dataset.view);
+      });
+      document.getElementById("settings-tabs").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-settings-tab]");
+        if (button) showSettingsTab(button.dataset.settingsTab);
+      });
+
+      async function boot() {
+        const auth = await fetchJson("/api/auth/status", false);
+        setupRequired = !!auth.setupRequired;
+        document.getElementById("config-path").textContent = t("Config:") + " " + (auth.configPath || "-");
+        document.getElementById("auth-title").textContent = setupRequired ? t("Create Admin Password") : t("Sign In");
+        document.querySelectorAll(".setup-only").forEach((el) => (el.hidden = !setupRequired));
+        if (!auth.authenticated) {
+          document.getElementById("auth").hidden = false;
+          document.getElementById("app").hidden = true;
+          applyTranslations();
+          return;
+        }
+        document.getElementById("auth").hidden = true;
+        document.getElementById("app").hidden = false;
+        showView(activeView);
+        renderActivity();
+        await refreshAll();
+        applyTranslations();
+      }
+
+      function showView(id) {
+        if (!document.getElementById("view-" + id)) id = "dashboard";
+        activeView = id;
+        localStorage.setItem("kioskmate-view", id);
+        document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
+        document.querySelectorAll(".nav button").forEach((button) => button.classList.remove("active"));
+        document.getElementById("view-" + id)?.classList.add("active");
+        document.getElementById("nav-" + id)?.classList.add("active");
+        document.getElementById("view-title").textContent = t(navItems.find((item) => item[0] === id)?.[1] || "KioskMate");
+        document.getElementById("view-subtitle").textContent = t(subtitles[id] || "");
+      }
+
+      function showSettingsTab(id) {
+        document.querySelectorAll("#settings-tabs button").forEach((button) => button.classList.toggle("active", button.dataset.settingsTab === id));
+        document.querySelectorAll(".settings-pane").forEach((pane) => pane.classList.toggle("active", pane.id === "settings-" + id));
+      }
+
+      async function login() {
+        if (setupRequired) {
+          const password = document.getElementById("password").value;
+          if (password !== document.getElementById("password-confirm").value) throw new Error(t("Passwords do not match"));
+          await postJson("/api/auth/setup", { token: document.getElementById("setup-token").value, password }, false);
+        } else {
+          await postJson("/api/auth/login", { password: document.getElementById("password").value }, false);
+        }
+        await boot();
+      }
+
+      async function saveToken() {
+        token = document.getElementById("token").value;
+        localStorage.setItem("kioskmate-token", token);
+        await boot();
+      }
+
+      async function logout() {
+        await postJson("/api/auth/logout", {}, false).catch(() => {});
+        localStorage.removeItem("kioskmate-token");
+        token = "";
+        await boot();
+      }
+
+      async function refreshAll() {
+        await loadConfig();
+        await refreshStatus();
+        await Promise.all([loadLogs(), loadSshKey(), loadBackups(), loadPrivilege()]).catch(() => {});
+      }
+
+      async function refreshStatus() {
+        lastStatus = await fetchJson("/api/status");
+        renderStatus(lastStatus);
+      }
+
+      async function loadConfig() {
+        currentConfig = await fetchJson("/api/config");
+        document.getElementById("config-json").value = JSON.stringify(currentConfig, null, 2);
+        fillConfigForms();
+      }
+
+      function fillConfigForms() {
+        const cfg = currentConfig || {};
+        const kiosk = cfg.kiosk || {};
+        const perf = cfg.performance || {};
+        const watchdog = cfg.watchdog || {};
+        const mqtt = cfg.mqtt || {};
+        const admin = cfg.admin || {};
+        renderPages();
+        renderRotation();
+        renderTimeRules();
+        setValue("kiosk-theme", kiosk.theme || "dark");
+        setValue("kiosk-zoom", kiosk.zoom_percent || 125);
+        setValue("kiosk-browser", kiosk.browser_command || "");
+        setValue("kiosk-user-data", kiosk.user_data_dir || "");
+        setValue("kiosk-extra-args", (kiosk.extra_args || []).join("\n"));
+        setChecked("kiosk-widget", kiosk.widget !== false);
+        setValue("perf-profile", perf.profile || "balanced");
+        setValue("perf-gpu", perf.gpu_mode || "auto");
+        setChecked("perf-reduce-motion", !!perf.reduce_motion);
+        setChecked("watchdog-enabled", !!watchdog.enabled);
+        setValue("watchdog-rss", watchdog.max_rss_mb || 900);
+        setValue("watchdog-cpu", watchdog.max_cpu_percent || 180);
+        setChecked("scheduler-enabled", !!kiosk.scheduler?.enabled);
+        setValue("scheduler-mode", kiosk.scheduler?.mode || "rotation");
+        setValue("scheduler-tick", durationToSeconds(kiosk.scheduler?.tick_interval, 15));
+        setChecked("mqtt-enabled", !!mqtt.enabled);
+        setValue("mqtt-url", mqtt.url || "");
+        fillMqttParts(mqtt.url || "");
+        setValue("mqtt-version", mqtt.version || "3.1.1");
+        setValue("mqtt-username", mqtt.username || "");
+        setValue("mqtt-password", mqtt.password || "");
+        setValue("mqtt-discovery", mqtt.discovery || "homeassistant");
+        setValue("mqtt-node", mqtt.node || "kioskmate");
+        setValue("mqtt-interval", durationToSeconds(mqtt.interval, 30));
+        setValue("admin-bind", admin.bind || "0.0.0.0");
+        setValue("admin-port", admin.port || 33333);
+        const page = document.getElementById("kiosk-page");
+        page.innerHTML = activePages().map((item, i) => '<option value="' + i + '">' + (i + 1) + " - " + esc(item.name || item.url) + "</option>").join("");
+      }
+
+      function renderStatus(data) {
+        const b = data.browser || {};
+        const hw = data.hardware || {};
+        const cfg = data.config || {};
+        const running = !!b.running;
+        setPill("service-state", running ? "Browser Running" : "Browser Stopped", running ? "ok" : "warn");
+        setPill("browser-state", running ? "Running" : "Stopped", running ? "ok" : "warn");
+        setPill("system-state", hw.support?.sudo_rights ? "Sudo Ready" : "Sudo Locked", hw.support?.sudo_rights ? "ok" : "warn");
+        setPill("mqtt-state", cfg.mqtt ? "Enabled" : "Disabled", cfg.mqtt ? "ok" : "warn");
+        setPill("scheduler-state", b.scheduler?.enabled ? labelize(b.scheduler.reason || "Active") : "Disabled", b.scheduler?.enabled ? "ok" : "warn");
+        setPill("display-state", hw.display?.power || "Unknown", hw.display?.power === "ON" ? "ok" : "warn");
+        setPill("input-state", hw.support?.keyboard_visibility ? "Keyboard Ready" : "Keyboard Optional", hw.support?.keyboard_visibility ? "ok" : "warn");
+        setChip("chip-browser", running ? "BROWSER ON" : "BROWSER OFF", running);
+        setChip("chip-mqtt", cfg.mqtt ? "MQTT ON" : "MQTT OFF", !!cfg.mqtt);
+        setChip("chip-ha", (cfg.kiosk_urls || []).some((url) => String(url).includes("8123")) ? "HA" : "WEB", true);
+        setText("dash-browser", running ? "Running" : "Stopped");
+        setText("dash-browser-detail", b.last_error ? "Last: " + b.last_error : b.command || "-");
+        setText("dash-page", b.page_name || "-");
+        setText("dash-page-detail", b.url || "-");
+        setText("dash-mqtt", cfg.mqtt ? "Enabled" : "Disabled");
+        setText("dash-mqtt-detail", currentConfig?.mqtt?.url || "-");
+        setText("dash-load", formatNumber(hw.system?.processor_usage_percent, "%"));
+        setText("dash-load-detail", "RAM " + formatNumber(hw.system?.memory_usage_percent, "%") + " / " + formatDisk(hw.system?.disk_usage));
+        renderMqttDiscoveryInfo();
+        renderKv("browser-kv", [
+          ["PID", b.pid || "-"],
+          ["Page", (Number(b.active || 0) + 1) + " / " + (b.page_name || b.url || "-")],
+          ["URL", b.url || "-"],
+          ["RSS", value(b.stats?.rss_mb, " MB")],
+          ["CPU", value(b.stats?.cpu_percent, "%")],
+          ["Command", b.command || "-"],
+          ["Last Error", b.last_error || "-"],
+          ["Last Exit", b.last_exit ? new Date(b.last_exit).toLocaleString() : "-"],
+        ]);
+        renderKv("system-kv", [
+          ["Host", hw.device?.host_name || "-"],
+          ["IP", hw.network?.primary || "-"],
+          ["Model", hw.device?.model || "-"],
+          ["CPU Temp", value(hw.system?.processor_temperature_c, " C")],
+          ["RAM", value(hw.system?.memory_usage_percent, "%")],
+          ["Disk", value(hw.system?.disk_usage?.percent, "%")],
+        ]);
+        renderKv("kiosk-summary", [
+          ["Active Page", b.page_name || "-"],
+          ["URL", b.url || "-"],
+          ["Pages", (cfg.kiosk_pages || cfg.kiosk_urls || []).length || "-"],
+          ["Scheduler", b.scheduler?.enabled ? labelize(b.scheduler.mode || "enabled") + " / " + labelize(b.scheduler.reason || "active") : "Disabled"],
+          ["Active Rule", b.scheduler?.active_rule || "-"],
+          ["Next Switch", b.scheduler?.next_switch ? new Date(b.scheduler.next_switch).toLocaleString() : "-"],
+          ["Theme", cfg.theme || "-"],
+          ["Zoom", value(cfg.zoom, "%")],
+          ["Profile", cfg.profile || "-"],
+          ["GPU", cfg.gpu_mode || "-"],
+        ]);
+        renderKv("display-kv", [
+          ["Power", hw.display?.power || "-"],
+          ["Brightness", value(hw.display?.brightness, "%")],
+          ["Command", hw.display?.command || "-"],
+          ["Backlight", hw.display?.backlight || "-"],
+        ]);
+        renderKv("audio-kv", [
+          ["Volume", value(hw.audio?.volume, "%")],
+          ["Microphone", value(hw.audio?.microphone, "%")],
+          ["Sink", hw.audio?.sink || "-"],
+          ["Source", hw.audio?.source || "-"],
+        ]);
+        renderKv("support-kv", Object.entries(hw.support || {}).map(([key, val]) => [key, val ? "Yes" : "No"]));
+        renderKv("full-system-kv", systemRows(hw.system || {}));
+      }
+
+      function systemRows(system) {
+        return [
+          ["Uptime", formatDurationMinutes(system.uptime_minutes)],
+          ["Memory Size", formatNumber(system.memory_size_gib, " GiB")],
+          ["Memory Usage", formatNumber(system.memory_usage_percent, "%")],
+          ["Processor Load", formatNumber(system.processor_usage_percent, "%")],
+          ["Processor Temperature", formatNumber(system.processor_temperature_c, " C")],
+          ["Disk Usage", formatDisk(system.disk_usage)],
+          ["Package Upgrades", system.package_upgrades ?? "-"],
+          ["Battery Level", system.battery_level == null ? "Unavailable" : formatNumber(system.battery_level, "%")],
+          ["Illuminance Level", system.illuminance_level == null ? "Unavailable" : formatNumber(system.illuminance_level, " lx")],
+        ];
+      }
+
+      function formatDisk(value) {
+        if (!value || typeof value !== "object") return "Unavailable";
+        return `${formatNumber(value.percent, "%")} (${formatNumber(value.used_gb, " GB")} / ${formatNumber(value.total_gb, " GB")}, ${formatNumber(value.available_gb, " GB")} free)`;
+      }
+
+      function formatDurationMinutes(value) {
+        const minutes = Number(value);
+        if (!Number.isFinite(minutes)) return "-";
+        if (minutes < 120) return Math.round(minutes) + " min";
+        return Math.round((minutes / 60) * 10) / 10 + " h";
+      }
+
+      function formatDurationSeconds(value) {
+        const seconds = durationToSeconds(value, 0);
+        return seconds > 0 ? seconds + " s" : "-";
+      }
+
+      function formatNumber(value, suffix) {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return "-";
+        return Math.round(num * 10) / 10 + suffix;
+      }
+
+      function fillMqttParts(raw) {
+        let protocol = "mqtt";
+        let host = "";
+        let port = "";
+        try {
+          const parsed = new URL(raw || "mqtt://");
+          protocol = parsed.protocol.replace(":", "") || "mqtt";
+          host = parsed.hostname || "";
+          port = parsed.port || (protocol === "mqtts" ? "8883" : "1883");
+        } catch {
+          const stripped = String(raw || "").replace(/^mqtts?:\/\//, "");
+          host = stripped.split(":")[0] || "";
+        }
+        setValue("mqtt-protocol", protocol === "mqtts" ? "mqtts" : "mqtt");
+        setValue("mqtt-host", host);
+        setValue("mqtt-port", port || (protocol === "mqtts" ? 8883 : 1883));
+      }
+
+      function buildMqttURL() {
+        const explicit = getValue("mqtt-url");
+        const host = getValue("mqtt-host");
+        if (!host) return explicit;
+        const protocol = getValue("mqtt-protocol") || "mqtt";
+        const port = numberValue("mqtt-port", protocol === "mqtts" ? 8883 : 1883);
+        return protocol + "://" + host + ":" + port;
+      }
+
+      function mqttRoot() {
+        return "kioskmate/" + String(getValue("mqtt-node") || currentConfig?.mqtt?.node || "kioskmate").replace(/^\/+|\/+$/g, "");
+      }
+
+      function renderMqttDiscoveryInfo() {
+        const root = mqttRoot();
+        const mqtt = currentConfig?.mqtt || {};
+        const topics = [
+          root + "/availability",
+          root + "/state",
+          root + "/command",
+          root + "/start/execute",
+          root + "/stop/execute",
+          root + "/restart/execute",
+          root + "/refresh/execute",
+          root + "/next/execute",
+          root + "/previous/execute",
+          root + "/reset_session/execute",
+          root + "/page_number/set",
+          root + "/page_name/set",
+          root + "/page_url/set",
+          root + "/scheduler_enabled/set",
+          root + "/scheduler_mode/set",
+          root + "/scheduler_tick/set",
+          root + "/performance_profile/set",
+          root + "/gpu_mode/set",
+          root + "/reduce_motion/set",
+          root + "/watchdog_enabled/set",
+          root + "/display/power/set",
+          root + "/display/brightness/set",
+          root + "/volume/set",
+          root + "/microphone/set",
+          root + "/keyboard/set",
+          root + "/last_command/state",
+          root + "/last_command_status/state",
+          root + "/last_command_error/state",
+          root + "/last_command_json/state",
+        ];
+        renderKv("ha-kv", [
+          ["Enabled", mqtt.enabled ? "Yes" : "No"],
+          ["Broker", mqtt.url || "-"],
+          ["Version", mqtt.version || "3.1.1"],
+          ["Discovery Prefix", mqtt.discovery || "homeassistant"],
+          ["Node", mqtt.node || "kioskmate"],
+          ["Root Topic", root],
+          ["Publish Interval", formatDurationSeconds(mqtt.interval)],
+          ["Entity Groups", "browser, pages, scheduler, performance, hardware, system"],
+        ]);
+        setValue("mqtt-topics", topics.join("\n"));
+      }
+
+      function normalizePages(pages, urls) {
+        const source = Array.isArray(pages) && pages.length
+          ? pages
+          : (Array.isArray(urls) ? urls.map((url, index) => ({ name: "Page " + (index + 1), url })) : []);
+        const normalized = source
+          .map((page, index) => ({
+            name: String(page?.name || "Page " + (index + 1)).trim(),
+            url: String(page?.url || page || "").trim(),
+            disabled: !!page?.disabled,
+          }))
+          .filter((page) => page.url);
+        return normalized.length ? normalized : [{ name: "Home Assistant", url: "http://homeassistant.local:8123", disabled: false }];
+      }
+
+      function activePages(pages) {
+        const kiosk = currentConfig?.kiosk || {};
+        return normalizePages(pages || kiosk.pages, kiosk.urls).filter((page) => !page.disabled);
+      }
+
+      function pageOptions(selected) {
+        return activePages()
+          .map((page, index) => '<option value="' + index + '"' + (Number(selected) === index ? " selected" : "") + ">" + (index + 1) + " - " + esc(page.name || page.url) + "</option>")
+          .join("");
+      }
+
+      function renderPages() {
+        const kiosk = currentConfig?.kiosk || {};
+        const pages = normalizePages(kiosk.pages, kiosk.urls);
+        document.getElementById("pages-list").innerHTML = pages
+          .map((page, index) => `
+            <div class="list-row" data-page="${index}">
+              <div><span class="icon-dot" aria-hidden="true"></span></div>
+              <div class="field">
+                <label>Name</label>
+                <input data-page-name value="${esc(page.name)}" placeholder="Dashboard" />
+              </div>
+              <div class="field">
+                <label>URL</label>
+                <input data-page-url value="${esc(page.url)}" placeholder="http://homeassistant.local:8123/lovelace/default_view" />
+              </div>
+              <div class="actions">
+                <label class="subtle"><input data-page-disabled type="checkbox" ${page.disabled ? "checked" : ""} /> ${t("Disabled")}</label>
+                <button onclick="previewPage(${index})">${t("Preview")}</button>
+                <button onclick="checkPage(${index})">${t("Check")}</button>
+                <button class="danger" onclick="removePage(${index})">${t("Remove")}</button>
+              </div>
+            </div>`)
+          .join("");
+      }
+
+      function addPage() {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages();
+        cfg.kiosk.pages.push({ name: "New Page", url: "http://homeassistant.local:8123", disabled: false });
+        renderPages();
+        renderRotation();
+        renderTimeRules();
+        toast(t("Kiosk page added"), "ok");
+      }
+
+      function addHomeAssistantPage() {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages();
+        cfg.kiosk.pages.push({ name: "Home Assistant", url: "http://homeassistant.local:8123", disabled: false });
+        renderPages();
+        renderRotation();
+        renderTimeRules();
+        toast(t("Home Assistant page added"), "ok");
+      }
+
+      function selectedPageIndex() {
+        return Number(document.getElementById("kiosk-page").value || 0);
+      }
+
+      function selectedPageURL() {
+        return activePages()[selectedPageIndex()]?.url || "";
+      }
+
+      function duplicateSelectedPage() {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        const pages = collectPages();
+        const source = activePages(pages)[selectedPageIndex()] || pages[0];
+        if (!source) {
+          toast(t("No page to duplicate"), "warn");
+          return;
+        }
+        const sourceIndex = pages.findIndex((page) => page.url === source.url && page.name === source.name);
+        const insertAt = sourceIndex >= 0 ? sourceIndex + 1 : pages.length;
+        pages.splice(insertAt, 0, { name: source.name + " Copy", url: source.url, disabled: false });
+        cfg.kiosk.pages = pages;
+        renderPages();
+        renderRotation();
+        renderTimeRules();
+        fillConfigForms();
+        toast(t("Page duplicated"), "ok");
+      }
+
+      function moveSelectedPage(direction) {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        const pages = collectPages();
+        const selected = activePages(pages)[selectedPageIndex()];
+        const index = pages.findIndex((page) => selected && page.url === selected.url && page.name === selected.name);
+        const next = index + direction;
+        if (index < 0 || next < 0 || next >= pages.length) {
+          toast(t("Page cannot move further"), "warn");
+          return;
+        }
+        [pages[index], pages[next]] = [pages[next], pages[index]];
+        cfg.kiosk.pages = pages;
+        renderPages();
+        renderRotation();
+        renderTimeRules();
+        fillConfigForms();
+        toast(t(direction < 0 ? "Page moved up" : "Page moved down"), "ok");
+      }
+
+      function removePage(index) {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages().filter((_, i) => i !== index);
+        renderPages();
+        renderRotation();
+        renderTimeRules();
+        toast(t("Page removed"), "ok");
+      }
+
+      function collectPages() {
+        return Array.from(document.querySelectorAll("[data-page]"))
+          .map((row, index) => ({
+            name: row.querySelector("[data-page-name]")?.value?.trim() || "Page " + (index + 1),
+            url: row.querySelector("[data-page-url]")?.value?.trim() || "",
+            disabled: !!row.querySelector("[data-page-disabled]")?.checked,
+          }))
+          .filter((page) => page.url);
+      }
+
+      function renderRotation() {
+        const rotation = currentConfig?.kiosk?.rotation || [{ page: 0, duration_seconds: 3600 }];
+        document.getElementById("rotation-list").innerHTML = rotation
+          .map((item, index) => `
+            <div class="list-row rotation" data-rotation="${index}">
+              <div class="field">
+                <label>${t("Page")}</label>
+                <select data-rotation-page>${pageOptions(item.page)}</select>
+              </div>
+              <div class="field">
+                <label>${t("Duration seconds")}</label>
+                <input data-rotation-duration type="number" min="5" step="5" value="${Number(item.duration_seconds || item.duration || 3600)}" />
+              </div>
+              <button class="danger" onclick="removeRotation(${index})">${t("Remove")}</button>
+            </div>`)
+          .join("");
+      }
+
+      function addRotation() {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.rotation = collectRotation();
+        cfg.kiosk.rotation.push({ page: 0, duration_seconds: 3600 });
+        renderRotation();
+        toast(t("Rotation item added"), "ok");
+      }
+
+      function removeRotation(index) {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.rotation = collectRotation().filter((_, i) => i !== index);
+        renderRotation();
+        toast(t("Rotation item removed"), "ok");
+      }
+
+      function collectRotation() {
+        return Array.from(document.querySelectorAll("[data-rotation]"))
+          .map((row) => ({
+            page: numberFrom(row.querySelector("[data-rotation-page]")?.value, 0),
+            duration_seconds: Math.max(5, numberFrom(row.querySelector("[data-rotation-duration]")?.value, 3600)),
+          }))
+          .filter((item) => Number.isFinite(item.page));
+      }
+
+      function renderTimeRules() {
+        const rules = currentConfig?.kiosk?.time_rules || [];
+        document.getElementById("time-rules-list").innerHTML = rules
+          .map((rule, index) => `
+            <div class="list-row time-rule" data-rule="${index}">
+              <div><span class="icon-dot" aria-hidden="true"></span></div>
+              <div class="field">
+                <label>${t("Name")}</label>
+                <input data-rule-name value="${esc(rule.name || "Rule " + (index + 1))}" />
+              </div>
+              <div class="field">
+                <label>${t("Page")}</label>
+                <select data-rule-page>${pageOptions(rule.page)}</select>
+              </div>
+              <div class="field">
+                <label>${t("Start")}</label>
+                <input data-rule-start type="time" value="${esc(rule.start || "13:00")}" />
+              </div>
+              <div class="field">
+                <label>${t("End")}</label>
+                <input data-rule-end type="time" value="${esc(rule.end || "14:00")}" />
+              </div>
+              <div class="field">
+                <label>${t("Days")}</label>
+                <input data-rule-days value="${esc((rule.days || []).join(","))}" placeholder="mon,tue,wed or empty" />
+              </div>
+              <div class="actions">
+                <label class="subtle"><input data-rule-disabled type="checkbox" ${rule.disabled ? "checked" : ""} /> ${t("Disabled")}</label>
+                <button class="danger" onclick="removeTimeRule(${index})">${t("Remove")}</button>
+              </div>
+            </div>`)
+          .join("");
+      }
+
+      function addTimeRule() {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.time_rules = collectTimeRules();
+        cfg.kiosk.time_rules.push({ name: "Dashboard Window", page: 0, start: "13:00", end: "14:00", days: [], disabled: false });
+        renderTimeRules();
+        toast(t("Time rule added"), "ok");
+      }
+
+      function removeTimeRule(index) {
+        const cfg = currentConfig || (currentConfig = {});
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.time_rules = collectTimeRules().filter((_, i) => i !== index);
+        renderTimeRules();
+        toast(t("Time rule removed"), "ok");
+      }
+
+      function collectTimeRules() {
+        return Array.from(document.querySelectorAll("[data-rule]")).map((row, index) => ({
+          name: row.querySelector("[data-rule-name]")?.value?.trim() || "Rule " + (index + 1),
+          page: numberFrom(row.querySelector("[data-rule-page]")?.value, 0),
+          start: row.querySelector("[data-rule-start]")?.value || "00:00",
+          end: row.querySelector("[data-rule-end]")?.value || "23:59",
+          days: String(row.querySelector("[data-rule-days]")?.value || "")
+            .split(",")
+            .map((day) => day.trim().toLowerCase())
+            .filter(Boolean),
+          disabled: !!row.querySelector("[data-rule-disabled]")?.checked,
+        }));
+      }
+
+      async function saveKiosk(restart) {
+        return runAction(restart ? "Save kiosk and restart" : "Save kiosk", async () => {
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.performance = cfg.performance || {};
+          cfg.watchdog = cfg.watchdog || {};
+          cfg.kiosk.pages = collectPages();
+          cfg.kiosk.urls = cfg.kiosk.pages.filter((page) => !page.disabled).map((page) => page.url);
+          cfg.kiosk.theme = getValue("kiosk-theme");
+          cfg.kiosk.zoom_percent = numberValue("kiosk-zoom", 125);
+          cfg.kiosk.browser_command = getValue("kiosk-browser");
+          cfg.kiosk.user_data_dir = getValue("kiosk-user-data");
+          cfg.kiosk.extra_args = lines("kiosk-extra-args");
+          cfg.kiosk.widget = isChecked("kiosk-widget");
+          cfg.performance.profile = getValue("perf-profile");
+          cfg.performance.gpu_mode = getValue("perf-gpu");
+          cfg.performance.reduce_motion = isChecked("perf-reduce-motion");
+          cfg.watchdog.enabled = isChecked("watchdog-enabled");
+          cfg.watchdog.max_rss_mb = numberValue("watchdog-rss", 900);
+          cfg.watchdog.max_cpu_percent = numberValue("watchdog-cpu", 180);
+          await saveConfigObject(cfg);
+          if (restart) await postJson("/api/browser/restart", {});
+          await refreshAll();
+          return restart ? "saved and restart requested" : "saved";
+        });
+      }
+
+      async function saveScheduler() {
+        return runAction("Save scheduler", async () => {
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.kiosk.pages = collectPages();
+          cfg.kiosk.urls = cfg.kiosk.pages.filter((page) => !page.disabled).map((page) => page.url);
+          cfg.kiosk.scheduler = {
+            enabled: isChecked("scheduler-enabled"),
+            mode: getValue("scheduler-mode") || "rotation",
+            tick_interval: Math.max(5, numberValue("scheduler-tick", 15)) * 1000000000,
+          };
+          cfg.kiosk.rotation = collectRotation();
+          cfg.kiosk.time_rules = collectTimeRules();
+          await saveConfigObject(cfg);
+          await refreshAll();
+          return "saved";
+        });
+      }
+
+      async function saveMqtt(restartService) {
+        return runAction(restartService ? "Save MQTT and restart service" : "Save MQTT", async () => {
+          const cfg = cloneConfig();
+          cfg.mqtt = cfg.mqtt || {};
+          cfg.mqtt.enabled = isChecked("mqtt-enabled");
+          cfg.mqtt.url = buildMqttURL();
+          setValue("mqtt-url", cfg.mqtt.url);
+          cfg.mqtt.version = getValue("mqtt-version") || "3.1.1";
+          if (cfg.mqtt.version !== "3.1.1") throw new Error("MQTT 5.0 is planned; the internal client currently supports MQTT 3.1.1");
+          cfg.mqtt.username = getValue("mqtt-username");
+          cfg.mqtt.password = getValue("mqtt-password");
+          cfg.mqtt.discovery = getValue("mqtt-discovery") || "homeassistant";
+          cfg.mqtt.node = getValue("mqtt-node") || "kioskmate";
+          cfg.mqtt.interval = numberValue("mqtt-interval", 30) * 1000000000;
+          await saveConfigObject(cfg);
+          if (restartService) await postJson("/api/system/restart-service", { mode: getValue("priv-mode"), password: getValue("priv-password"), remember: isChecked("priv-remember") });
+          await refreshAll();
+          return restartService ? "saved and restart requested" : "saved";
+        });
+      }
+
+      async function saveAdmin() {
+        return runAction("Save admin settings", async () => {
+          const cfg = cloneConfig();
+          cfg.admin = cfg.admin || {};
+          cfg.admin.bind = getValue("admin-bind") || "0.0.0.0";
+          cfg.admin.port = numberValue("admin-port", 33333);
+          await saveConfigObject(cfg);
+          return "saved";
+        });
+      }
+
+      async function changePassword() {
+        return runAction("Change password", async () => {
+          await postJson("/api/auth/password", {
+            current: getValue("admin-current-password"),
+            next: getValue("admin-new-password"),
+          });
+          setValue("admin-current-password", "");
+          setValue("admin-new-password", "");
+          return "changed";
+        });
+      }
+
+      async function logoutAll() {
+        if (!confirm("Logout all admin sessions?")) return;
+        return runAction("Logout all sessions", async () => {
+          await postJson("/api/auth/logout-all", {});
+          return "sessions revoked";
+        });
+      }
+
+      async function saveRawConfig() {
+        return runAction("Save raw config", async () => {
+          await saveConfigObject(JSON.parse(document.getElementById("config-json").value));
+          await refreshAll();
+          return "saved";
+        });
+      }
+
+      async function loadBackups() {
+        const data = await fetchJson("/api/config/backups");
+        document.getElementById("backup-path").textContent = data.path || "-";
+        const backups = data.backups || [];
+        document.getElementById("backup-list").innerHTML = backups.length
+          ? backups.map((item) => `
+              <div class="list-row rotation">
+                <div>
+                  <strong>${esc(item.name)}</strong>
+                  <div class="subtle">${esc(item.kind)} / ${esc(item.path)}</div>
+                </div>
+                <div class="subtle">${new Date(item.modified).toLocaleString()} / ${Math.round((item.size || 0) / 1024)} KB</div>
+                ${item.kind === "v2" ? '<button onclick="restoreBackup(' + JSON.stringify(item.path).replace(/"/g, "&quot;") + ')">Restore</button>' : '<span class="subtle">Legacy source</span>'}
+              </div>`)
+              .join("")
+          : '<div class="subtle">No backups found yet.</div>';
+      }
+
+      async function restoreBackup(path) {
+        if (!confirm("Restore this v2 config backup and reload the UI?")) return;
+        return runAction("Restore backup", async () => {
+          await postJson("/api/config/restore", { path });
+          await refreshAll();
+          return path;
+        });
+      }
+
+      async function downloadConfig() {
+        return runAction("Download config", async () => {
+          const response = await fetch(api + "/api/config/export", { headers: token ? { "X-Go-Kiosk-Token": token } : {} });
+          if (!response.ok) throw new Error(await response.text());
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = "kioskmate-config.json";
+          link.click();
+          URL.revokeObjectURL(url);
+          return "exported";
+        });
+      }
+
+      async function importConfigFile(input) {
+        const file = input.files?.[0];
+        input.value = "";
+        if (!file) return;
+        return runAction("Import config", async () => {
+          const text = await file.text();
+          await postJson("/api/config/import", JSON.parse(text));
+          await refreshAll();
+          return file.name;
+        });
+      }
+
+      async function saveConfigObject(cfg) {
+        await postJson("/api/config", cfg);
+        currentConfig = cfg;
+        document.getElementById("config-json").value = JSON.stringify(currentConfig, null, 2);
+        fillConfigForms();
+      }
+
+      async function setActivePage() {
+        return runAction("Open selected page", async () => {
+          await postJson("/api/browser/page", { index: Number(document.getElementById("kiosk-page").value || 0) });
+          await refreshStatus();
+          return "page selected";
+        });
+      }
+
+      async function browserAction(name, refresh = true) {
+        return runAction("Browser " + name, async () => {
+          await postJson("/api/browser/" + name, {});
+          if (refresh) setTimeout(refreshStatus, 700);
+          return "requested";
+        }, { detail: name }).finally(() => refreshStatus().catch(() => {}));
+      }
+
+      async function checkSelectedPage() {
+        return checkPage(selectedPageIndex());
+      }
+
+      async function checkPage(index) {
+        return runAction("Check page " + (Number(index) + 1), async () => {
+          const result = await postJson("/api/browser/check-page", { index: Number(index) });
+          const text = pageCheckText(result);
+          document.getElementById("kiosk-check-result").textContent = text;
+          if (!result.ok) throw new Error(text);
+          return text;
+        });
+      }
+
+      async function checkAllPages() {
+        return runAction("Check all pages", async () => {
+          const pages = activePages();
+          if (!pages.length) throw new Error("No active pages");
+          const results = [];
+          for (let index = 0; index < pages.length; index++) {
+            const result = await postJson("/api/browser/check-page", { index });
+            results.push((index + 1) + ". " + (pages[index].name || pages[index].url) + ": " + pageCheckText(result));
+          }
+          const failed = results.filter((line) => line.includes("Failed:")).length;
+          document.getElementById("kiosk-check-result").textContent = results.join(" | ");
+          if (failed) throw new Error(failed + " page check(s) failed");
+          return results.length + " page(s) ok";
+        });
+      }
+
+      function pageCheckText(result) {
+        return result.ok
+          ? "OK: " + result.status + (result.final_url && result.final_url !== result.url ? " -> " + result.final_url : "")
+          : "Failed: " + (result.error || result.status || "unknown error");
+      }
+
+      function openSelectedPageExternal() {
+        const pages = activePages();
+        const index = Number(document.getElementById("kiosk-page").value || 0);
+        const url = pages[index]?.url;
+        if (!url) {
+          toast("No selected page URL");
+          return;
+        }
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+
+      async function previewSelectedPage() {
+        return previewPage(selectedPageIndex());
+      }
+
+      async function previewPage(index) {
+        return runAction("Preview selected page", async () => {
+          const pages = activePages();
+          const url = pages[index]?.url;
+          if (!url) throw new Error("No selected page URL");
+          previewURL = url;
+          document.getElementById("kiosk-preview").src = url;
+          document.getElementById("preview-status").textContent = url;
+          return "preview loaded";
+        });
+      }
+
+      async function refreshPreview() {
+        if (!previewURL) return previewSelectedPage();
+        document.getElementById("kiosk-preview").src = previewURL;
+        toast("Preview refreshed", "info");
+      }
+
+      function clearPreview() {
+        previewURL = "";
+        document.getElementById("kiosk-preview").removeAttribute("src");
+        document.getElementById("preview-status").textContent = "No preview loaded";
+        toast("Preview cleared", "info");
+      }
+
+      async function copySelectedPageURL() {
+        const url = selectedPageURL();
+        if (!url) {
+          toast("No selected page URL", "warn");
+          return;
+        }
+        await copyText(url, "Page URL copied");
+      }
+
+      async function testMqtt() {
+        return runAction("Test MQTT", async () => {
+          const result = await postJson("/api/mqtt/test", {
+            url: buildMqttURL(),
+            version: getValue("mqtt-version") || "3.1.1",
+            username: getValue("mqtt-username"),
+            password: getValue("mqtt-password"),
+            node: getValue("mqtt-node") || "kioskmate",
+          });
+          const text = result.ok ? "Connected in " + result.latency_ms + " ms using MQTT " + result.version : "Failed: " + result.error;
+          document.getElementById("mqtt-test-result").textContent = text;
+          if (!result.ok) throw new Error(text);
+          return text;
+        });
+      }
+
+      async function copyMqttRoot() {
+        await copyText(mqttRoot(), "MQTT root topic copied");
+      }
+
+      async function copyMqttTopics() {
+        await copyText(getValue("mqtt-topics"), "MQTT topic list copied");
+      }
+
+      async function hardwareAction(name, actionValue) {
+        return runAction("Hardware " + name, async () => {
+          await postJson("/api/hardware/" + name, { value: actionValue });
+          setTimeout(refreshStatus, 700);
+          return "sent";
+        });
+      }
+
+      async function systemAction(name, ask = true) {
+        if (ask && ["reboot", "shutdown"].includes(name) && !confirm("Run " + name + " now?")) return;
+        return runAction("System " + name, async () => {
+          const job = await postJson("/api/system/" + name, {
+            mode: getValue("priv-mode"),
+            password: getValue("priv-password"),
+            remember: isChecked("priv-remember"),
+          });
+          if (isChecked("priv-remember")) {
+            await loadPrivilege().catch(() => {});
+          } else {
+            setValue("priv-password", "");
+          }
+          pollJob(job.id);
+          return "job started " + job.id;
+        });
+      }
+
+      async function checkUpdate() {
+        return runAction("Check update", async () => {
+          const data = await fetchJson("/api/update");
+          setPill("update-state", data.update_available ? "Update Available" : "Up To Date", data.update_available ? "warn" : "ok");
+          renderKv("update-kv", [
+            ["Installed", data.current_version || "-"],
+            ["Latest", data.latest_version || "-"],
+            ["Asset", data.asset?.name || "-"],
+            ["Release", data.url || "-"],
+          ]);
+          document.getElementById("release-notes").value = data.changelog || "";
+          return data.update_available ? "update available" : "up to date";
+        });
+      }
+
+      async function installUpdate() {
+        return runAction("Install update", async () => {
+          const job = await postJson("/api/update/install", {});
+          pollUpdateJob(job.id);
+          return "job started " + job.id;
+        });
+      }
+
+      async function pollJob(id) {
+        const job = await fetchJson("/api/jobs/" + encodeURIComponent(id));
+        const finished = jobFinished(job);
+        setPill("job-state", finished ? job.name + " finished (" + job.exit_code + ")" : job.name + " running", finished && job.exit_code === 0 ? "ok" : "warn");
+        document.getElementById("job-output").value = (job.output || []).join("\n\n");
+        if (!finished) setTimeout(() => pollJob(id), 1500);
+      }
+
+      async function pollUpdateJob(id) {
+        const job = await fetchJson("/api/update/jobs/" + encodeURIComponent(id));
+        const finished = jobFinished(job);
+        setPill("update-state", finished ? "Update finished (" + job.exit_code + ")" : "Updating", finished && job.exit_code === 0 ? "ok" : "warn");
+        document.getElementById("release-notes").value = (job.output || []).join("\n\n");
+        if (!finished) setTimeout(() => pollUpdateJob(id), 1500);
+      }
+
+      async function loadLogs() {
+        const data = await fetchJson("/api/logs?lines=300");
+        document.getElementById("logs").value = (data.warning ? "Warning: " + data.warning + "\n\n" : "") + (data.lines || []).join("\n");
+      }
+
+      async function loadPrivilege() {
+        const data = await fetchJson("/api/privilege");
+        const text = data.configured
+          ? "Password cached in memory for " + data.mode + " since " + new Date(data.created).toLocaleTimeString()
+          : "No password cached";
+        setText("priv-status", text);
+        setText("priv-status-settings", text);
+      }
+
+      async function clearPrivilege() {
+        return runAction("Forget cached password", async () => {
+          await postJson("/api/privilege", {});
+          setValue("priv-password", "");
+          setChecked("priv-remember", false);
+          await loadPrivilege();
+          return "cleared";
+        });
+      }
+
+      async function testPrivilege(name) {
+        return systemAction(name, false);
+      }
+
+      async function runTerminal() {
+        const command = getValue("terminal-command");
+        return runAction("Run terminal", async () => {
+          const data = await postJson("/api/terminal/run", { command });
+          document.getElementById("terminal-output").value = "$ " + command + "\n\n" + (data.output || "") + (data.error ? "\n" + data.error : "");
+          if (data.exit_code !== 0) throw new Error(data.error || "exit " + data.exit_code);
+          return "exit 0";
+        }, { detail: command });
+      }
+
+      async function loadSshKey() {
+        const data = await fetchJson("/api/ssh-key");
+        renderKv("ssh-kv", [
+          ["Exists", data.exists ? "Yes" : "No"],
+          ["Path", data.path || "-"],
+        ]);
+        document.getElementById("ssh-public-key").value = data.public_key || "";
+      }
+
+      async function generateSshKey() {
+        return runAction("Generate SSH key", async () => {
+          const data = await postJson("/api/ssh-key", {});
+          document.getElementById("ssh-public-key").value = data.public_key || "";
+          await loadSshKey();
+          return data.path || "created";
+        });
+      }
+
+      async function fetchJson(path, requireAuth = true) {
+        const response = await fetch(api + path, { headers: token ? { "X-Go-Kiosk-Token": token } : {} });
+        if (!response.ok && requireAuth) throw new Error(await responseError(response));
+        return response.json();
+      }
+
+      async function postJson(path, body, includeToken = true) {
+        const headers = { "Content-Type": "application/json" };
+        if (includeToken && token) headers["X-Go-Kiosk-Token"] = token;
+        const response = await fetch(api + path, { method: "POST", headers, body: JSON.stringify(body || {}) });
+        if (!response.ok) throw new Error(await responseError(response));
+        return response.json();
+      }
+
+      async function responseError(response) {
+        const text = await response.text();
+        const prefix = response.status + " " + response.statusText;
+        try {
+          const data = JSON.parse(text);
+          return (data.error ? prefix + ": " + data.error : text || prefix);
+        } catch {
+          return text ? prefix + ": " + text : prefix;
+        }
+      }
+
+      function renderKv(id, rows) {
+        document.getElementById(id).innerHTML = rows
+          .map(([key, val]) => "<div><span>" + esc(t(labelize(key))) + "</span><span>" + esc(typeof val === "string" ? t(val) : val ?? "-") + "</span></div>")
+          .join("");
+      }
+
+      function setPill(id, text, state) {
+        const el = document.getElementById(id);
+        el.textContent = t(text);
+        el.className = "status-pill " + (state || "");
+      }
+
+      function setChip(id, text, enabled) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = t(text);
+        el.style.opacity = enabled ? "1" : "0.45";
+        el.style.borderColor = enabled ? "rgba(55, 196, 138, 0.42)" : "var(--line)";
+        el.style.color = enabled ? "var(--green)" : "var(--muted)";
+      }
+
+      function setValue(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.value = value ?? "";
+      }
+
+      function setText(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = typeof value === "string" ? t(value) : value ?? "";
+      }
+
+      function getValue(id) {
+        return document.getElementById(id)?.value?.trim() || "";
+      }
+
+      function setChecked(id, checked) {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!checked;
+      }
+
+      function isChecked(id) {
+        return !!document.getElementById(id)?.checked;
+      }
+
+      function numberValue(id, fallback) {
+        const value = Number(getValue(id));
+        return Number.isFinite(value) ? value : fallback;
+      }
+
+      function numberFrom(value, fallback) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : fallback;
+      }
+
+      function lines(id) {
+        return getValue(id)
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+      }
+
+      function durationToSeconds(value, fallback) {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num <= 0) return fallback;
+        return Math.round(num / 1000000000);
+      }
+
+      function cloneConfig() {
+        return JSON.parse(JSON.stringify(currentConfig || {}));
+      }
+
+      function jobFinished(job) {
+        return !!job.finished && !String(job.finished).startsWith("0001-");
+      }
+
+      function value(raw, suffix) {
+        if (raw == null || raw === "") return "-";
+        if (typeof raw === "number") return Math.round(raw * 10) / 10 + suffix;
+        return raw + suffix;
+      }
+
+      function labelize(value) {
+        return String(value).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      }
+
+      function esc(value) {
+        const div = document.createElement("div");
+        div.textContent = value == null ? "" : String(value);
+        return div.innerHTML;
+      }
+
+      async function runAction(label, fn, options = {}) {
+        label = t(label);
+        const button = event?.target?.closest?.("button");
+        const oldText = button?.textContent;
+        if (button) {
+          button.disabled = true;
+          button.classList.add("busy");
+          button.setAttribute("aria-busy", "true");
+          button.textContent = t("Working") + "...";
+        }
+        const started = performance.now();
+        try {
+          const detail = await fn();
+          const elapsed = Math.round(performance.now() - started);
+          const message = label + " " + (uiLang === "de" ? "erfolgreich" : "succeeded");
+          toast(message, "ok", detail ? t(String(detail)) : elapsed + " ms");
+          addActivity({ label, status: "ok", detail: String(detail || options.detail || ""), elapsed });
+          return detail;
+        } catch (error) {
+          const elapsed = Math.round(performance.now() - started);
+          const detail = error?.message || String(error);
+          toast(label + " " + (uiLang === "de" ? "fehlgeschlagen" : "failed"), "bad", detail);
+          addActivity({ label, status: "bad", detail, elapsed });
+          return null;
+        } finally {
+          if (button) {
+            button.disabled = false;
+            button.classList.remove("busy");
+            button.removeAttribute("aria-busy");
+            button.textContent = oldText;
+          }
+        }
+      }
+
+      function toast(message, state = "ok", detail = "") {
+        const stack = document.getElementById("toast-stack");
+        const el = document.createElement("div");
+        el.className = "toast " + state;
+        el.innerHTML = "<strong>" + esc(message) + "</strong>" + (detail ? '<div class="subtle">' + esc(detail) + "</div>" : "");
+        stack.appendChild(el);
+        setTimeout(() => el.remove(), state === "bad" ? 7000 : 3600);
+      }
+
+      function addActivity(item) {
+        activity.unshift({
+          time: new Date().toISOString(),
+          label: item.label,
+          status: item.status,
+          detail: item.detail || "",
+          elapsed: item.elapsed || 0,
+        });
+        activity.splice(40);
+        localStorage.setItem("kioskmate-activity", JSON.stringify(activity));
+        renderActivity();
+      }
+
+      function renderActivity() {
+        const feed = document.getElementById("activity-feed");
+        if (!feed) return;
+        feed.innerHTML = activity.length
+          ? activity.map((item) => `
+              <div class="activity-item ${item.status === "ok" ? "ok" : "bad"}">
+                <div><strong>${esc(item.label)}</strong> <span class="subtle">${new Date(item.time).toLocaleTimeString()} / ${esc(item.elapsed)} ms</span></div>
+                <div class="subtle">${esc(item.status)}${item.detail ? " / " + esc(item.detail) : ""}</div>
+              </div>`)
+              .join("")
+          : '<div class="subtle">No actions yet.</div>';
+      }
+
+      function clearActivity() {
+        activity.splice(0);
+        localStorage.removeItem("kioskmate-activity");
+        renderActivity();
+      }
+
+      function exportActivity() {
+        const blob = new Blob([JSON.stringify(activity, null, 2) + "\n"], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "kioskmate-activity.json";
+        link.click();
+        URL.revokeObjectURL(url);
+        toast("Activity exported", "ok");
+      }
+
+      async function copyText(text, message) {
+        if (!text) {
+          toast("Nothing to copy", "warn");
+          return;
+        }
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const area = document.createElement("textarea");
+          area.value = text;
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+        }
+        toast(message || "Copied", "ok");
+      }
+
+      boot().catch((error) => {
+        alert(error.message);
+      });
+      setInterval(() => {
+        if (!document.hidden && !document.getElementById("app").hidden) refreshStatus().catch(() => {});
+      }, 5000);
+    </script>
+  </body>
+</html>
