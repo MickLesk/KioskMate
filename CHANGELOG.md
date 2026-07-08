@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.0.1-alpha13
+
+- Added one Home Assistant MQTT button entity per enabled kiosk page so automations can switch directly to a specific page.
+- Added per-page MQTT active binary sensors plus diagnostic page name and URL sensors.
+- Added MQTT command topics under `pages/<page_id>/activate` for direct page switching.
+- Added stable page entity IDs with duplicate-name handling.
+- Added the HA session reset action directly to the Kiosk page.
+- Added Chromium feature disables for local network access checks that can interfere with local Home Assistant dashboards.
+- Improved Kiosk page checks with a clear HTTP 403 Home Assistant IP-ban/session hint.
+
 ## v0.0.1-alpha12
 
 - Added Kiosk page filtering, visible/enabled counters and clearer enabled/disabled page badges.

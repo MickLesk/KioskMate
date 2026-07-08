@@ -998,6 +998,7 @@
           checkPage: "Check page",
           pageReachable: "Page reachable",
           pageFailed: "Page check failed",
+          haForbiddenHint: "HTTP 403 from Home Assistant. Clear the Kiosk IP from ip_bans.yaml and reset the HA browser session.",
           diagnostics: "Diagnostics",
           browserDiagnostics: "Browser diagnostics",
           testBrowser: "Test browser",
@@ -1244,6 +1245,7 @@
           checkPage: "Seite prüfen",
           pageReachable: "Seite erreichbar",
           pageFailed: "Seitenprüfung fehlgeschlagen",
+          haForbiddenHint: "HTTP 403 von Home Assistant. Entferne die Kiosk-IP aus ip_bans.yaml und setze die HA-Browsersitzung zurück.",
           diagnostics: "Diagnose",
           browserDiagnostics: "Browser-Diagnose",
           testBrowser: "Browser testen",
@@ -1956,6 +1958,7 @@
                     ${button("startBrowser", "browser-start")}
                     ${button("stopBrowser", "browser-stop")}
                     ${button("restartBrowser", "browser-restart")}
+                    ${button("resetSession", "browser-reset-session")}
                   </div>
                   <div id="page-check-output" class="hint">${esc(t("openExternalHint"))}</div>
                   ${renderActionLog()}
@@ -2478,7 +2481,8 @@
         const out = document.getElementById("page-check-output");
         await runAction("page-check", async () => {
           const result = await postJSON("/api/browser/check-page", { index: active, url: pages[active]?.url || "" });
-          out.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${result.error || result.status || ""}`;
+          const detail = result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || "");
+          out.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${detail}`;
         }, t("checkPage"));
       }
 
@@ -2496,7 +2500,7 @@
                 <div class="check-row">
                   <strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong>
                   <span class="status-url">${esc(result.url || page.url)}</span>
-                  <span class="chip ${result.ok ? "ok" : "bad"}">${esc(result.ok ? (result.status || t("success")) : (result.error || result.status || t("failed")))}</span>
+                  <span class="chip ${result.ok ? "ok" : "bad"}">${esc(result.statusCode === 403 ? t("haForbiddenHint") : result.ok ? (result.status || t("success")) : (result.error || result.status || t("failed")))}</span>
                 </div>`);
             }
           }

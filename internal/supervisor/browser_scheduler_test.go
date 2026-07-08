@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,9 @@ func TestBrowserPresetArgs(t *testing.T) {
 	if !contains(chromium, "--renderer-process-limit=2") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
 		t.Fatalf("chromium-lite args = %#v", chromium)
 	}
+	if !containsPrefix(chromium, "--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests") {
+		t.Fatalf("chromium-lite args missing local network feature disables: %#v", chromium)
+	}
 
 	firefox := browserArgs(cfg, "firefox", "http://ha.local", cfg.Kiosk.ExtraArgs)
 	if contains(firefox, "--disable-gpu") || !contains(firefox, "--kiosk") || firefox[len(firefox)-1] != "http://ha.local" {
@@ -139,6 +143,15 @@ func TestBrowserPresetArgs(t *testing.T) {
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPrefix(values []string, want string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, want) {
 			return true
 		}
 	}

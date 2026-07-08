@@ -86,6 +86,28 @@ func TestMQTTCommandsControlBrowserPages(t *testing.T) {
 	}
 }
 
+func TestMQTTPageEntityCommandSwitchesPage(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	browser := &fakeBrowser{}
+	service := NewMQTTService(cfg, browser, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	service.handleCommand(context.Background(), service.root()+"/pages/calendar/activate", "PRESS")
+	if browser.active != 1 {
+		t.Fatalf("page entity active index = %d, want 1", browser.active)
+	}
+}
+
+func TestMQTTPageEntitiesUseStableUniqueSlugs(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	cfg.Kiosk.Pages = append(cfg.Kiosk.Pages, config.KioskPage{Name: "Calendar", URL: "http://ha.local/calendar-2"})
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	entities := service.pageEntities()
+	if len(entities) != 3 || entities[1].ID != "calendar" || entities[2].ID != "calendar_2" {
+		t.Fatalf("page entity ids = %#v", entities)
+	}
+}
+
 func TestMQTTCommandsUpdateConfigControls(t *testing.T) {
 	cfg := mqttTestConfig(t)
 	browser := &fakeBrowser{}

@@ -50,6 +50,13 @@ type discoveryItem struct {
 	Data  map[string]any
 }
 
+type pageEntity struct {
+	Index int
+	Name  string
+	URL   string
+	ID    string
+}
+
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
 	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}}
 }
@@ -207,6 +214,9 @@ func (s *MQTTService) commands(ctx context.Context) {
 		s.root() + "/reduce_motion/set",
 		s.root() + "/watchdog_enabled/set",
 	}
+	for _, page := range s.pageEntities() {
+		topics = append(topics, s.root()+"/pages/"+page.ID+"/activate")
+	}
 	for {
 		err := client.Subscribe(topics, func(topic string, payload []byte) {
 			s.handleCommand(ctx, topic, strings.TrimSpace(string(payload)))
@@ -280,6 +290,8 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 				err = s.browser.SetActive(actionCtx, 0)
 			}
 		}
+	case strings.Contains(topic, "/pages/") && strings.HasSuffix(topic, "/activate"):
+		err = s.setPageByEntityTopic(actionCtx, topic)
 	case strings.HasSuffix(topic, "/scheduler_enabled/set"):
 		s.cfg.Kiosk.Scheduler.Enabled = boolCommand(command)
 		if s.cfg.Kiosk.Scheduler.Mode == "" {
@@ -407,6 +419,11 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "page_number", fmt.Sprintf("%d", status.Active+1), true)
 	_ = s.publishState(client, "page_name", status.PageName, true)
 	_ = s.publishState(client, "page_url", status.URL, true)
+	for _, page := range s.pageEntities() {
+		_ = s.publishState(client, "pages/"+page.ID+"/active", boolState(page.Index == status.Active), true)
+		_ = s.publishState(client, "pages/"+page.ID+"/name", page.Name, true)
+		_ = s.publishState(client, "pages/"+page.ID+"/url", page.URL, true)
+	}
 	_ = s.publishState(client, "scheduler_enabled", boolState(s.cfg.Kiosk.Scheduler.Enabled), true)
 	_ = s.publishState(client, "scheduler_state", schedulerReason, true)
 	_ = s.publishState(client, "scheduler_mode", schedulerMode, true)
@@ -834,6 +851,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 			},
 		},
 	}
+	items = append(items, s.pageDiscoveryItems(device)...)
 	if !s.cleaned {
 		_ = s.cleanupLegacyDiscovery(client, items)
 		s.cleaned = true
@@ -1129,6 +1147,99 @@ func (s *MQTTService) setPageByName(ctx context.Context, name string) error {
 	return fmt.Errorf("page %q not found", name)
 }
 
+func (s *MQTTService) setPageByEntityTopic(ctx context.Context, topic string) error {
+	prefix := s.root() + "/pages/"
+	suffix := "/activate"
+	if !strings.HasPrefix(topic, prefix) || !strings.HasSuffix(topic, suffix) {
+		return fmt.Errorf("invalid page topic %q", topic)
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(topic, prefix), suffix)
+	for _, page := range s.pageEntities() {
+		if page.ID == id {
+			return s.browser.SetActive(ctx, page.Index)
+		}
+	}
+	return fmt.Errorf("page entity %q not found", id)
+}
+
+func (s *MQTTService) pageEntities() []pageEntity {
+	urls := s.cfg.Kiosk.PageURLs()
+	entities := make([]pageEntity, 0, len(urls))
+	seen := map[string]int{}
+	for index, url := range urls {
+		name := s.cfg.Kiosk.PageName(index)
+		if name == "" {
+			name = url
+		}
+		base := slug(name)
+		if base == "" {
+			base = fmt.Sprintf("page_%d", index+1)
+		}
+		id := base
+		if seen[base] > 0 {
+			id = fmt.Sprintf("%s_%d", base, seen[base]+1)
+		}
+		seen[base]++
+		entities = append(entities, pageEntity{Index: index, Name: name, URL: url, ID: id})
+	}
+	return entities
+}
+
+func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem {
+	var items []discoveryItem
+	for _, page := range s.pageEntities() {
+		object := "page_" + page.ID
+		items = append(items,
+			discoveryItem{
+				Topic: s.discoveryTopic("button", object),
+				Data: map[string]any{
+					"name":          "Page " + page.Name,
+					"unique_id":     s.cfg.MQTT.Node + "_" + object + "_activate",
+					"command_topic": s.root() + "/pages/" + page.ID + "/activate",
+					"payload_press": "PRESS",
+					"icon":          "mdi:monitor-dashboard",
+					"device":        device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("binary_sensor", object+"_active"),
+				Data: map[string]any{
+					"name":        "Page " + page.Name + " Active",
+					"unique_id":   s.cfg.MQTT.Node + "_" + object + "_active",
+					"state_topic": s.root() + "/pages/" + page.ID + "/active/state",
+					"payload_on":  "ON",
+					"payload_off": "OFF",
+					"icon":        "mdi:checkbox-marked-circle-outline",
+					"device":      device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("sensor", object+"_name"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Name",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_name",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/name/state",
+					"icon":            "mdi:card-text",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("sensor", object+"_url"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " URL",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_url",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/url/state",
+					"icon":            "mdi:web",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+		)
+	}
+	return items
+}
+
 func (s *MQTTService) discoveryTopic(component, object string) string {
 	return strings.Trim(s.cfg.MQTT.Discovery, "/") + "/" + component + "/" + s.cfg.MQTT.Node + "/" + object + "/config"
 }
@@ -1138,6 +1249,24 @@ func boolState(value bool) string {
 		return "ON"
 	}
 	return "OFF"
+}
+
+func slug(value string) string {
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore && b.Len() > 0 {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func boolCommand(command string) bool {

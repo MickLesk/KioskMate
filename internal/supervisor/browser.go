@@ -506,7 +506,7 @@ func chromiumArgs(cfg *config.Config) []string {
 		"--autoplay-policy=user-gesture-required",
 		"--disable-background-networking",
 		"--disable-component-update",
-		"--disable-features=TranslateUI,MediaRouter,OptimizationHints",
+		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests",
 	}
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
