@@ -1,36 +1,44 @@
-# KioskMate Supervisor
+# KioskMate
 
-KioskMate is the Go-based kiosk supervisor for Home Assistant dashboards. It keeps the heavy web renderer in an external Chromium process and keeps the Admin API, MQTT integration, updater and watchdog in a small native daemon.
+KioskMate is a lightweight Go supervisor for Home Assistant kiosk displays. It runs a small native daemon, starts an external Chromium browser for the dashboard, exposes an embedded Admin UI, and integrates with Home Assistant through MQTT discovery.
 
-## Scope
+The project is inspired by the Home Assistant kiosk workflow popularized by [TouchKio](https://github.com/leukipp/touchkio), but KioskMate starts as its own Go-based implementation with a smaller runtime footprint and a cleaner service/package layout.
 
-- Go-based `kioskmate` daemon.
-- Embedded Admin UI with password/session protection and setup-token recovery.
-- Dedicated Admin sections for Dashboard, Kiosk, Scheduler, MQTT, Hardware, System, Terminal, Logs and Settings.
-- Multi-page kiosk streaming with manual page switching, rotation rules and time rules.
-- External Chromium launch with performance profiles, GPU mode, reduced motion and a process watchdog.
-- Browser start, stop, reload, restart, page selection and Home Assistant session reset.
-- Privileged jobs for apt update/upgrade, service restart, reboot and shutdown.
-- Optional one-shot sudo/root password forwarding for privileged actions. Passwords are not stored.
-- Hardware controls for display power, brightness, audio, microphone and keyboard.
-- MQTT Home Assistant discovery and remote control entities.
-- GitHub release updater with Debian package download and SHA256 verification.
-- systemd user service and dependency-free Debian packaging script.
-- Raspberry benchmark collection script.
-- JSON config stored under `~/.config/kioskmate/config.json`.
+## Features
 
-## Toolchain
+- Native `kioskmate` daemon written in Go.
+- External Chromium rendering instead of bundling Electron.
+- Embedded Admin UI with setup token, password login and session protection.
+- Kiosk page management with manual switching, rotation and time rules.
+- Performance profiles for Raspberry Pi and small kiosk hardware.
+- Browser watchdog for memory/CPU runaway protection.
+- Browser start, stop, restart, refresh and active-page controls.
+- Hardware controls for display power, brightness, audio, microphone and keyboard where supported by the OS.
+- Home Assistant MQTT discovery for sensors, diagnostics and controls.
+- System actions for service restart, reboot, shutdown and apt jobs.
+- GitHub release updater with Debian package download and digest verification.
+- Debian packages for `arm64` and `amd64`.
+- JSON config at `~/.config/kioskmate/config.json`.
 
-KioskMate targets Go `1.26.4` or newer. The daemon currently uses the Go standard library only.
+## Status
 
-## Run
+KioskMate starts at `0.0.1-alpha1`. Treat alpha releases as test builds: the config format and Admin UI can still change while the Go implementation is hardened on Raspberry Pi devices.
+
+## Requirements
+
+- Go `1.26.4` or newer for development.
+- Debian-based kiosk OS for packaged installs.
+- Chromium, Chromium Browser or Google Chrome on the kiosk device.
+- `systemd --user` for the packaged service.
+- `fonts-noto-color-emoji` for Home Assistant emoji/icon rendering.
+
+## Run From Source
 
 ```bash
-cd v2
 go run ./cmd/kioskmate
 ```
 
-On first start the config file is created with a random admin setup token. Open the printed Admin URL, enter `admin.token` once and create an admin password.
+On first start KioskMate creates a config file and prints an admin setup token. Open the Admin UI and use that token once to create the first password.
 
 Default Admin UI:
 
@@ -48,10 +56,25 @@ kioskmate --admin-reset
 KIOSKMATE_ADMIN_PASSWORD='new-password' kioskmate --admin-password
 ```
 
+## Install A Release
+
+For Raspberry Pi / ARM64:
+
+```bash
+cd /tmp
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.0.1-alpha1/kioskmate_0.0.1-alpha1_arm64.deb
+sudo apt install ./kioskmate_0.0.1-alpha1_arm64.deb
+systemctl --user daemon-reload
+systemctl --user enable --now kioskmate.service
+```
+
+For amd64, use the `_amd64.deb` asset.
+
 ## Config
 
 ```json
 {
+  "version": 2,
   "admin": {
     "bind": "0.0.0.0",
     "port": 33333,
@@ -59,11 +82,13 @@ KIOSKMATE_ADMIN_PASSWORD='new-password' kioskmate --admin-password
   },
   "kiosk": {
     "pages": [
-      {"name": "Home", "url": "http://homeassistant.local:8123"}
+      {"name": "Home Assistant", "url": "http://homeassistant.local:8123"}
     ],
     "browser_command": "chromium-browser",
     "extra_args": [],
-    "user_data_dir": "~/.config/kioskmate/Browser"
+    "user_data_dir": "~/.config/kioskmate/Browser",
+    "theme": "dark",
+    "zoom_percent": 125
   },
   "performance": {
     "profile": "raspberry",
@@ -78,23 +103,9 @@ KIOSKMATE_ADMIN_PASSWORD='new-password' kioskmate --admin-password
 }
 ```
 
-Durations are stored as Go JSON durations in nanoseconds for now.
-
-## Browser
-
-The daemon looks for:
-
-- `chromium-browser`
-- `chromium`
-- `google-chrome-stable`
-- `google-chrome`
-- `microsoft-edge`
-
-For Raspberry Pi systems with GPU or renderer spikes, use the Admin UI performance profile `raspberry`, GPU mode `software` and reduced motion.
+Durations are currently stored as Go JSON durations in nanoseconds.
 
 ## MQTT
-
-Example:
 
 ```json
 "mqtt": {
@@ -109,7 +120,11 @@ Example:
 }
 ```
 
-The generic command topic is `kioskmate/<node>/command`.
+The generic command topic is:
+
+```text
+kioskmate/<node>/command
+```
 
 Supported command payloads:
 
@@ -124,24 +139,17 @@ Supported command payloads:
 - `apt-update`
 - `apt-upgrade`
 
-Home Assistant discovery exposes browser state, system controls, display/audio/input controls, page controls, hardware diagnostics, update status and service heartbeat.
-
-## Updater
-
-The Admin UI checks GitHub releases, selects the matching Debian asset for the current architecture, verifies the `sha256:` digest when present and installs through:
-
-```bash
-sudo -n apt-get install -y /tmp/kioskmate_*.deb
-```
-
-Unattended updates still require passwordless sudo. Interactive system actions can use passwordless sudo, a one-shot sudo password or a one-shot root password through `su`.
-
 ## Packaging
 
 ```bash
-cd v2
-VERSION=2.0.0-dev ARCH=arm64 bash scripts/package-deb.sh
-VERSION=2.0.0-dev ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.0.1-alpha1 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.0.1-alpha1 ARCH=amd64 bash scripts/package-deb.sh
+```
+
+Cross-platform packaging without `dpkg-deb`:
+
+```bash
+python scripts/package-deb.py --version 0.0.1-alpha1 --arch arm64 --arch amd64
 ```
 
 The package installs:
@@ -150,7 +158,7 @@ The package installs:
 - `/usr/lib/systemd/user/kioskmate.service`
 - `/usr/share/doc/kioskmate/README.md`
 
-Tags matching `v2*` trigger the release workflow and upload:
+Release tags matching `v0*` build and upload:
 
 - `kioskmate_<version>_arm64.deb`
 - `kioskmate_<version>_amd64.deb`
@@ -158,16 +166,11 @@ Tags matching `v2*` trigger the release workflow and upload:
 ## Benchmark
 
 ```bash
-cd v2
 bash scripts/benchmark.sh 180
 ```
 
-The script writes a CSV with load average, memory and the hottest KioskMate/Chromium processes every two seconds.
+The script writes a CSV with load average, memory usage and the hottest KioskMate/Chromium processes every two seconds.
 
 ## Security
 
-The Admin API requires an authenticated session, bearer token or `X-Go-Kiosk-Token` header for privileged endpoints. Keep the Admin UI inside a trusted LAN.
-
-## Migration
-
-KioskMate keeps a compatibility importer for the previous config file and imports dashboard URLs, MQTT settings, presentation settings and the admin password hash when no custom KioskMate config exists yet.
+The Admin API requires an authenticated session, bearer token or `X-KioskMate-Token` header for privileged endpoints. Keep the Admin UI inside a trusted LAN and avoid exposing it directly to the internet.

@@ -1,5 +1,26 @@
-node_modules/
-docs/
+# Build outputs
+dist/
 out/
-build.json
+build/
+tmp/
+
+# Go
+*.test
+coverage.out
+coverage.html
+
+# Local config and logs
+*.log
+*.bak
+*.local
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Legacy frontend package managers are intentionally not used by KioskMate.
+node_modules/
 package-lock.json
+yarn.lock

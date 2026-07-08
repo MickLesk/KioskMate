@@ -39,7 +39,6 @@ For heavy Home Assistant dashboards on Raspberry hardware, start with:
 Use the benchmark helper before and after changes:
 
 ```bash
-cd v2
 bash scripts/benchmark.sh 180
 ```
 

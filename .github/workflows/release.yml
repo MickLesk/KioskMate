@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v0*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.mod
+
+      - name: Build deb packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH=arm64 VERSION="$VERSION" bash scripts/package-deb.sh
+          ARCH=amd64 VERSION="$VERSION" bash scripts/package-deb.sh
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in
+            *alpha*|*beta*|*rc*) PRERELEASE="--prerelease" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "KioskMate ${GITHUB_REF_NAME#v}" \
+            --notes-file CHANGELOG.md \
+            $PRERELEASE \
+            dist/*.deb
