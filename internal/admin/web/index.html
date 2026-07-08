@@ -260,6 +260,34 @@
         color: var(--muted);
       }
 
+      .nav-group {
+        margin-bottom: 6px;
+      }
+
+      .nav-parent {
+        font-weight: 760;
+      }
+
+      .nav-parent .chevron {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .nav-children {
+        display: grid;
+        gap: 2px;
+        margin: 2px 0 8px 12px;
+        padding-left: 10px;
+        border-left: 1px solid var(--line);
+      }
+
+      .nav-children button {
+        min-height: 34px;
+        margin-bottom: 0;
+        padding: 7px 9px;
+        font-size: 13px;
+      }
+
       .sidebar-foot {
         padding: 12px;
         border-top: 1px solid var(--line);
@@ -489,6 +517,116 @@
         margin-bottom: 4px;
       }
 
+      .kiosk-shell {
+        display: grid;
+        gap: 14px;
+      }
+
+      .kiosk-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 0.45fr);
+        gap: 14px;
+      }
+
+      .kiosk-status {
+        display: grid;
+        gap: 10px;
+      }
+
+      .status-url {
+        overflow: hidden;
+        color: var(--muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .primary-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .primary-actions button {
+        min-height: 42px;
+      }
+
+      .page-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .page-card {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.5fr) minmax(260px, 1fr) auto;
+        gap: 10px;
+        align-items: end;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-2);
+        padding: 12px;
+      }
+
+      .page-card.active {
+        border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+        box-shadow: inset 3px 0 0 var(--green);
+      }
+
+      .page-card-actions {
+        display: grid;
+        gap: 8px;
+        min-width: 170px;
+      }
+
+      .page-card-actions .switch {
+        min-height: 36px;
+      }
+
+      .workflow-board {
+        display: grid;
+        grid-template-columns: minmax(260px, 0.36fr) minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .workflow-settings {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+      }
+
+      .workflow-lanes {
+        display: grid;
+        gap: 14px;
+      }
+
+      .lane {
+        display: grid;
+        gap: 10px;
+      }
+
+      .lane-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .workflow-step {
+        position: relative;
+      }
+
+      .workflow-step::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -9px;
+        width: 9px;
+        border-top: 1px solid var(--line-2);
+      }
+
+      .workflow-step:last-child::after {
+        display: none;
+      }
+
       .empty {
         border: 1px dashed var(--line-2);
         border-radius: var(--radius);
@@ -690,7 +828,10 @@
         .page-row,
         .rule-row,
         .rotation-row,
-        .live-line {
+        .live-line,
+        .kiosk-hero,
+        .page-card,
+        .workflow-board {
           grid-template-columns: 1fr;
         }
       }
@@ -822,6 +963,11 @@
           workflowPreview: "Workflow preview",
           browserPerformance: "Browser and performance",
           systemTools: "System tools",
+          systemActions: "Actions",
+          hardwareControls: "Hardware",
+          adminAccess: "Access",
+          configData: "Config",
+          maintenance: "Maintenance",
           ntpServer: "NTP server",
           timezone: "Timezone",
           timeSettings: "Time settings",
@@ -1042,6 +1188,11 @@
           workflowPreview: "Workflow-Vorschau",
           browserPerformance: "Browser und Performance",
           systemTools: "Systemwerkzeuge",
+          systemActions: "Aktionen",
+          hardwareControls: "Hardware",
+          adminAccess: "Zugriff",
+          configData: "Konfiguration",
+          maintenance: "Wartung",
           ntpServer: "NTP-Server",
           timezone: "Zeitzone",
           timeSettings: "Zeiteinstellungen",
@@ -1171,11 +1322,31 @@
       };
 
       const NAV = [
-        ["dashboard", "dashboard", "overview"],
-        ["kiosk", "kiosk", "kioskStreaming"],
-        ["mqtt", "mqtt", "mqttSettings"],
-        ["system", "system", "systemTools"],
-        ["settings", "settings", "adminSettings"],
+        { id: "dashboard", label: "dashboard", hint: "overview" },
+        { id: "kiosk", label: "kiosk", hint: "kioskStreaming" },
+        { id: "mqtt", label: "mqtt", hint: "mqttSettings" },
+        {
+          id: "system",
+          label: "system",
+          hint: "systemTools",
+          children: [
+            { id: "system-actions", label: "systemActions", hint: "privilegedActions" },
+            { id: "system-hardware", label: "hardwareControls", hint: "hardwareStatus" },
+            { id: "system-terminal", label: "terminal", hint: "runCommand" },
+            { id: "system-logs", label: "logs", hint: "refreshLogs" },
+          ],
+        },
+        {
+          id: "settings",
+          label: "settings",
+          hint: "adminSettings",
+          children: [
+            { id: "settings-admin", label: "adminAccess", hint: "adminSettings" },
+            { id: "settings-browser", label: "browserPerformance", hint: "performance" },
+            { id: "settings-config", label: "configData", hint: "configFile" },
+            { id: "settings-maintenance", label: "maintenance", hint: "update" },
+          ],
+        },
       ];
 
       const root = document.getElementById("root");
@@ -1483,7 +1654,7 @@
                 </div>
               </div>
               <nav class="nav">
-                ${NAV.map(([id, label, hint]) => `<button class="${state.view === id ? "active" : ""}" data-view="${id}"><span>${esc(t(label))}</span><small>${esc(t(hint))}</small></button>`).join("")}
+                ${renderNav()}
               </nav>
               <div class="sidebar-foot">
                 ${selectHtml("lang", t("language"), state.lang, [["en", "English"], ["de", "Deutsch"]])}
@@ -1494,8 +1665,8 @@
             <main class="main">
               <header class="topbar">
                 <div class="title">
-                  <h2>${esc(t(NAV.find((item) => item[0] === state.view)?.[1] || "dashboard"))}</h2>
-                  <p>${esc(t(NAV.find((item) => item[0] === state.view)?.[2] || "overview"))}</p>
+                  <h2>${esc(t(activeNavItem().label || "dashboard"))}</h2>
+                  <p>${esc(t(activeNavItem().hint || "overview"))}</p>
                 </div>
                 <div class="chips">
                   <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
@@ -1511,6 +1682,38 @@
         bindView();
       }
 
+      function renderNav() {
+        return NAV.map((item) => {
+          const children = item.children || [];
+          const active = isNavActive(item);
+          const target = children[0]?.id || item.id;
+          const childHtml = active && children.length
+            ? `<div class="nav-children">${children.map((child) => `<button class="${state.view === child.id ? "active" : ""}" data-view="${child.id}"><span>${esc(t(child.label))}</span><small>${esc(t(child.hint))}</small></button>`).join("")}</div>`
+            : "";
+          return `
+            <div class="nav-group">
+              <button class="nav-parent ${active ? "active" : ""}" data-view="${target}">
+                <span>${esc(t(item.label))}</span>
+                ${children.length ? `<span class="chevron">${active ? "▾" : "▸"}</span>` : `<small>${esc(t(item.hint))}</small>`}
+              </button>
+              ${childHtml}
+            </div>`;
+        }).join("");
+      }
+
+      function isNavActive(item) {
+        return state.view === item.id || (item.children || []).some((child) => child.id === state.view);
+      }
+
+      function activeNavItem() {
+        for (const item of NAV) {
+          if (state.view === item.id) return item;
+          const child = (item.children || []).find((entry) => entry.id === state.view);
+          if (child) return child;
+        }
+        return NAV[0];
+      }
+
       function renderView() {
         switch (state.view) {
           case "kiosk":
@@ -1518,9 +1721,23 @@
           case "mqtt":
             return renderMQTT();
           case "system":
-            return renderSystem();
+          case "system-actions":
+            return renderSystemActions();
+          case "system-hardware":
+            return renderHardware();
+          case "system-terminal":
+            return renderTerminal();
+          case "system-logs":
+            return renderLogs();
           case "settings":
-            return renderSettings();
+          case "settings-admin":
+            return renderSettingsAdmin();
+          case "settings-browser":
+            return renderSettingsBrowser();
+          case "settings-config":
+            return renderSettingsConfig();
+          case "settings-maintenance":
+            return renderSettingsMaintenance();
           default:
             return renderDashboard();
         }
@@ -1612,9 +1829,42 @@
       function renderKiosk() {
         const cfg = state.config || {};
         const kiosk = cfg.kiosk || {};
+        const browser = state.status?.browser || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
         return `
-          <div class="grid">
+          <div class="kiosk-shell">
+            <div class="kiosk-hero">
+              <div class="card">
+                <div class="head">
+                  <h3>${esc(t("currentPage"))}</h3>
+                  <div class="actions">
+                    <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
+                    <span class="chip">${esc(browser.page_name || "-")}</span>
+                  </div>
+                </div>
+                <div class="body kiosk-status">
+                  <strong>${esc(browser.page_name || t("noData"))}</strong>
+                  <div class="status-url">${esc(browser.url || "-")}</div>
+                  ${browser.last_error ? `<div class="chip bad">${esc(browser.last_error)}</div>` : ""}
+                  <div class="primary-actions">
+                    ${button("activatePage", "page-activate", "primary")}
+                    ${button("checkPage", "page-check")}
+                    ${button("openPreview", "preview-open")}
+                    ${button("previousPage", "browser-previous")}
+                    ${button("nextPage", "browser-next")}
+                    ${button("reloadBrowser", "browser-reload")}
+                  </div>
+                  <div id="page-check-output" class="hint">${esc(t("openExternalHint"))}</div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="head">
+                  <h3>${esc(t("workflowPreview"))}</h3>
+                  <span class="chip">${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</span>
+                </div>
+                <div class="body">${renderWorkflowPreview(kiosk)}</div>
+              </div>
+            </div>
             <div class="card">
               <div class="head">
                 <h3>${esc(t("pages"))}</h3>
@@ -1628,47 +1878,21 @@
                 </div>
               </div>
             </div>
-            <div class="grid two">
-              <div class="card">
-                <div class="head"><h3>${esc(t("activePage"))}</h3><span class="chip">${esc(state.status?.browser?.page_name || "-")}</span></div>
-                <div class="body grid">
-                  ${kvTable([
-                    [t("status"), state.status?.browser?.running ? t("running") : t("stopped")],
-                    [t("url"), state.status?.browser?.url || "-"],
-                    [t("lastError"), state.status?.browser?.last_error || "-"],
-                  ])}
-                  <div class="actions">
-                  ${button("activatePage", "page-activate")}
-                  ${button("checkPage", "page-check")}
-                  ${button("openPreview", "preview-open")}
-                    ${button("previousPage", "browser-previous")}
-                    ${button("nextPage", "browser-next")}
-                    ${button("reloadBrowser", "browser-reload")}
-                  </div>
-                  <p class="hint">${esc(t("openExternalHint"))}</p>
-                  <div id="page-check-output" class="hint"></div>
-                </div>
-              </div>
-              <div class="card">
-                <div class="head"><h3>${esc(t("workflowPreview"))}</h3><span class="chip">${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</span></div>
-                <div class="body">${renderWorkflowPreview(kiosk)}</div>
-              </div>
-            </div>
             <div class="card">
               <div class="head"><h3>${esc(t("workflow"))}</h3><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
-              <div class="body grid">
-                <div class="form-grid">
+              <div class="body workflow-board">
+                <div class="workflow-settings">
                   ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
                   ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
                   ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
                 </div>
-                <div class="grid two">
-                  <div>
-                    <div class="section-head"><h3>${esc(t("rotation"))}</h3>${button("addRotation", "rotation-add")}</div>
+                <div class="workflow-lanes">
+                  <div class="lane">
+                    <div class="lane-head"><h3>${esc(t("rotation"))}</h3>${button("addRotation", "rotation-add")}</div>
                     <div id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
                   </div>
-                  <div>
-                    <div class="section-head"><h3>${esc(t("timeRules"))}</h3>${button("addRule", "rule-add")}</div>
+                  <div class="lane">
+                    <div class="lane-head"><h3>${esc(t("timeRules"))}</h3>${button("addRule", "rule-add")}</div>
                     <div id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
                   </div>
                 </div>
@@ -1761,7 +1985,7 @@
           </div>`;
       }
 
-      function renderSystem() {
+      function renderSystemActions() {
         const privilege = state.privilege || {};
         const timeCfg = state.config?.time || {};
         return `
@@ -1800,31 +2024,19 @@
                 <pre class="terminal" id="job-output">${esc(renderJobs())}</pre>
               </div>
             </div>
-            ${renderHardware()}
-            ${renderTerminal()}
-            ${renderLogs()}
           </div>`;
       }
 
       function renderTerminal() {
         return `
-          <div class="grid">
-            <div class="card">
-              <div class="head"><h3>${esc(t("terminal"))}</h3><span class="hint">${esc(t("terminalHint"))}</span></div>
-              <div class="body grid">
-                <div class="row">
-                  <input id="terminal-command" value="systemctl --user status kioskmate.service --no-pager" />
-                  <button class="primary" data-busy="terminal-run" data-action="terminal-run">${esc(t("runCommand"))}</button>
-                </div>
-                <pre class="terminal">${esc(state.terminal || "")}</pre>
+          <div class="card">
+            <div class="head"><h3>${esc(t("terminal"))}</h3><span class="hint">${esc(t("terminalHint"))}</span></div>
+            <div class="body grid">
+              <div class="row">
+                <input id="terminal-command" value="systemctl --user status kioskmate.service --no-pager" />
+                <button class="primary" data-busy="terminal-run" data-action="terminal-run">${esc(t("runCommand"))}</button>
               </div>
-            </div>
-            <div class="card">
-              <div class="head"><h3>${esc(t("sshKey"))}</h3><button data-action="ssh-generate">${esc(t("generateKey"))}</button></div>
-              <div class="body grid">
-                ${kvTable([[t("configFile"), state.ssh?.path || "-"], [t("configured"), state.ssh?.exists ? t("yes") : t("no")]])}
-                <pre class="terminal">${esc(state.ssh?.public_key || "")}</pre>
-              </div>
+              <pre class="terminal">${esc(state.terminal || "")}</pre>
             </div>
           </div>`;
       }
@@ -1843,11 +2055,8 @@
           </div>`;
       }
 
-      function renderSettings() {
+      function renderSettingsAdmin() {
         const cfg = state.config || {};
-        const kiosk = cfg.kiosk || {};
-        const perf = cfg.performance || {};
-        const watchdog = cfg.watchdog || {};
         return `
           <div class="grid">
             <div class="grid two">
@@ -1866,6 +2075,29 @@
                 </div>
               </div>
             </div>
+            <div class="grid two">
+              <div class="card">
+                <div class="head"><h3>${esc(t("sessions"))}</h3><button data-action="sessions-logout-all">${esc(t("logoutAll"))}</button></div>
+                <div class="body">${renderSessions()}</div>
+              </div>
+              <div class="card">
+                <div class="head"><h3>${esc(t("sshKey"))}</h3><button data-action="ssh-generate">${esc(t("generateKey"))}</button></div>
+                <div class="body grid">
+                  ${kvTable([[t("configFile"), state.ssh?.path || "-"], [t("configured"), state.ssh?.exists ? t("yes") : t("no")]])}
+                  <pre class="terminal">${esc(state.ssh?.public_key || "")}</pre>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      function renderSettingsBrowser() {
+        const cfg = state.config || {};
+        const kiosk = cfg.kiosk || {};
+        const perf = cfg.performance || {};
+        const watchdog = cfg.watchdog || {};
+        return `
+          <div class="grid">
             <div class="card">
               <div class="head">
                 <h3>${esc(t("browserPerformance"))}</h3>
@@ -1890,6 +2122,13 @@
                 <div class="span-2">${state.diagnostics ? kvTable(objectEntries(state.diagnostics)) : `<p class="hint">${esc(t("safeModeHint"))}</p>`}</div>
               </div>
             </div>
+          </div>`;
+      }
+
+      function renderSettingsConfig() {
+        const cfg = state.config || {};
+        return `
+          <div class="grid">
             <div class="card">
               <div class="head"><h3>${esc(t("configFile"))}</h3><div class="actions">${button("exportConfig", "config-export")}${button("importConfig", "config-import")}${button("saveRaw", "config-raw-save", "primary")}</div></div>
               <div class="body grid">
@@ -1900,14 +2139,16 @@
             </div>
             <div class="grid two">
               <div class="card">
-                <div class="head"><h3>${esc(t("sessions"))}</h3><button data-action="sessions-logout-all">${esc(t("logoutAll"))}</button></div>
-                <div class="body">${renderSessions()}</div>
-              </div>
-              <div class="card">
                 <div class="head"><h3>${esc(t("backups"))}</h3><button data-action="backups-refresh">${esc(t("refresh"))}</button></div>
                 <div class="body">${renderBackups()}</div>
               </div>
             </div>
+          </div>`;
+      }
+
+      function renderSettingsMaintenance() {
+        return `
+          <div class="grid">
             <div class="card">
               <div class="head"><h3>${esc(t("repairCenter"))}</h3><div class="actions">${button("refresh", "repair-check")}${button("runRepair", "repair-run", "primary")}</div></div>
               <div class="body">${renderRepair()}</div>
@@ -1929,8 +2170,11 @@
         if (state.view === "dashboard") bindDashboard();
         if (state.view === "kiosk") bindKiosk();
         if (state.view === "mqtt") bindMQTT();
-        if (state.view === "system") bindSystem();
-        if (state.view === "settings") bindSettings();
+        if (state.view === "system" || state.view === "system-actions") bindSystem();
+        if (state.view === "system-hardware") bindHardware();
+        if (state.view === "system-terminal") bindTerminal();
+        if (state.view === "system-logs") bindLogs();
+        if (state.view.startsWith("settings")) bindSettings();
       }
 
       function bindDashboard() {
@@ -2268,9 +2512,6 @@
           renderApp();
         });
         document.querySelector('[data-action="time-save"]')?.addEventListener("click", saveTimeSettings);
-        bindHardware();
-        bindTerminal();
-        bindLogs();
       }
 
       async function startSystemJob(action, name) {
@@ -2301,7 +2542,7 @@
             const job = await getJSON("/api/jobs/" + encodeURIComponent(id));
             const index = state.jobs.findIndex((item) => item.id === id);
             if (index >= 0) state.jobs[index] = job;
-            if (state.view === "system") {
+            if (state.view === "system" || state.view === "system-actions") {
               const output = document.getElementById("job-output");
               if (output) output.textContent = renderJobs();
             }
@@ -2320,16 +2561,6 @@
             renderApp();
           });
         });
-        document.querySelector('[data-action="ssh-generate"]')?.addEventListener("click", async () => {
-          await runAction("ssh-generate", async () => {
-            state.ssh = await postJSON("/api/ssh-key");
-            renderApp();
-          });
-        });
-        if (!state.loaded.ssh) {
-          state.loaded.ssh = true;
-          getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view === "system") renderApp(); }).catch(() => {});
-        }
       }
 
       function bindLogs() {
@@ -2365,10 +2596,20 @@
         document.querySelector('[data-action="update-install"]')?.addEventListener("click", installUpdate);
         document.querySelector('[data-action="repair-check"]')?.addEventListener("click", checkRepair);
         document.querySelector('[data-action="repair-run"]')?.addEventListener("click", runRepair);
+        document.querySelector('[data-action="ssh-generate"]')?.addEventListener("click", async () => {
+          await runAction("ssh-generate", async () => {
+            state.ssh = await postJSON("/api/ssh-key");
+            renderApp();
+          });
+        });
         document.querySelectorAll("[data-restore]").forEach((button) => button.addEventListener("click", () => restoreBackup(button.dataset.restore)));
         if (!state.loaded.sessions) {
           state.loaded.sessions = true;
-          getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view === "settings") renderApp(); }).catch(() => {});
+          getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view.startsWith("settings")) renderApp(); }).catch(() => {});
+        }
+        if (!state.loaded.ssh) {
+          state.loaded.ssh = true;
+          getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view.startsWith("settings")) renderApp(); }).catch(() => {});
         }
         if (!state.loaded.backups) {
           state.loaded.backups = true;
@@ -2457,7 +2698,7 @@
       async function loadBackups() {
         const result = await getJSON("/api/config/backups");
         state.backups = result.backups || [];
-        if (state.view === "settings") renderApp();
+        if (state.view.startsWith("settings")) renderApp();
       }
 
       async function restoreBackup(path) {
@@ -2502,18 +2743,18 @@
 
       function renderPages(pages) {
         if (!pages.length) return `<div class="empty">${esc(t("noData"))}</div>`;
-        return pages
+        return `<div class="page-list">${pages
           .map((page, index) => `
-            <div class="page-row">
+            <div class="page-card ${state.status?.browser?.active === index ? "active" : ""}">
               ${field(`page-name-${index}`, t("pageName"), "text", "", page.name || "")}
               ${field(`page-url-${index}`, t("pageUrl"), "url", "", page.url || "")}
-              <label class="switch"><span>${esc(t("disabled"))}</span><input id="page-disabled-${index}" type="checkbox" ${page.disabled ? "checked" : ""}></label>
-              <div class="actions">
+              <div class="page-card-actions">
                 <label class="switch"><span>${esc(t("activePage"))}</span><input data-page-active value="${index}" name="active-page" type="radio" ${state.status?.browser?.active === index ? "checked" : ""}></label>
+                <label class="switch"><span>${esc(t("disabled"))}</span><input id="page-disabled-${index}" type="checkbox" ${page.disabled ? "checked" : ""}></label>
                 <button data-page-remove="${index}" class="danger">${esc(t("remove"))}</button>
               </div>
             </div>`)
-          .join("");
+          .join("")}</div>`;
       }
 
       function renderRotation(items) {

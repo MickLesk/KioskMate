@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.1-alpha11
+
+- Redesigned the Kiosk page around the actual operator workflow: current page, primary page actions, page list and workflow board.
+- Replaced the dense page table with clearer page cards and moved the selected page controls into the main status area.
+- Added expandable sidebar groups for System and Settings with focused subpages.
+- Split System into Actions, Hardware, Terminal and Logs.
+- Split Settings into Access, Browser and Performance, Config and Maintenance.
+- Moved SSH key handling into Settings Access and kept Terminal focused on command execution.
+
 ## v0.0.1-alpha10
 
 - Refactored the Admin UI navigation around the real operating areas: Dashboard, Kiosk, MQTT, System and Settings.
