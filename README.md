@@ -26,7 +26,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate starts at `0.0.1-alpha1`. Treat alpha releases as test builds: the config format and Admin UI can still change while the Go implementation is hardened on Raspberry Pi devices.
+KioskMate `0.1.0` is the first public release. Alpha builds remain available for testing, but regular installs should use the newest stable release unless a specific alpha fix is needed.
 
 ## Requirements
 
@@ -66,8 +66,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.0.1-alpha1/kioskmate_0.0.1-alpha1_arm64.deb
-sudo apt install ./kioskmate_0.0.1-alpha1_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.0/kioskmate_0.1.0_arm64.deb
+sudo apt install ./kioskmate_0.1.0_arm64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now kioskmate.service
 ```
@@ -176,14 +176,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.0.1-alpha1 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.0.1-alpha1 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.1.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.1.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.0.1-alpha1 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.1.0 --arch arm64 --arch amd64
 ```
 
 The package installs:

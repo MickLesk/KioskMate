@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.0
+
+- First public KioskMate release.
+- Ships the Go-based kiosk supervisor with embedded Admin UI, external Chromium control and Debian packages for `arm64` and `amd64`.
+- Adds Home Assistant focused kiosk page management with manual switching, rotation, time rules, page checks, render checks and session repair tools.
+- Adds MQTT discovery for Home Assistant sensors, diagnostics, page controls, page health, browser controls and system actions.
+- Adds Raspberry Pi oriented performance profiles, watchdog diagnostics, browser restart protection and Chromium dark rendering support.
+- Adds system tools for logs, diagnostics bundle export, terminal actions, package jobs, service control and update installation.
+- Adds configuration migration from older KioskMate alpha builds and keeps runtime data in `~/.config/kioskmate`.
+
 ## v0.0.1-alpha19
 
 - Fixed kiosk display dark mode by passing Chromium dark-rendering flags when the configured kiosk theme is `dark`.
