@@ -465,6 +465,30 @@
         grid-template-columns: minmax(120px, 1fr) minmax(110px, 0.5fr) auto;
       }
 
+      .workflow-strip {
+        display: grid;
+        gap: 10px;
+      }
+
+      .workflow-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .workflow-step {
+        min-width: 160px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-2);
+        padding: 10px;
+      }
+
+      .workflow-step strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
       .empty {
         border: 1px dashed var(--line-2);
         border-radius: var(--radius);
@@ -724,14 +748,14 @@
           refresh: "Refresh",
           save: "Save",
           saveRestart: "Save and restart",
-          restartBrowser: "Restart browser",
-          startBrowser: "Start browser",
-          stopBrowser: "Stop browser",
-          reloadBrowser: "Reload browser",
-          nextPage: "Next page",
-          previousPage: "Previous page",
+          restartBrowser: "Restart display",
+          startBrowser: "Start display",
+          stopBrowser: "Stop display",
+          reloadBrowser: "Reload current page",
+          nextPage: "Next kiosk page",
+          previousPage: "Previous kiosk page",
           resetSession: "Reset HA session",
-          activatePage: "Open selected page",
+          activatePage: "Show selected page",
           dashboard: "Dashboard",
           kiosk: "Kiosk",
           scheduler: "Scheduler",
@@ -760,7 +784,7 @@
           addPage: "Add page",
           addHomeAssistant: "Add Home Assistant",
           remove: "Remove",
-          openPreview: "Open preview",
+          openPreview: "Open in new tab",
           clearPreview: "Clear preview",
           checkPage: "Check page",
           pageReachable: "Page reachable",
@@ -794,6 +818,15 @@
           tickInterval: "Tick interval seconds",
           rotation: "Rotation",
           timeRules: "Time rules",
+          workflow: "Workflow",
+          workflowPreview: "Workflow preview",
+          browserPerformance: "Browser and performance",
+          systemTools: "System tools",
+          ntpServer: "NTP server",
+          timezone: "Timezone",
+          timeSettings: "Time settings",
+          saveTime: "Save time settings",
+          openExternalHint: "The page opens in a new browser tab because many dashboards block embedded previews.",
           duration: "Duration seconds",
           addRotation: "Add rotation",
           addRule: "Add time rule",
@@ -935,14 +968,14 @@
           refresh: "Aktualisieren",
           save: "Speichern",
           saveRestart: "Speichern und neu starten",
-          restartBrowser: "Browser neu starten",
-          startBrowser: "Browser starten",
-          stopBrowser: "Browser stoppen",
-          reloadBrowser: "Browser neu laden",
-          nextPage: "Nächste Seite",
-          previousPage: "Vorherige Seite",
+          restartBrowser: "Anzeige neu starten",
+          startBrowser: "Anzeige starten",
+          stopBrowser: "Anzeige stoppen",
+          reloadBrowser: "Aktuelle Seite neu laden",
+          nextPage: "Nächste Kiosk-Seite",
+          previousPage: "Vorherige Kiosk-Seite",
           resetSession: "HA-Sitzung zurücksetzen",
-          activatePage: "Ausgewählte Seite öffnen",
+          activatePage: "Ausgewählte Seite anzeigen",
           dashboard: "Dashboard",
           kiosk: "Kiosk",
           scheduler: "Zeitsteuerung",
@@ -971,7 +1004,7 @@
           addPage: "Seite hinzufügen",
           addHomeAssistant: "Home Assistant hinzufügen",
           remove: "Entfernen",
-          openPreview: "Vorschau öffnen",
+          openPreview: "In neuem Tab öffnen",
           clearPreview: "Vorschau leeren",
           checkPage: "Seite prüfen",
           pageReachable: "Seite erreichbar",
@@ -1005,6 +1038,15 @@
           tickInterval: "Tick-Intervall Sekunden",
           rotation: "Rotation",
           timeRules: "Zeitregeln",
+          workflow: "Workflow",
+          workflowPreview: "Workflow-Vorschau",
+          browserPerformance: "Browser und Performance",
+          systemTools: "Systemwerkzeuge",
+          ntpServer: "NTP-Server",
+          timezone: "Zeitzone",
+          timeSettings: "Zeiteinstellungen",
+          saveTime: "Zeiteinstellungen speichern",
+          openExternalHint: "Die Seite wird in einem neuen Browser-Tab geöffnet, weil viele Dashboards eingebettete Vorschauen blockieren.",
           duration: "Dauer Sekunden",
           addRotation: "Rotation hinzufügen",
           addRule: "Zeitregel hinzufügen",
@@ -1131,12 +1173,8 @@
       const NAV = [
         ["dashboard", "dashboard", "overview"],
         ["kiosk", "kiosk", "kioskStreaming"],
-        ["scheduler", "scheduler", "timeRules"],
         ["mqtt", "mqtt", "mqttSettings"],
-        ["hardware", "hardware", "hardwareStatus"],
-        ["system", "system", "privilegedActions"],
-        ["terminal", "terminal", "runCommand"],
-        ["logs", "logs", "refreshLogs"],
+        ["system", "system", "systemTools"],
         ["settings", "settings", "adminSettings"],
       ];
 
@@ -1307,6 +1345,13 @@
         return Math.round(n / 1_000_000_000);
       }
 
+      function formatDuration(seconds) {
+        const total = Number(seconds || 0);
+        if (total >= 3600 && total % 3600 === 0) return `${total / 3600} h`;
+        if (total >= 60 && total % 60 === 0) return `${total / 60} min`;
+        return `${total} s`;
+      }
+
       function durationToNs(seconds) {
         return Math.max(0, Number(seconds || 0)) * 1_000_000_000;
       }
@@ -1470,18 +1515,10 @@
         switch (state.view) {
           case "kiosk":
             return renderKiosk();
-          case "scheduler":
-            return renderScheduler();
           case "mqtt":
             return renderMQTT();
-          case "hardware":
-            return renderHardware();
           case "system":
             return renderSystem();
-          case "terminal":
-            return renderTerminal();
-          case "logs":
-            return renderLogs();
           case "settings":
             return renderSettings();
           default:
@@ -1575,61 +1612,67 @@
       function renderKiosk() {
         const cfg = state.config || {};
         const kiosk = cfg.kiosk || {};
-        const perf = cfg.performance || {};
-        const watchdog = cfg.watchdog || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
         return `
           <div class="grid">
             <div class="card">
-              <div class="head"><h3>${esc(t("kioskStreaming"))}</h3><div class="actions">${button("addPage", "page-add")}${button("addHomeAssistant", "page-add-ha")}</div></div>
+              <div class="head">
+                <h3>${esc(t("pages"))}</h3>
+                <div class="actions">${button("addPage", "page-add")}${button("addHomeAssistant", "page-add-ha")}</div>
+              </div>
               <div class="body grid">
                 <div id="pages-list">${renderPages(pages)}</div>
                 <div class="actions">
                   ${button("save", "kiosk-save")}
                   ${button("saveRestart", "kiosk-save-restart", "primary")}
-                  ${button("activatePage", "page-activate")}
-                  ${button("checkPage", "page-check")}
-                  ${button("openPreview", "preview-open")}
-                  ${button("clearPreview", "preview-clear")}
                 </div>
-                <div id="page-check-output" class="hint"></div>
               </div>
             </div>
             <div class="grid two">
               <div class="card">
-                <div class="head"><h3>${esc(t("browserSettings"))}</h3></div>
-                <div class="body form-grid">
-                  ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
-                  ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
-                  ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
-                  ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")]])}
-                  ${field("kiosk-zoom", t("zoomPercent"), "number", "", kiosk.zoom_percent || 125)}
-                  <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
-                  <div class="span-2">${switchHtml("kiosk-widget", t("widgetFlag"), kiosk.widget !== false)}</div>
+                <div class="head"><h3>${esc(t("activePage"))}</h3><span class="chip">${esc(state.status?.browser?.page_name || "-")}</span></div>
+                <div class="body grid">
+                  ${kvTable([
+                    [t("status"), state.status?.browser?.running ? t("running") : t("stopped")],
+                    [t("url"), state.status?.browser?.url || "-"],
+                    [t("lastError"), state.status?.browser?.last_error || "-"],
+                  ])}
+                  <div class="actions">
+                  ${button("activatePage", "page-activate")}
+                  ${button("checkPage", "page-check")}
+                  ${button("openPreview", "preview-open")}
+                    ${button("previousPage", "browser-previous")}
+                    ${button("nextPage", "browser-next")}
+                    ${button("reloadBrowser", "browser-reload")}
+                  </div>
+                  <p class="hint">${esc(t("openExternalHint"))}</p>
+                  <div id="page-check-output" class="hint"></div>
                 </div>
               </div>
               <div class="card">
-                <div class="head"><h3>${esc(t("performance"))}</h3><button class="primary" data-busy="safe-mode" data-action="safe-mode">${esc(t("safeMode"))}</button></div>
-                <div class="body form-grid">
-                  <p class="hint span-2">${esc(t("safeModeHint"))}</p>
-                  ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "raspberry", [["raspberry", t("raspberry")], ["balanced", t("balanced")], ["conservative", t("conservative")]])}
-                  ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
-                  <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
-                  <div class="span-2">${switchHtml("watchdog-enabled", t("watchdogEnabled"), watchdog.enabled !== false)}</div>
-                  ${field("watchdog-rss", t("maxMemory"), "number", "", watchdog.max_rss_mb || 900)}
-                  ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 180)}
-                  ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 45))}
-                  ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
-                </div>
+                <div class="head"><h3>${esc(t("workflowPreview"))}</h3><span class="chip">${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</span></div>
+                <div class="body">${renderWorkflowPreview(kiosk)}</div>
               </div>
             </div>
             <div class="card">
-              <div class="head"><h3>${esc(t("browserDiagnostics"))}</h3><button data-busy="browser-diagnostics" data-action="browser-diagnostics">${esc(t("testBrowser"))}</button></div>
-              <div class="body">${state.diagnostics ? kvTable(objectEntries(state.diagnostics)) : `<div class="empty">${esc(t("noData"))}</div>`}</div>
-            </div>
-            <div class="card">
-              <div class="head"><h3>${esc(t("openPreview"))}</h3><span class="hint" id="preview-url"></span></div>
-              <div class="body"><iframe id="preview" class="preview" sandbox="allow-scripts allow-forms allow-same-origin allow-popups"></iframe></div>
+              <div class="head"><h3>${esc(t("workflow"))}</h3><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
+              <div class="body grid">
+                <div class="form-grid">
+                  ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
+                  ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
+                  ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
+                </div>
+                <div class="grid two">
+                  <div>
+                    <div class="section-head"><h3>${esc(t("rotation"))}</h3>${button("addRotation", "rotation-add")}</div>
+                    <div id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
+                  </div>
+                  <div>
+                    <div class="section-head"><h3>${esc(t("timeRules"))}</h3>${button("addRule", "rule-add")}</div>
+                    <div id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>`;
       }
@@ -1642,7 +1685,7 @@
               <div class="head"><h3>${esc(t("scheduler"))}</h3><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
               <div class="body form-grid">
                 ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
-                ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["mixed", t("mixedMode")]])}
+                ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
                 ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
               </div>
             </div>
@@ -1720,25 +1763,35 @@
 
       function renderSystem() {
         const privilege = state.privilege || {};
+        const timeCfg = state.config?.time || {};
         return `
           <div class="grid">
-            <div class="card">
-              <div class="head"><h3>${esc(t("privilege"))}</h3><span class="chip ${privilege.configured ? "ok" : ""}">${esc(privilege.configured ? t("configured") : t("notConfigured"))}</span></div>
-              <div class="body form-grid">
-                ${selectHtml("priv-mode", t("privilegeMode"), privilege.mode || "sudo", [["sudo", "sudo"], ["su", "su / root"]])}
-                ${field("priv-password", t("password"), "password", "current-password", "")}
-                <div class="span-2">${switchHtml("priv-remember", t("rememberPassword"), false)}</div>
-                <button data-action="priv-clear">${esc(t("clearPrivilege"))}</button>
+            <div class="grid two">
+              <div class="card">
+                <div class="head"><h3>${esc(t("privilege"))}</h3><span class="chip ${privilege.configured ? "ok" : ""}">${esc(privilege.configured ? t("configured") : t("notConfigured"))}</span></div>
+                <div class="body form-grid">
+                  ${selectHtml("priv-mode", t("privilegeMode"), privilege.mode || "sudo", [["sudo", "sudo"], ["su", "su / root"]])}
+                  ${field("priv-password", t("password"), "password", "current-password", "")}
+                  <div class="span-2">${switchHtml("priv-remember", t("rememberPassword"), false)}</div>
+                  <button data-action="priv-clear">${esc(t("clearPrivilege"))}</button>
+                </div>
+              </div>
+              <div class="card">
+                <div class="head"><h3>${esc(t("privilegedActions"))}</h3></div>
+                <div class="body actions">
+                  ${button("aptUpdate", "sys-apt-update")}
+                  ${button("aptUpgrade", "sys-apt-upgrade")}
+                  ${button("restartService", "sys-restart-service", "primary")}
+                  ${button("reboot", "sys-reboot", "danger")}
+                  ${button("shutdown", "sys-shutdown", "danger")}
+                </div>
               </div>
             </div>
             <div class="card">
-              <div class="head"><h3>${esc(t("privilegedActions"))}</h3></div>
-              <div class="body actions">
-                ${button("aptUpdate", "sys-apt-update")}
-                ${button("aptUpgrade", "sys-apt-upgrade")}
-                ${button("restartService", "sys-restart-service", "primary")}
-                ${button("reboot", "sys-reboot", "danger")}
-                ${button("shutdown", "sys-shutdown", "danger")}
+              <div class="head"><h3>${esc(t("timeSettings"))}</h3><button data-action="time-save" class="primary">${esc(t("save"))}</button></div>
+              <div class="body form-grid">
+                ${field("time-ntp", t("ntpServer"), "text", "", timeCfg.ntp_server || "pool.ntp.org")}
+                ${field("time-zone", t("timezone"), "text", "", timeCfg.timezone || "")}
               </div>
             </div>
             <div class="card">
@@ -1747,6 +1800,9 @@
                 <pre class="terminal" id="job-output">${esc(renderJobs())}</pre>
               </div>
             </div>
+            ${renderHardware()}
+            ${renderTerminal()}
+            ${renderLogs()}
           </div>`;
       }
 
@@ -1789,6 +1845,9 @@
 
       function renderSettings() {
         const cfg = state.config || {};
+        const kiosk = cfg.kiosk || {};
+        const perf = cfg.performance || {};
+        const watchdog = cfg.watchdog || {};
         return `
           <div class="grid">
             <div class="grid two">
@@ -1805,6 +1864,30 @@
                   ${field("password-current", t("currentPassword"), "password", "current-password", "")}
                   ${field("password-next", t("newPassword"), "password", "new-password", "")}
                 </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="head">
+                <h3>${esc(t("browserPerformance"))}</h3>
+                <div class="actions">${button("safeMode", "safe-mode")}${button("testBrowser", "browser-diagnostics")}${button("save", "browser-settings-save", "primary")}${button("saveRestart", "browser-settings-save-restart")}</div>
+              </div>
+              <div class="body form-grid">
+                ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
+                ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
+                ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
+                ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")]])}
+                ${field("kiosk-zoom", t("zoomPercent"), "number", "", kiosk.zoom_percent || 125)}
+                ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "raspberry", [["raspberry", t("raspberry")], ["balanced", t("balanced")], ["conservative", t("conservative")]])}
+                ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
+                <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
+                <div class="span-2">${switchHtml("kiosk-widget", t("widgetFlag"), kiosk.widget !== false)}</div>
+                <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
+                <div class="span-2">${switchHtml("watchdog-enabled", t("watchdogEnabled"), watchdog.enabled !== false)}</div>
+                ${field("watchdog-rss", t("maxMemory"), "number", "", watchdog.max_rss_mb || 900)}
+                ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 180)}
+                ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 45))}
+                ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
+                <div class="span-2">${state.diagnostics ? kvTable(objectEntries(state.diagnostics)) : `<p class="hint">${esc(t("safeModeHint"))}</p>`}</div>
               </div>
             </div>
             <div class="card">
@@ -1845,12 +1928,8 @@
       function bindView() {
         if (state.view === "dashboard") bindDashboard();
         if (state.view === "kiosk") bindKiosk();
-        if (state.view === "scheduler") bindScheduler();
         if (state.view === "mqtt") bindMQTT();
-        if (state.view === "hardware") bindHardware();
         if (state.view === "system") bindSystem();
-        if (state.view === "terminal") bindTerminal();
-        if (state.view === "logs") bindLogs();
         if (state.view === "settings") bindSettings();
       }
 
@@ -1910,11 +1989,24 @@
         document.querySelector('[data-action="page-check"]')?.addEventListener("click", checkSelectedPage);
         document.querySelector('[data-action="page-activate"]')?.addEventListener("click", activateSelectedPage);
         document.querySelector('[data-action="preview-open"]')?.addEventListener("click", openPreview);
-        document.querySelector('[data-action="safe-mode"]')?.addEventListener("click", applySafeMode);
-        document.querySelector('[data-action="browser-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
-        document.querySelector('[data-action="preview-clear"]')?.addEventListener("click", () => {
-          const frame = document.getElementById("preview");
-          if (frame) frame.removeAttribute("src");
+        document.querySelector('[data-action="scheduler-save"]')?.addEventListener("click", saveScheduler);
+        document.querySelector('[data-action="rotation-add"]')?.addEventListener("click", () => {
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.kiosk.pages = collectPages();
+          cfg.kiosk.rotation = collectRotation();
+          cfg.kiosk.rotation.push({ page: 0, duration_seconds: 3600 });
+          state.config = cfg;
+          renderApp();
+        });
+        document.querySelector('[data-action="rule-add"]')?.addEventListener("click", () => {
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.kiosk.pages = collectPages();
+          cfg.kiosk.time_rules = collectRules();
+          cfg.kiosk.time_rules.push({ name: "Dashboard", page: 0, start: "13:00", end: "14:00", days: [], disabled: false });
+          state.config = cfg;
+          renderApp();
         });
         document.querySelectorAll("[data-page-remove]").forEach((button) => {
           button.addEventListener("click", () => {
@@ -1925,6 +2017,20 @@
             renderApp();
           });
         });
+        document.querySelectorAll("[data-rotation-remove]").forEach((button) => button.addEventListener("click", () => {
+          const cfg = cloneConfig();
+          cfg.kiosk.pages = collectPages();
+          cfg.kiosk.rotation = collectRotation().filter((_, i) => i !== Number(button.dataset.rotationRemove));
+          state.config = cfg;
+          renderApp();
+        }));
+        document.querySelectorAll("[data-rule-remove]").forEach((button) => button.addEventListener("click", () => {
+          const cfg = cloneConfig();
+          cfg.kiosk.pages = collectPages();
+          cfg.kiosk.time_rules = collectRules().filter((_, i) => i !== Number(button.dataset.ruleRemove));
+          state.config = cfg;
+          renderApp();
+        }));
       }
 
       async function applySafeMode() {
@@ -1948,25 +2054,11 @@
         await runAction(restart ? "kiosk-save-restart" : "kiosk-save", async () => {
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
-          cfg.performance = cfg.performance || {};
-          cfg.watchdog = cfg.watchdog || {};
           cfg.kiosk.pages = collectPages();
           cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
-          cfg.kiosk.browser_preset = val("kiosk-browser-preset") || "chromium";
-          cfg.kiosk.browser_command = val("kiosk-browser");
-          cfg.kiosk.user_data_dir = val("kiosk-user-data");
-          cfg.kiosk.theme = val("kiosk-theme");
-          cfg.kiosk.zoom_percent = Number(val("kiosk-zoom") || 125);
-          cfg.kiosk.extra_args = lines("kiosk-extra-args");
-          cfg.kiosk.widget = checked("kiosk-widget");
-          cfg.performance.profile = val("perf-profile");
-          cfg.performance.gpu_mode = val("perf-gpu");
-          cfg.performance.reduce_motion = checked("perf-reduce");
-          cfg.watchdog.enabled = checked("watchdog-enabled");
-          cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
-          cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 180);
-          cfg.watchdog.cpu_grace = durationToNs(val("watchdog-grace"));
-          cfg.watchdog.check_interval = durationToNs(val("watchdog-interval"));
+          cfg.kiosk.scheduler = { enabled: checked("scheduler-enabled"), mode: val("scheduler-mode"), tick_interval: durationToNs(val("scheduler-tick")) };
+          cfg.kiosk.rotation = collectRotation();
+          cfg.kiosk.time_rules = collectRules();
           await postJSON("/api/config", cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
@@ -1998,10 +2090,10 @@
         const pages = collectPages();
         const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
         const url = pages[active]?.url || "";
-        const frame = document.getElementById("preview");
-        const label = document.getElementById("preview-url");
-        if (url && frame) frame.src = url;
-        if (label) label.textContent = url;
+        if (!url) return;
+        window.open(url, "_blank", "noopener");
+        const out = document.getElementById("page-check-output");
+        if (out) out.textContent = url;
       }
 
       function bindScheduler() {
@@ -2175,6 +2267,10 @@
           state.privilege = await getJSON("/api/privilege");
           renderApp();
         });
+        document.querySelector('[data-action="time-save"]')?.addEventListener("click", saveTimeSettings);
+        bindHardware();
+        bindTerminal();
+        bindLogs();
       }
 
       async function startSystemJob(action, name) {
@@ -2184,6 +2280,18 @@
           renderApp();
           pollJob(job.id);
         }, t("actionStarted"));
+      }
+
+      async function saveTimeSettings() {
+        await runAction("time-save", async () => {
+          const cfg = cloneConfig();
+          cfg.time = cfg.time || {};
+          cfg.time.ntp_server = val("time-ntp") || "pool.ntp.org";
+          cfg.time.timezone = val("time-zone");
+          await postJSON("/api/config", cfg);
+          await refreshCore();
+          renderApp();
+        }, t("saved"));
       }
 
       async function pollJob(id) {
@@ -2220,7 +2328,7 @@
         });
         if (!state.loaded.ssh) {
           state.loaded.ssh = true;
-          getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view === "terminal") renderApp(); }).catch(() => {});
+          getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view === "system") renderApp(); }).catch(() => {});
         }
       }
 
@@ -2243,6 +2351,10 @@
       function bindSettings() {
         document.querySelector('[data-action="admin-save"]')?.addEventListener("click", saveAdminSettings);
         document.querySelector('[data-action="password-save"]')?.addEventListener("click", savePassword);
+        document.querySelector('[data-action="browser-settings-save"]')?.addEventListener("click", () => saveBrowserSettings(false));
+        document.querySelector('[data-action="browser-settings-save-restart"]')?.addEventListener("click", () => saveBrowserSettings(true));
+        document.querySelector('[data-action="safe-mode"]')?.addEventListener("click", applySafeMode);
+        document.querySelector('[data-action="browser-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
         document.querySelector('[data-action="config-export"]')?.addEventListener("click", () => { window.location.href = "/api/config/export"; });
         document.querySelector('[data-action="config-import"]')?.addEventListener("click", () => document.getElementById("config-import-file").click());
         document.getElementById("config-import-file")?.addEventListener("change", importConfig);
@@ -2276,6 +2388,36 @@
           cfg.admin.port = Number(val("admin-port") || 33333);
           await postJSON("/api/config", cfg);
           await refreshCore();
+          renderApp();
+        }, t("saved"));
+      }
+
+      async function saveBrowserSettings(restart) {
+        if (restart && !confirm(t("confirmRestart"))) return;
+        await runAction(restart ? "browser-settings-save-restart" : "browser-settings-save", async () => {
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.performance = cfg.performance || {};
+          cfg.watchdog = cfg.watchdog || {};
+          cfg.kiosk.browser_preset = val("kiosk-browser-preset") || "chromium";
+          cfg.kiosk.browser_command = val("kiosk-browser");
+          cfg.kiosk.user_data_dir = val("kiosk-user-data");
+          cfg.kiosk.theme = val("kiosk-theme");
+          cfg.kiosk.zoom_percent = Number(val("kiosk-zoom") || 125);
+          cfg.kiosk.extra_args = lines("kiosk-extra-args");
+          cfg.kiosk.widget = checked("kiosk-widget");
+          cfg.performance.profile = val("perf-profile");
+          cfg.performance.gpu_mode = val("perf-gpu");
+          cfg.performance.reduce_motion = checked("perf-reduce");
+          cfg.watchdog.enabled = checked("watchdog-enabled");
+          cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
+          cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 180);
+          cfg.watchdog.cpu_grace = durationToNs(val("watchdog-grace"));
+          cfg.watchdog.check_interval = durationToNs(val("watchdog-interval"));
+          await postJSON("/api/config", cfg);
+          if (restart) await postJSON("/api/browser/restart");
+          await refreshCore();
+          state.config = cfg;
           renderApp();
         }, t("saved"));
       }
@@ -2398,6 +2540,31 @@
             <label class="switch"><span>${esc(t("disabled"))}</span><input id="rule-disabled-${index}" type="checkbox" ${item.disabled ? "checked" : ""}></label>
             <button data-rule-remove="${index}" class="danger">${esc(t("remove"))}</button>
           </div>`).join("");
+      }
+
+      function renderWorkflowPreview(kiosk) {
+        const pages = normalizePages(kiosk?.pages, kiosk?.urls);
+        const rotations = kiosk?.rotation || [];
+        const rules = kiosk?.time_rules || [];
+        const pageLabel = (index) => {
+          const page = pages[Number(index) || 0];
+          return page?.name || page?.url || `${t("pages")} ${index}`;
+        };
+        const rotationHtml = rotations.length
+          ? rotations.map((item, index) => `
+              <div class="workflow-step">
+                <strong>${esc(index + 1)}. ${esc(pageLabel(item.page))}</strong>
+                <span class="hint">${esc(formatDuration(item.duration_seconds || 0))}</span>
+              </div>`).join("")
+          : `<div class="empty">${esc(t("noData"))}</div>`;
+        const ruleHtml = rules.length
+          ? rules.map((rule) => `<span class="chip ${rule.disabled ? "" : "ok"}">${esc(rule.name || pageLabel(rule.page))}: ${esc(rule.start || "--:--")} - ${esc(rule.end || "--:--")}</span>`).join("")
+          : `<span class="hint">${esc(t("noData"))}</span>`;
+        return `
+          <div class="workflow-strip">
+            <div class="workflow-line">${rotationHtml}</div>
+            <div class="workflow-line">${ruleHtml}</div>
+          </div>`;
       }
 
       function renderSessions() {

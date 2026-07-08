@@ -21,6 +21,7 @@ type Config struct {
 	Performance PerfConfig     `json:"performance"`
 	Watchdog    WatchdogConfig `json:"watchdog"`
 	MQTT        MQTTConfig     `json:"mqtt"`
+	Time        TimeConfig     `json:"time"`
 	Update      UpdateConfig   `json:"update"`
 }
 
@@ -103,6 +104,11 @@ type MQTTConfig struct {
 	KeepAlive          time.Duration `json:"keepalive"`
 	ForceDisableRetain bool          `json:"force_disable_retain"`
 	Interval           time.Duration `json:"interval"`
+}
+
+type TimeConfig struct {
+	NTPServer string `json:"ntp_server"`
+	Timezone  string `json:"timezone"`
 }
 
 type UpdateConfig struct {
@@ -270,6 +276,9 @@ func defaults(path string) Config {
 			KeepAlive: 60 * time.Second,
 			Interval:  30 * time.Second,
 		},
+		Time: TimeConfig{
+			NTPServer: "pool.ntp.org",
+		},
 		Update: UpdateConfig{
 			Repository: "MickLesk/KioskMate",
 			Service:    "kioskmate.service",
@@ -359,6 +368,11 @@ func normalize(cfg *Config) {
 	if cfg.MQTT.KeepAlive == 0 {
 		cfg.MQTT.KeepAlive = 60 * time.Second
 	}
+	if strings.TrimSpace(cfg.Time.NTPServer) == "" {
+		cfg.Time.NTPServer = "pool.ntp.org"
+	}
+	cfg.Time.NTPServer = strings.TrimSpace(cfg.Time.NTPServer)
+	cfg.Time.Timezone = strings.TrimSpace(cfg.Time.Timezone)
 	if cfg.Update.Repository == "" || staleProjectValue(cfg.Update.Repository) {
 		cfg.Update.Repository = "MickLesk/KioskMate"
 	}
