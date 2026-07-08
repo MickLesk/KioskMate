@@ -106,6 +106,17 @@ type UpdateConfig struct {
 	Service    string `json:"service"`
 }
 
+type RepairReport struct {
+	Changed bool          `json:"changed"`
+	Issues  []RepairIssue `json:"issues"`
+}
+
+type RepairIssue struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+	Fixed   bool   `json:"fixed"`
+}
+
 func (k KioskConfig) PageURLs() []string {
 	var urls []string
 	for _, page := range k.Pages {
@@ -198,6 +209,17 @@ func defaultPath() string {
 		return "kioskmate.json"
 	}
 	return filepath.Join(home, ".config", "kioskmate", "config.json")
+}
+
+func ConfigDir(path string) string {
+	if path == "" {
+		path = defaultPath()
+	}
+	return filepath.Dir(path)
+}
+
+func LogFilePath(path string) string {
+	return filepath.Join(ConfigDir(path), "logs", "kioskmate.log")
 }
 
 func defaults(path string) Config {
@@ -326,6 +348,89 @@ func normalize(cfg *Config) {
 	if cfg.Update.Service == "" || staleProjectValue(cfg.Update.Service) {
 		cfg.Update.Service = "kioskmate.service"
 	}
+}
+
+func Repair(cfg *Config) RepairReport {
+	report := RepairReport{}
+	add := func(id string, message string, fixed bool) {
+		report.Issues = append(report.Issues, RepairIssue{ID: id, Message: message, Fixed: fixed})
+		if fixed {
+			report.Changed = true
+		}
+	}
+	if cfg.Update.Repository == "" || staleProjectValue(cfg.Update.Repository) || cfg.Update.Repository != "MickLesk/KioskMate" {
+		cfg.Update.Repository = "MickLesk/KioskMate"
+		add("update_repository", "Update repository reset to MickLesk/KioskMate.", true)
+	}
+	if cfg.Update.Service == "" || staleProjectValue(cfg.Update.Service) || cfg.Update.Service != "kioskmate.service" {
+		cfg.Update.Service = "kioskmate.service"
+		add("update_service", "Systemd user service reset to kioskmate.service.", true)
+	}
+	if cfg.Admin.Bind == "127.0.0.1" || cfg.Admin.Bind == "localhost" || cfg.Admin.Bind == "" {
+		cfg.Admin.Bind = "0.0.0.0"
+		add("admin_bind", "Admin bind address reset to 0.0.0.0 for LAN access.", true)
+	}
+	if cfg.Admin.Port == 0 {
+		cfg.Admin.Port = 33333
+		add("admin_port", "Admin port reset to 33333.", true)
+	}
+	if cfg.MQTT.Node == "" || staleProjectValue(cfg.MQTT.Node) {
+		cfg.MQTT.Node = "kioskmate"
+		add("mqtt_node", "MQTT node reset to kioskmate.", true)
+	}
+	if cfg.MQTT.Version == "" || cfg.MQTT.Version != "3.1.1" {
+		cfg.MQTT.Version = "3.1.1"
+		add("mqtt_version", "MQTT protocol reset to 3.1.1, the currently supported internal client version.", true)
+	}
+	if len(cfg.Kiosk.PageURLs()) == 0 {
+		cfg.Kiosk.Pages = []KioskPage{{Name: "Home Assistant Demo", URL: "https://demo.home-assistant.io"}}
+		cfg.Kiosk.URLs = cfg.Kiosk.PageURLs()
+		add("kiosk_pages", "Added a default kiosk page because no active URL was configured.", true)
+	}
+	normalize(cfg)
+	if len(report.Issues) == 0 {
+		add("ok", "No repairable issues found.", false)
+	}
+	return report
+}
+
+func ApplyRaspberrySafeMode(cfg *Config) {
+	cfg.Performance.Profile = "raspberry"
+	cfg.Performance.GPUMode = "software"
+	cfg.Performance.ReduceMotion = true
+	cfg.Watchdog.Enabled = true
+	cfg.Watchdog.CheckInterval = 10 * time.Second
+	cfg.Watchdog.CPUGrace = 60 * time.Second
+	cfg.Watchdog.MaxRSSMB = 700
+	cfg.Watchdog.MaxCPUPercent = 160
+	cfg.Kiosk.ExtraArgs = appendUnique(cfg.Kiosk.ExtraArgs,
+		"--disable-dev-shm-usage",
+		"--disable-extensions",
+		"--disable-sync",
+		"--metrics-recording-only",
+	)
+	normalize(cfg)
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	for _, value := range additions {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func staleProjectValue(value string) bool {

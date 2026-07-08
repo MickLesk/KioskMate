@@ -6,11 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -40,14 +42,15 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	consoleLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Error("load config", "error", err)
+		consoleLogger.Error("load config", "error", err)
 		os.Exit(1)
 	}
+	logger, logFile := setupLogger(cfg)
 	if *adminInfo || *doctor || *repair || *adminReset || *adminPassword {
-		if err := handleCommand(*adminInfo, *doctor, *repair, *adminReset, *adminPassword, cfg, version); err != nil {
+		if err := handleCommand(*adminInfo, *doctor, *repair, *adminReset, *adminPassword, cfg, version, logFile); err != nil {
 			logger.Error("command failed", "error", err)
 			os.Exit(1)
 		}
@@ -76,6 +79,7 @@ func main() {
 	go mqttService.Run(ctx)
 
 	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
+	logger.Info("log file", "path", logFile)
 	for _, url := range adminURLs(cfg.Admin.Bind, cfg.Admin.Port) {
 		logger.Info("admin ui", "url", url)
 	}
@@ -125,10 +129,28 @@ func adminURLs(bind string, port int) []string {
 	return urls
 }
 
-func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cfg *config.Config, version string) error {
+func setupLogger(cfg *config.Config) (*slog.Logger, string) {
+	logFile := config.LogFilePath(cfg.Path)
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o700); err != nil {
+		return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})), logFile
+	}
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})), logFile
+	}
+	writer := io.MultiWriter(os.Stdout, file)
+	return slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelInfo})), logFile
+}
+
+func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cfg *config.Config, version string, logFile string) error {
 	if repair {
+		report := config.Repair(cfg)
 		if err := config.Save(cfg); err != nil {
 			return err
+		}
+		fmt.Println("KioskMate repair")
+		for _, issue := range report.Issues {
+			fmt.Printf("- %s: %s\n", issue.ID, issue.Message)
 		}
 	}
 	if adminReset {
@@ -158,6 +180,7 @@ func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cf
 		fmt.Println("Version:", version)
 		fmt.Println("Config file:", cfg.Path)
 		fmt.Println("Config backup:", cfg.Path+".bak")
+		fmt.Println("Log file:", logFile)
 		fmt.Println("Admin address:", cfg.Admin.Addr())
 		fmt.Println("Admin password configured:", cfg.Admin.PasswordHash != "")
 		if cfg.Admin.PasswordHash == "" {
@@ -173,6 +196,7 @@ func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cf
 		fmt.Println("Version:", version)
 		fmt.Println("Config:", cfg.Path)
 		fmt.Println("Config exists:", fileExists(cfg.Path))
+		fmt.Println("Log file:", logFile)
 		fmt.Println("Service:", cfg.Update.Service)
 		fmt.Println("Service active:", commandOK("systemctl", "--user", "is-active", "--quiet", cfg.Update.Service))
 		fmt.Println("Chromium available:", browserAvailable())

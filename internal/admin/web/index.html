@@ -650,6 +650,7 @@
           overview: "Overview",
           currentPage: "Current page",
           browser: "Browser",
+          status: "Status",
           running: "Running",
           stopped: "Stopped",
           pid: "PID",
@@ -670,6 +671,11 @@
           checkPage: "Check page",
           pageReachable: "Page reachable",
           pageFailed: "Page check failed",
+          diagnostics: "Diagnostics",
+          browserDiagnostics: "Browser diagnostics",
+          testBrowser: "Test browser",
+          safeMode: "Raspberry safe mode",
+          safeModeHint: "Applies conservative browser settings for small Raspberry Pi devices and restarts the browser.",
           kioskStreaming: "Kiosk streaming",
           browserSettings: "Browser settings",
           browserCommand: "Browser command",
@@ -759,6 +765,11 @@
           update: "Update",
           checkUpdate: "Check update",
           installUpdate: "Install update",
+          changelog: "Changelog",
+          repairCenter: "Repair center",
+          runRepair: "Run repair",
+          repairChanged: "Changed",
+          noRepairIssues: "No repairable issues",
           latest: "Latest",
           installed: "Installed",
           noData: "No data",
@@ -833,6 +844,7 @@
           overview: "Übersicht",
           currentPage: "Aktuelle Seite",
           browser: "Browser",
+          status: "Status",
           running: "Läuft",
           stopped: "Gestoppt",
           pid: "PID",
@@ -853,6 +865,11 @@
           checkPage: "Seite prüfen",
           pageReachable: "Seite erreichbar",
           pageFailed: "Seitenprüfung fehlgeschlagen",
+          diagnostics: "Diagnose",
+          browserDiagnostics: "Browser-Diagnose",
+          testBrowser: "Browser testen",
+          safeMode: "Raspberry Safe-Mode",
+          safeModeHint: "Setzt konservative Browser-Optionen für kleine Raspberry-Pi-Geräte und startet den Browser neu.",
           kioskStreaming: "Kiosk-Streaming",
           browserSettings: "Browser-Einstellungen",
           browserCommand: "Browser-Befehl",
@@ -942,6 +959,11 @@
           update: "Update",
           checkUpdate: "Update prüfen",
           installUpdate: "Update installieren",
+          changelog: "Changelog",
+          repairCenter: "Reparatur-Center",
+          runRepair: "Reparatur ausführen",
+          repairChanged: "Geändert",
+          noRepairIssues: "Keine reparierbaren Probleme",
           latest: "Neueste",
           installed: "Installiert",
           noData: "Keine Daten",
@@ -1004,6 +1026,8 @@
         sessions: [],
         backups: [],
         update: null,
+        diagnostics: null,
+        repair: null,
         logs: [],
         ssh: null,
         terminal: "",
@@ -1372,8 +1396,9 @@
                 </div>
               </div>
               <div class="card">
-                <div class="head"><h3>${esc(t("performance"))}</h3></div>
+                <div class="head"><h3>${esc(t("performance"))}</h3><button class="primary" data-busy="safe-mode" data-action="safe-mode">${esc(t("safeMode"))}</button></div>
                 <div class="body form-grid">
+                  <p class="hint span-2">${esc(t("safeModeHint"))}</p>
                   ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "raspberry", [["raspberry", t("raspberry")], ["balanced", t("balanced")], ["conservative", t("conservative")]])}
                   ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
                   <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
@@ -1384,6 +1409,10 @@
                   ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
                 </div>
               </div>
+            </div>
+            <div class="card">
+              <div class="head"><h3>${esc(t("browserDiagnostics"))}</h3><button data-busy="browser-diagnostics" data-action="browser-diagnostics">${esc(t("testBrowser"))}</button></div>
+              <div class="body">${state.diagnostics ? kvTable(objectEntries(state.diagnostics)) : `<div class="empty">${esc(t("noData"))}</div>`}</div>
             </div>
             <div class="card">
               <div class="head"><h3>${esc(t("openPreview"))}</h3><span class="hint" id="preview-url"></span></div>
@@ -1580,8 +1609,18 @@
               </div>
             </div>
             <div class="card">
+              <div class="head"><h3>${esc(t("repairCenter"))}</h3><div class="actions">${button("refresh", "repair-check")}${button("runRepair", "repair-run", "primary")}</div></div>
+              <div class="body">${renderRepair()}</div>
+            </div>
+            <div class="card">
               <div class="head"><h3>${esc(t("update"))}</h3><div class="actions">${button("checkUpdate", "update-check")}${button("installUpdate", "update-install", "primary")}</div></div>
-              <div class="body">${kvTable([[t("installed"), state.update?.current || state.auth?.version || "-"], [t("latest"), state.update?.latest || "-"], [t("url"), state.update?.asset_url || "-"]])}</div>
+              <div class="body grid">
+                ${kvTable([[t("installed"), state.update?.current_version || state.update?.current || state.auth?.version || "-"], [t("latest"), state.update?.latest_version || state.update?.latest || "-"], [t("url"), state.update?.asset?.url || state.update?.asset_url || state.update?.url || "-"]])}
+                <div>
+                  <label>${esc(t("changelog"))}</label>
+                  <pre class="jsonbox">${esc(state.update?.changelog || "")}</pre>
+                </div>
+              </div>
             </div>
           </div>`;
       }
@@ -1654,6 +1693,8 @@
         document.querySelector('[data-action="page-check"]')?.addEventListener("click", checkSelectedPage);
         document.querySelector('[data-action="page-activate"]')?.addEventListener("click", activateSelectedPage);
         document.querySelector('[data-action="preview-open"]')?.addEventListener("click", openPreview);
+        document.querySelector('[data-action="safe-mode"]')?.addEventListener("click", applySafeMode);
+        document.querySelector('[data-action="browser-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
         document.querySelector('[data-action="preview-clear"]')?.addEventListener("click", () => {
           const frame = document.getElementById("preview");
           if (frame) frame.removeAttribute("src");
@@ -1667,6 +1708,22 @@
             renderApp();
           });
         });
+      }
+
+      async function applySafeMode() {
+        await runAction("safe-mode", async () => {
+          const result = await postJSON("/api/browser/safe-mode", { restart: true });
+          state.config = result.config || state.config;
+          await refreshCore();
+          renderApp();
+        }, t("saved"));
+      }
+
+      async function loadBrowserDiagnostics() {
+        await runAction("browser-diagnostics", async () => {
+          state.diagnostics = await getJSON("/api/browser/diagnostics");
+          renderApp();
+        }, t("testBrowser"));
       }
 
       async function saveKiosk(restart) {
@@ -1929,6 +1986,8 @@
         document.querySelector('[data-action="backups-refresh"]')?.addEventListener("click", loadBackups);
         document.querySelector('[data-action="update-check"]')?.addEventListener("click", checkUpdate);
         document.querySelector('[data-action="update-install"]')?.addEventListener("click", installUpdate);
+        document.querySelector('[data-action="repair-check"]')?.addEventListener("click", checkRepair);
+        document.querySelector('[data-action="repair-run"]')?.addEventListener("click", runRepair);
         document.querySelectorAll("[data-restore]").forEach((button) => button.addEventListener("click", () => restoreBackup(button.dataset.restore)));
         if (!state.loaded.sessions) {
           state.loaded.sessions = true;
@@ -1937,6 +1996,10 @@
         if (!state.loaded.backups) {
           state.loaded.backups = true;
           loadBackups().catch(() => {});
+        }
+        if (!state.loaded.repair) {
+          state.loaded.repair = true;
+          checkRepair().catch(() => {});
         }
       }
 
@@ -1994,6 +2057,21 @@
         if (!confirm(t("confirmRestore"))) return;
         await runAction("restore", async () => {
           await postJSON("/api/config/restore", { path });
+          await refreshCore();
+          renderApp();
+        }, t("saved"));
+      }
+
+      async function checkRepair() {
+        await runAction("repair-check", async () => {
+          state.repair = await getJSON("/api/repair");
+          renderApp();
+        }, t("diagnostics"));
+      }
+
+      async function runRepair() {
+        await runAction("repair-run", async () => {
+          state.repair = await postJSON("/api/repair", {});
           await refreshCore();
           renderApp();
         }, t("saved"));
@@ -2065,6 +2143,15 @@
       function renderBackups() {
         if (!state.backups.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return table([t("configFile"), t("lastExit"), ""], state.backups.map((b) => [b.name || b.path, formatDate(b.modified), `<button data-restore="${esc(b.path)}">${esc(t("restore"))}</button>`]), true);
+      }
+
+      function renderRepair() {
+        const issues = state.repair?.issues || [];
+        if (!issues.length) return `<div class="empty">${esc(t("noData"))}</div>`;
+        return table([t("diagnostics"), t("status")], issues.map((issue) => [
+          issue.message || issue.id || "-",
+          issue.fixed ? t("repairChanged") : t("noRepairIssues"),
+        ]));
       }
 
       function renderJobs() {

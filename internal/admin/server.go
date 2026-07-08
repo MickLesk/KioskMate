@@ -103,9 +103,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/reset-session", s.auth(s.browserAction("reset-session")))
 	mux.HandleFunc("/api/browser/page", s.auth(s.browserPage))
 	mux.HandleFunc("/api/browser/check-page", s.auth(s.browserCheckPage))
+	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
+	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
 	mux.HandleFunc("/api/update/install", s.auth(s.updateInstall))
 	mux.HandleFunc("/api/update/jobs/", s.auth(s.updateJob))
+	mux.HandleFunc("/api/repair", s.auth(s.repair))
 	mux.HandleFunc("/api/system/", s.auth(s.systemAction))
 	mux.HandleFunc("/api/privilege", s.auth(s.privilege))
 	mux.HandleFunc("/api/hardware", s.auth(s.hardwareStatus))
@@ -468,6 +471,11 @@ func (s *Server) fallbackLogs(ctx context.Context, reason string) []string {
 	if reason != "" {
 		lines = append(lines, reason)
 	}
+	logFile := config.LogFilePath(s.cfg.Path)
+	if fileLines := readTail(logFile, 220); len(fileLines) > 0 {
+		lines = append(lines, "$ tail "+logFile)
+		lines = append(lines, fileLines...)
+	}
 	if out, err := exec.CommandContext(ctx, "systemctl", "--user", "status", s.cfg.Update.Service, "--no-pager", "--full").CombinedOutput(); len(out) > 0 || err != nil {
 		lines = append(lines, "$ systemctl --user status "+s.cfg.Update.Service+" --no-pager --full")
 		lines = append(lines, strings.Split(strings.TrimSpace(string(out)), "\n")...)
@@ -481,6 +489,18 @@ func (s *Server) fallbackLogs(ctx context.Context, reason string) []string {
 		"Tip: run `kioskmate --admin-info` on the kiosk for full recovery paths.",
 	)
 	return lines
+}
+
+func readTail(path string, limit int) []string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	parts := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if limit > 0 && len(parts) > limit {
+		parts = parts[len(parts)-limit:]
+	}
+	return parts
 }
 
 func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
@@ -629,6 +649,25 @@ func (s *Server) configBackups(w http.ResponseWriter, r *http.Request) {
 		"path":    s.cfg.Path,
 		"backups": s.backupFiles(),
 	})
+}
+
+func (s *Server) repair(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := *s.cfg
+		data, _ := json.Marshal(s.cfg)
+		_ = json.Unmarshal(data, &cfg)
+		writeJSON(w, http.StatusOK, config.Repair(&cfg))
+	case http.MethodPost:
+		report := config.Repair(s.cfg)
+		if err := config.Save(s.cfg); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
@@ -793,6 +832,77 @@ func (s *Server) browserAction(action string) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true, "action": action})
 	}
+}
+
+func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status := s.browser.Status()
+	command := status.Command
+	resolved := ""
+	commandExists := false
+	commandError := ""
+	if command == "" {
+		commandError = "browser command is empty"
+	} else if path, err := exec.LookPath(command); err == nil {
+		resolved = path
+		commandExists = true
+	} else if filepath.IsAbs(command) {
+		if info, statErr := os.Stat(command); statErr == nil && !info.IsDir() {
+			resolved = command
+			commandExists = true
+		} else {
+			commandError = err.Error()
+		}
+	} else {
+		commandError = err.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"running":          status.Running,
+		"pid":              status.PID,
+		"command":          command,
+		"resolved_command": resolved,
+		"command_exists":   commandExists,
+		"command_error":    commandError,
+		"args":             status.Args,
+		"active_page":      status.Active,
+		"page_name":        status.PageName,
+		"url":              status.URL,
+		"page_count":       s.cfg.Kiosk.PageCount(),
+		"profile":          s.cfg.Performance.Profile,
+		"gpu_mode":         s.cfg.Performance.GPUMode,
+		"reduce_motion":    s.cfg.Performance.ReduceMotion,
+		"watchdog":         s.cfg.Watchdog.Enabled,
+		"last_error":       status.LastError,
+		"last_exit":        status.LastExit,
+	})
+}
+
+func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Restart bool `json:"restart"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	config.ApplyRaspberrySafeMode(s.cfg)
+	if err := config.Save(s.cfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if body.Restart {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := s.browser.Restart(ctx); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "config": s.cfg})
 }
 
 func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {

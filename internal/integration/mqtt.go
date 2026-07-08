@@ -915,11 +915,35 @@ func (s *MQTTService) publishSystemStates(client *mqttclient.Client, hw hardware
 		if value == nil || reflect.ValueOf(value).Kind() == reflect.Invalid {
 			continue
 		}
-		if err := s.publishState(client, key, fmt.Sprint(value), false); err != nil {
+		if err := s.publishState(client, key, stateString(value), false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func stateString(value any) string {
+	switch v := value.(type) {
+	case float64:
+		return trimFloat(v)
+	case float32:
+		return trimFloat(float64(v))
+	case int, int64, int32, uint, uint64, uint32:
+		return fmt.Sprint(v)
+	case string:
+		return v
+	case bool:
+		return boolState(v)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func trimFloat(value float64) string {
+	text := fmt.Sprintf("%.1f", value)
+	text = strings.TrimRight(text, "0")
+	text = strings.TrimRight(text, ".")
+	return text
 }
 
 func (s *MQTTService) publishCommandResult(topic string, command string, err error) {
