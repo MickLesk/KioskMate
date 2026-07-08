@@ -1865,16 +1865,31 @@
       async function testMQTT() {
         const output = document.getElementById("mqtt-result");
         await runAction("mqtt-test", async () => {
-          const result = await postJSON("/api/mqtt/test", {
-            url: val("mqtt-url"),
-            version: val("mqtt-version"),
-            username: val("mqtt-user"),
-            password: val("mqtt-password"),
-            discovery: val("mqtt-discovery") || "homeassistant",
-            node: val("mqtt-node"),
-          });
+          if (output) output.textContent = `${t("loading")}...`;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 12_000);
+          let result;
+          try {
+            result = await request("/api/mqtt/test", {
+              method: "POST",
+              signal: controller.signal,
+              body: JSON.stringify({
+                url: val("mqtt-url"),
+                version: val("mqtt-version"),
+                username: val("mqtt-user"),
+                password: val("mqtt-password"),
+                discovery: val("mqtt-discovery") || "homeassistant",
+                node: val("mqtt-node"),
+              }),
+            });
+          } catch (err) {
+            if (output) output.textContent = `${t("disconnected")}: ${err.name === "AbortError" ? "Timeout after 12s" : err.message}`;
+            throw err;
+          } finally {
+            clearTimeout(timer);
+          }
           const topics = (result.published_topics || []).join("\n");
-          output.textContent = result.ok
+          if (output) output.textContent = result.ok
             ? `${t("connected")} (${result.latency_ms} ms)\n${t("publishedTopics")}:\n${topics}`
             : `${t("disconnected")}: ${result.error || t("unknown")}`;
         }, t("testConnection"));

@@ -935,7 +935,8 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 	}
 	node := strings.Trim(firstNonEmpty(body.Node, "kioskmate"), "/")
 	discovery := strings.Trim(firstNonEmpty(body.Discovery, "homeassistant"), "/")
-	client := &mqttclient.Client{URL: body.URL, ClientID: node + "_test", Username: body.Username, Password: body.Password, Version: body.Version}
+	root := "kioskmate/" + node
+	client := &mqttclient.Client{URL: body.URL, ClientID: node + "_test", Username: body.Username, Password: body.Password, Version: body.Version, Timeout: 5 * time.Second}
 	start := time.Now()
 	published := []string{}
 	if err := client.Ping(); err != nil {
@@ -943,7 +944,14 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
 		return
 	}
-	stateTopic := node + "/connection_test/state"
+	availabilityTopic := root + "/availability"
+	if err := client.Publish(availabilityTopic, []byte("online"), true); err != nil {
+		_ = client.Close()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
+		return
+	}
+	published = append(published, availabilityTopic)
+	stateTopic := root + "/connection_test/state"
 	if err := client.Publish(stateTopic, []byte(time.Now().UTC().Format(time.RFC3339)), true); err != nil {
 		_ = client.Close()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
@@ -957,7 +965,7 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 		"state_topic":        stateTopic,
 		"icon":               "mdi:lan-connect",
 		"entity_category":    "diagnostic",
-		"availability_topic": node + "/availability",
+		"availability_topic": availabilityTopic,
 		"device": map[string]any{
 			"identifiers":  []string{node},
 			"name":         "KioskMate",

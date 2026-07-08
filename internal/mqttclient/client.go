@@ -17,10 +17,18 @@ type Client struct {
 	Username string
 	Password string
 	Version  string
+	Timeout  time.Duration
 
 	mu   sync.Mutex
 	conn net.Conn
 	next uint16
+}
+
+func (c *Client) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return 6 * time.Second
 }
 
 func (c *Client) Connect() error {
@@ -53,6 +61,10 @@ func (c *Client) Connect() error {
 		return err
 	}
 	c.conn = conn
+	if err := conn.SetDeadline(time.Now().Add(c.timeout())); err != nil {
+		_ = c.Close()
+		return err
+	}
 	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, 30, c.Version)); err != nil {
 		_ = c.Close()
 		return err
@@ -62,6 +74,7 @@ func (c *Client) Connect() error {
 		_ = c.Close()
 		return err
 	}
+	_ = conn.SetDeadline(time.Time{})
 	if packet != packetConnAck || len(payload) < 2 || payload[1] != 0 {
 		_ = c.Close()
 		return fmt.Errorf("mqtt connack failed: packet=%d payload=%v", packet, payload)
@@ -79,10 +92,12 @@ func (c *Client) Publish(topic string, payload []byte, retained bool) error {
 	if retained {
 		flags |= 1
 	}
+	_ = c.conn.SetWriteDeadline(time.Now().Add(c.timeout()))
 	if err := writePacket(c.conn, packetPublish, flags, publishPayload(topic, payload, c.Version)); err != nil {
 		_ = c.Close()
 		return err
 	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
 	return nil
 }
 
@@ -92,13 +107,13 @@ func (c *Client) Ping() error {
 	if err := c.Connect(); err != nil {
 		return err
 	}
+	_ = c.conn.SetDeadline(time.Now().Add(c.timeout()))
 	if err := writePacket(c.conn, packetPingReq, 0, nil); err != nil {
 		_ = c.Close()
 		return err
 	}
-	_ = c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	packet, _, err := readPacket(c.conn)
-	_ = c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetDeadline(time.Time{})
 	if err != nil && !errors.Is(err, io.EOF) {
 		_ = c.Close()
 		return err
@@ -120,11 +135,13 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 		c.next = 1
 	}
 	id := c.next
+	_ = c.conn.SetWriteDeadline(time.Now().Add(c.timeout()))
 	if err := writePacket(c.conn, packetSubscribe, 2, subscribePayload(id, topics, c.Version)); err != nil {
 		c.mu.Unlock()
 		_ = c.Close()
 		return err
 	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
 	c.mu.Unlock()
 	for {
 		packet, payload, err := readPacket(c.conn)
