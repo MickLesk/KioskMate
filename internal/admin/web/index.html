@@ -532,6 +532,98 @@
         margin-bottom: 3px;
       }
 
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: rgba(0, 0, 0, 0.58);
+      }
+
+      .modal {
+        width: min(860px, 100%);
+        max-height: min(760px, calc(100vh - 36px));
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .modal-head,
+      .modal-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .modal-foot {
+        border-top: 1px solid var(--line);
+        border-bottom: 0;
+      }
+
+      .modal-body {
+        min-height: 0;
+        overflow: auto;
+        padding: 16px;
+      }
+
+      .live-log {
+        display: grid;
+        gap: 8px;
+      }
+
+      .live-line {
+        display: grid;
+        grid-template-columns: 86px 150px 1fr;
+        gap: 10px;
+        align-items: start;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel-2);
+        padding: 10px;
+      }
+
+      .live-line .status {
+        width: max-content;
+        min-width: 72px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 2px 8px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .live-line.ok .status {
+        border-color: rgba(40, 199, 131, 0.65);
+        color: var(--green);
+      }
+
+      .live-line.error .status {
+        border-color: rgba(248, 113, 113, 0.65);
+        color: var(--red);
+      }
+
+      .live-line.running .status {
+        border-color: rgba(241, 184, 75, 0.65);
+        color: var(--amber);
+      }
+
+      .live-line code {
+        display: block;
+        margin-top: 5px;
+        color: var(--soft);
+        word-break: break-all;
+      }
+
       .busy {
         pointer-events: none;
         opacity: 0.72;
@@ -573,7 +665,8 @@
 
         .page-row,
         .rule-row,
-        .rotation-row {
+        .rotation-row,
+        .live-line {
           grid-template-columns: 1fr;
         }
       }
@@ -605,6 +698,7 @@
   <body>
     <div id="root"></div>
     <div id="toasts" class="toasts"></div>
+    <div id="modal-root"></div>
 
     <script>
       "use strict";
@@ -715,6 +809,9 @@
           interval: "Interval seconds",
           commandTopic: "Command topic",
           publishedTopics: "Published topics",
+          mqttLiveTitle: "MQTT connection test",
+          mqttLiveHint: "Live protocol log. Each line is sent by the KioskMate backend while the test runs.",
+          close: "Close",
           testConnection: "Test connection",
           connected: "Connected",
           disconnected: "Disconnected",
@@ -910,6 +1007,9 @@
           interval: "Intervall Sekunden",
           commandTopic: "Command-Topic",
           publishedTopics: "Veröffentlichte Topics",
+          mqttLiveTitle: "MQTT-Verbindungstest",
+          mqttLiveHint: "Live-Protokoll. Jede Zeile kommt während des Tests direkt vom KioskMate-Backend.",
+          close: "Schließen",
           testConnection: "Verbindung testen",
           connected: "Verbunden",
           disconnected: "Getrennt",
@@ -1016,6 +1116,7 @@
 
       const root = document.getElementById("root");
       const toasts = document.getElementById("toasts");
+      const modalRoot = document.getElementById("modal-root");
       const state = {
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: localStorage.getItem("kioskmate.theme") || "dark",
@@ -1071,6 +1172,89 @@
         item.innerHTML = `<strong>${esc(title)}</strong>${message ? `<div class="muted">${esc(message)}</div>` : ""}`;
         toasts.appendChild(item);
         setTimeout(() => item.remove(), 5200);
+      }
+
+      function openModal(html) {
+        modalRoot.innerHTML = `<div class="modal-backdrop" data-modal-backdrop>${html}</div>`;
+        modalRoot.querySelectorAll("[data-modal-close]").forEach((button) => button.addEventListener("click", closeModal));
+        modalRoot.querySelector("[data-modal-backdrop]")?.addEventListener("click", (event) => {
+          if (event.target?.dataset?.modalBackdrop !== undefined) closeModal();
+        });
+      }
+
+      function closeModal() {
+        modalRoot.innerHTML = "";
+      }
+
+      function openMQTTTestDialog() {
+        openModal(`
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mqtt-live-title">
+            <div class="modal-head">
+              <div>
+                <h3 id="mqtt-live-title">${esc(t("mqttLiveTitle"))}</h3>
+                <div class="hint">${esc(t("mqttLiveHint"))}</div>
+              </div>
+              <button data-modal-close>${esc(t("close"))}</button>
+            </div>
+            <div class="modal-body">
+              <div id="mqtt-live-log" class="live-log"></div>
+            </div>
+            <div class="modal-foot">
+              <span id="mqtt-live-summary" class="hint">${esc(t("loading"))}...</span>
+              <button data-modal-close>${esc(t("close"))}</button>
+            </div>
+          </div>`);
+      }
+
+      function appendMQTTEvent(event) {
+        const log = document.getElementById("mqtt-live-log");
+        const summary = document.getElementById("mqtt-live-summary");
+        if (!log) return;
+        const status = event.status || "running";
+        const topic = event.topic || "";
+        const topics = Array.isArray(event.published_topics) ? event.published_topics.join("\n") : "";
+        const result = event.result ? JSON.stringify(event.result, null, 2) : "";
+        const detail = topic || topics || result;
+        const line = document.createElement("div");
+        line.className = `live-line ${esc(status)}`;
+        line.innerHTML = `
+          <div class="status">${esc(status)}</div>
+          <div><strong>${esc(event.step || "-")}</strong><div class="hint">${esc(event.elapsed_ms ?? 0)} ms</div></div>
+          <div>${esc(event.message || "")}${detail ? `<code>${esc(detail)}</code>` : ""}</div>`;
+        log.appendChild(line);
+        line.scrollIntoView({ block: "end" });
+        if (summary) summary.textContent = event.message || "";
+      }
+
+      async function streamJSONLines(path, body, onEvent, signal) {
+        const response = await fetch(path, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal,
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || response.statusText || "HTTP " + response.status);
+        }
+        if (!response.body) throw new Error("Streaming response is not available");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            onEvent(JSON.parse(line));
+          }
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) onEvent(JSON.parse(buffer));
       }
 
       function formatValue(value, suffix = "") {
@@ -1865,25 +2049,35 @@
       async function testMQTT() {
         const output = document.getElementById("mqtt-result");
         await runAction("mqtt-test", async () => {
+          openMQTTTestDialog();
+          const payload = {
+            url: val("mqtt-url"),
+            version: val("mqtt-version"),
+            username: val("mqtt-user"),
+            password: val("mqtt-password"),
+            discovery: val("mqtt-discovery") || "homeassistant",
+            node: val("mqtt-node"),
+          };
           if (output) output.textContent = `${t("loading")}...`;
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 12_000);
-          let result;
+          const timer = setTimeout(() => controller.abort(), 35_000);
+          let result = null;
           try {
-            result = await request("/api/mqtt/test", {
-              method: "POST",
-              signal: controller.signal,
-              body: JSON.stringify({
-                url: val("mqtt-url"),
-                version: val("mqtt-version"),
-                username: val("mqtt-user"),
-                password: val("mqtt-password"),
-                discovery: val("mqtt-discovery") || "homeassistant",
-                node: val("mqtt-node"),
-              }),
-            });
+            await streamJSONLines("/api/mqtt/test/live", payload, (event) => {
+              appendMQTTEvent(event);
+              if (event.result) result = event.result;
+              if (event.step === "result" && event.result) result = event.result;
+            }, controller.signal);
+            if (!result) throw new Error("MQTT test did not return a result");
           } catch (err) {
-            if (output) output.textContent = `${t("disconnected")}: ${err.name === "AbortError" ? "Timeout after 12s" : err.message}`;
+            const message = err.name === "AbortError" ? "Timeout after 35s" : err.message;
+            appendMQTTEvent({
+              step: "client",
+              status: "error",
+              message,
+              elapsed_ms: 0,
+            });
+            if (output) output.textContent = `${t("disconnected")}: ${message}`;
             throw err;
           } finally {
             clearTimeout(timer);

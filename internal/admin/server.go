@@ -70,6 +70,15 @@ type Session struct {
 	UserAgent string    `json:"user_agent"`
 }
 
+type mqttTestRequest struct {
+	URL       string `json:"url"`
+	Version   string `json:"version"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	Node      string `json:"node"`
+	Discovery string `json:"discovery"`
+}
+
 func NewServer(cfg *config.Config, browser Browser, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger) *Server {
 	return &Server{cfg: cfg, browser: browser, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
 }
@@ -94,6 +103,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/config/backups", s.auth(s.configBackups))
 	mux.HandleFunc("/api/config/restore", s.auth(s.configRestore))
 	mux.HandleFunc("/api/mqtt/test", s.auth(s.mqttTest))
+	mux.HandleFunc("/api/mqtt/test/live", s.auth(s.mqttTestLive))
 	mux.HandleFunc("/api/browser/start", s.auth(s.browserAction("start")))
 	mux.HandleFunc("/api/browser/stop", s.auth(s.browserAction("stop")))
 	mux.HandleFunc("/api/browser/restart", s.auth(s.browserAction("restart")))
@@ -910,54 +920,117 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		URL       string `json:"url"`
-		Version   string `json:"version"`
-		Username  string `json:"username"`
-		Password  string `json:"password"`
-		Node      string `json:"node"`
-		Discovery string `json:"discovery"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	body, err := parseMQTTTestRequest(r)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if body.URL == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mqtt url required"})
+	writeJSON(w, http.StatusOK, runMQTTTest(body, nil))
+}
+
+func (s *Server) mqttTestLive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
+	}
+	body, err := parseMQTTTestRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	encoder := json.NewEncoder(w)
+	emit := func(event map[string]any) {
+		_ = encoder.Encode(event)
+		flusher.Flush()
+	}
+	result := runMQTTTest(body, emit)
+	status := "error"
+	if ok, _ := result["ok"].(bool); ok {
+		status = "ok"
+	}
+	emit(map[string]any{"step": "result", "status": status, "message": "MQTT test finished", "result": result})
+}
+
+func parseMQTTTestRequest(r *http.Request) (mqttTestRequest, error) {
+	var body mqttTestRequest
+	err := json.NewDecoder(r.Body).Decode(&body)
+	return body, err
+}
+
+func runMQTTTest(body mqttTestRequest, emit func(map[string]any)) map[string]any {
+	start := time.Now()
+	published := []string{}
+	event := func(step string, status string, message string, fields map[string]any) {
+		if emit == nil {
+			return
+		}
+		item := map[string]any{
+			"step":       step,
+			"status":     status,
+			"message":    message,
+			"elapsed_ms": time.Since(start).Milliseconds(),
+			"time":       time.Now().Format(time.RFC3339),
+		}
+		for key, value := range fields {
+			item[key] = value
+		}
+		emit(item)
+	}
+	fail := func(step string, err error) map[string]any {
+		event(step, "error", err.Error(), map[string]any{"published_topics": published})
+		return map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version, "published_topics": published}
+	}
+	event("validate", "running", "Validating MQTT settings", nil)
+	if body.URL == "" {
+		return fail("validate", errors.New("mqtt url required"))
 	}
 	if body.Version == "" {
 		body.Version = "3.1.1"
 	}
 	if body.Version != "3.1.1" && body.Version != "5.0" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "supported MQTT versions are 3.1.1 and 5.0"})
-		return
+		return fail("validate", errors.New("supported MQTT versions are 3.1.1 and 5.0"))
 	}
 	node := strings.Trim(firstNonEmpty(body.Node, "kioskmate"), "/")
 	discovery := strings.Trim(firstNonEmpty(body.Discovery, "homeassistant"), "/")
 	root := "kioskmate/" + node
 	client := &mqttclient.Client{URL: body.URL, ClientID: node + "_test", Username: body.Username, Password: body.Password, Version: body.Version, Timeout: 5 * time.Second}
-	start := time.Now()
-	published := []string{}
+	event("validate", "ok", "Settings accepted", map[string]any{"broker": body.URL, "version": body.Version, "node": node, "discovery_prefix": discovery, "root": root})
+	event("connect", "running", "Opening MQTT connection and waiting for CONNACK", map[string]any{"broker": body.URL, "client_id": node + "_test"})
+	if err := client.Connect(); err != nil {
+		_ = client.Close()
+		return fail("connect", err)
+	}
+	event("connect", "ok", "Broker accepted the connection", nil)
+	event("ping", "running", "Sending MQTT ping", nil)
 	if err := client.Ping(); err != nil {
 		_ = client.Close()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
-		return
+		return fail("ping", err)
 	}
+	event("ping", "ok", "Ping response received", nil)
 	availabilityTopic := root + "/availability"
+	event("publish_availability", "running", "Publishing retained availability", map[string]any{"topic": availabilityTopic})
 	if err := client.Publish(availabilityTopic, []byte("online"), true); err != nil {
 		_ = client.Close()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
-		return
+		return fail("publish_availability", err)
 	}
 	published = append(published, availabilityTopic)
+	event("publish_availability", "ok", "Availability topic published", map[string]any{"topic": availabilityTopic})
 	stateTopic := root + "/connection_test/state"
+	event("publish_state", "running", "Publishing retained test state", map[string]any{"topic": stateTopic})
 	if err := client.Publish(stateTopic, []byte(time.Now().UTC().Format(time.RFC3339)), true); err != nil {
 		_ = client.Close()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version})
-		return
+		return fail("publish_state", err)
 	}
 	published = append(published, stateTopic)
+	event("publish_state", "ok", "Test state topic published", map[string]any{"topic": stateTopic})
 	configTopic := discovery + "/sensor/" + node + "/connection_test/config"
 	payload, _ := json.Marshal(map[string]any{
 		"name":               "Connection Test",
@@ -972,14 +1045,16 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 			"manufacturer": "KioskMate",
 		},
 	})
+	event("publish_discovery", "running", "Publishing retained Home Assistant discovery config", map[string]any{"topic": configTopic})
 	if err := client.Publish(configTopic, payload, true); err != nil {
 		_ = client.Close()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": time.Since(start).Milliseconds(), "version": body.Version, "published_topics": published})
-		return
+		return fail("publish_discovery", err)
 	}
 	published = append(published, configTopic)
+	event("publish_discovery", "ok", "Discovery config topic published", map[string]any{"topic": configTopic})
 	_ = client.Close()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": time.Since(start).Milliseconds(), "version": body.Version, "published_topics": published})
+	event("done", "ok", "MQTT test completed successfully", map[string]any{"published_topics": published})
+	return map[string]any{"ok": true, "latency_ms": time.Since(start).Milliseconds(), "version": body.Version, "published_topics": published}
 }
 
 func (s *Server) browserPage(w http.ResponseWriter, r *http.Request) {
