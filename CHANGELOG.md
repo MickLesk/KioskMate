@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.0.1-alpha12
+
+- Added Kiosk page filtering, visible/enabled counters and clearer enabled/disabled page badges.
+- Added page duplicate, move up, move down and safer page removal with workflow index remapping.
+- Added bulk enable/disable for all kiosk pages.
+- Added check-all-pages with per-page reachability results.
+- Added page import/export as JSON for faster multi-kiosk setup.
+- Added browser start, stop and restart controls directly to the Kiosk page.
+- Added Scheduler status cards for mode, reason, active rule and next switch.
+- Added quick workflow tools to build rotation from enabled pages, clear rotation and clear time rules.
+- Added a small recent-action history on the Kiosk page so button feedback remains visible after toasts disappear.
+
 ## v0.0.1-alpha11
 
 - Redesigned the Kiosk page around the actual operator workflow: current page, primary page actions, page list and workflow board.

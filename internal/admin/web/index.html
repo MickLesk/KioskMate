@@ -581,6 +581,53 @@
         min-height: 36px;
       }
 
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .toolbar input {
+        max-width: 360px;
+      }
+
+      .page-card-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .page-card-actions button {
+        width: 100%;
+      }
+
+      .check-panel {
+        display: grid;
+        gap: 8px;
+        max-height: 220px;
+        overflow: auto;
+      }
+
+      .check-row {
+        display: grid;
+        grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-2);
+        padding: 8px;
+      }
+
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
       .workflow-board {
         display: grid;
         grid-template-columns: minmax(260px, 0.36fr) minmax(0, 1fr);
@@ -924,6 +971,27 @@
           disabled: "Disabled",
           addPage: "Add page",
           addHomeAssistant: "Add Home Assistant",
+          duplicate: "Duplicate",
+          copy: "Copy",
+          moveUp: "Move up",
+          moveDown: "Move down",
+          checkAllPages: "Check all pages",
+          importPages: "Import pages",
+          exportPages: "Export pages",
+          enableAll: "Enable all",
+          disableAll: "Disable all",
+          buildRotation: "Build rotation from pages",
+          clearRotation: "Clear rotation",
+          clearRules: "Clear time rules",
+          filterPages: "Filter pages",
+          visiblePages: "Visible pages",
+          enabledPages: "Enabled pages",
+          schedulerStatus: "Scheduler status",
+          nextSwitch: "Next switch",
+          activeRule: "Active rule",
+          reason: "Reason",
+          browserControls: "Browser controls",
+          recentActions: "Recent actions",
           remove: "Remove",
           openPreview: "Open in new tab",
           clearPreview: "Clear preview",
@@ -1149,6 +1217,27 @@
           disabled: "Deaktiviert",
           addPage: "Seite hinzufügen",
           addHomeAssistant: "Home Assistant hinzufügen",
+          duplicate: "Duplizieren",
+          copy: "Kopie",
+          moveUp: "Nach oben",
+          moveDown: "Nach unten",
+          checkAllPages: "Alle Seiten prüfen",
+          importPages: "Seiten importieren",
+          exportPages: "Seiten exportieren",
+          enableAll: "Alle aktivieren",
+          disableAll: "Alle deaktivieren",
+          buildRotation: "Rotation aus Seiten bauen",
+          clearRotation: "Rotation leeren",
+          clearRules: "Zeitregeln leeren",
+          filterPages: "Seiten filtern",
+          visiblePages: "Sichtbare Seiten",
+          enabledPages: "Aktive Seiten",
+          schedulerStatus: "Scheduler-Status",
+          nextSwitch: "Nächster Wechsel",
+          activeRule: "Aktive Regel",
+          reason: "Grund",
+          browserControls: "Browser-Steuerung",
+          recentActions: "Letzte Aktionen",
           remove: "Entfernen",
           openPreview: "In neuem Tab öffnen",
           clearPreview: "Vorschau leeren",
@@ -1366,6 +1455,8 @@
         update: null,
         diagnostics: null,
         repair: null,
+        pageFilter: "",
+        actionLog: [],
         logs: [],
         ssh: null,
         terminal: "",
@@ -1556,16 +1647,24 @@
 
       async function runAction(name, fn, success = t("actionDone")) {
         setBusy(name, true);
+        recordAction(t("actionStarted"), name, "warn");
         try {
           const result = await fn();
           toast(success, "", "ok");
+          recordAction(success, name, "ok");
           return result;
         } catch (err) {
           toast(t("failed"), err.message, "error");
+          recordAction(t("failed"), `${name}: ${err.message}`, "error");
           throw err;
         } finally {
           setBusy(name, false);
         }
+      }
+
+      function recordAction(title, detail = "", type = "ok") {
+        state.actionLog.unshift({ title, detail, type, at: new Date().toISOString() });
+        state.actionLog = state.actionLog.slice(0, 8);
       }
 
       async function boot() {
@@ -1831,6 +1930,7 @@
         const kiosk = cfg.kiosk || {};
         const browser = state.status?.browser || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
+        const enabledPages = pages.filter((page) => !page.disabled && page.url).length;
         return `
           <div class="kiosk-shell">
             <div class="kiosk-hero">
@@ -1853,8 +1953,12 @@
                     ${button("previousPage", "browser-previous")}
                     ${button("nextPage", "browser-next")}
                     ${button("reloadBrowser", "browser-reload")}
+                    ${button("startBrowser", "browser-start")}
+                    ${button("stopBrowser", "browser-stop")}
+                    ${button("restartBrowser", "browser-restart")}
                   </div>
                   <div id="page-check-output" class="hint">${esc(t("openExternalHint"))}</div>
+                  ${renderActionLog()}
                 </div>
               </div>
               <div class="card">
@@ -1862,16 +1966,33 @@
                   <h3>${esc(t("workflowPreview"))}</h3>
                   <span class="chip">${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</span>
                 </div>
-                <div class="body">${renderWorkflowPreview(kiosk)}</div>
+                <div class="body grid">
+                  ${renderSchedulerStatus(browser.scheduler || {})}
+                  ${renderWorkflowPreview(kiosk)}
+                </div>
               </div>
             </div>
             <div class="card">
               <div class="head">
                 <h3>${esc(t("pages"))}</h3>
-                <div class="actions">${button("addPage", "page-add")}${button("addHomeAssistant", "page-add-ha")}</div>
+                <div class="actions">
+                  <span class="chip">${esc(t("visiblePages"))}: ${pages.length}</span>
+                  <span class="chip ok">${esc(t("enabledPages"))}: ${enabledPages}</span>
+                  ${button("addPage", "page-add")}${button("addHomeAssistant", "page-add-ha")}${button("importPages", "pages-import")}${button("exportPages", "pages-export")}
+                </div>
               </div>
               <div class="body grid">
+                <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
+                <div class="toolbar">
+                  <input id="page-filter" type="search" placeholder="${esc(t("filterPages"))}" value="${esc(state.pageFilter || "")}" />
+                  <div class="actions">
+                    ${button("checkAllPages", "page-check-all")}
+                    ${button("enableAll", "page-enable-all")}
+                    ${button("disableAll", "page-disable-all")}
+                  </div>
+                </div>
                 <div id="pages-list">${renderPages(pages)}</div>
+                <div id="page-check-all-output" class="check-panel"></div>
                 <div class="actions">
                   ${button("save", "kiosk-save")}
                   ${button("saveRestart", "kiosk-save-restart", "primary")}
@@ -1888,11 +2009,11 @@
                 </div>
                 <div class="workflow-lanes">
                   <div class="lane">
-                    <div class="lane-head"><h3>${esc(t("rotation"))}</h3>${button("addRotation", "rotation-add")}</div>
+                    <div class="lane-head"><h3>${esc(t("rotation"))}</h3><div class="actions">${button("buildRotation", "rotation-build")}${button("clearRotation", "rotation-clear")}${button("addRotation", "rotation-add")}</div></div>
                     <div id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
                   </div>
                   <div class="lane">
-                    <div class="lane-head"><h3>${esc(t("timeRules"))}</h3>${button("addRule", "rule-add")}</div>
+                    <div class="lane-head"><h3>${esc(t("timeRules"))}</h3><div class="actions">${button("clearRules", "rules-clear")}${button("addRule", "rule-add")}</div></div>
                     <div id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
                   </div>
                 </div>
@@ -2214,8 +2335,8 @@
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
           cfg.kiosk.pages = collectPages();
-          cfg.kiosk.pages.push({ name: "New Page", url: "http://homeassistant.local:8123", disabled: false });
-          cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
+          cfg.kiosk.pages.push({ name: `Kiosk ${cfg.kiosk.pages.length + 1}`, url: "http://homeassistant.local:8123", disabled: false });
+          syncKioskURLs(cfg.kiosk);
           state.config = cfg;
           renderApp();
         });
@@ -2224,16 +2345,33 @@
           cfg.kiosk = cfg.kiosk || {};
           cfg.kiosk.pages = collectPages();
           cfg.kiosk.pages.push({ name: "Home Assistant", url: "http://homeassistant.local:8123", disabled: false });
-          cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
+          syncKioskURLs(cfg.kiosk);
           state.config = cfg;
           renderApp();
         });
         document.querySelector('[data-action="kiosk-save"]')?.addEventListener("click", () => saveKiosk(false));
         document.querySelector('[data-action="kiosk-save-restart"]')?.addEventListener("click", () => saveKiosk(true));
         document.querySelector('[data-action="page-check"]')?.addEventListener("click", checkSelectedPage);
+        document.querySelector('[data-action="page-check-all"]')?.addEventListener("click", checkAllPages);
+        document.querySelector('[data-action="page-enable-all"]')?.addEventListener("click", () => bulkSetPagesDisabled(false));
+        document.querySelector('[data-action="page-disable-all"]')?.addEventListener("click", () => bulkSetPagesDisabled(true));
+        document.querySelector('[data-action="pages-export"]')?.addEventListener("click", exportPages);
+        document.querySelector('[data-action="pages-import"]')?.addEventListener("click", () => document.getElementById("pages-import-file")?.click());
+        document.getElementById("pages-import-file")?.addEventListener("change", importPages);
         document.querySelector('[data-action="page-activate"]')?.addEventListener("click", activateSelectedPage);
         document.querySelector('[data-action="preview-open"]')?.addEventListener("click", openPreview);
         document.querySelector('[data-action="scheduler-save"]')?.addEventListener("click", saveScheduler);
+        document.querySelector('[data-action="rotation-build"]')?.addEventListener("click", buildRotationFromPages);
+        document.querySelector('[data-action="rotation-clear"]')?.addEventListener("click", () => clearKioskList("rotation"));
+        document.querySelector('[data-action="rules-clear"]')?.addEventListener("click", () => clearKioskList("time_rules"));
+        document.getElementById("page-filter")?.addEventListener("input", (event) => {
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.kiosk.pages = collectPages();
+          state.config = cfg;
+          state.pageFilter = event.target.value || "";
+          renderApp();
+        });
         document.querySelector('[data-action="rotation-add"]')?.addEventListener("click", () => {
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
@@ -2255,8 +2393,31 @@
         document.querySelectorAll("[data-page-remove]").forEach((button) => {
           button.addEventListener("click", () => {
             const cfg = cloneConfig();
-            cfg.kiosk.pages = collectPages().filter((_, i) => i !== Number(button.dataset.pageRemove));
-            cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
+            cfg.kiosk.pages = collectPages();
+            removePage(cfg.kiosk, Number(button.dataset.pageRemove));
+            state.config = cfg;
+            renderApp();
+          });
+        });
+        document.querySelectorAll("[data-page-duplicate]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const cfg = cloneConfig();
+            cfg.kiosk = cfg.kiosk || {};
+            const index = Number(button.dataset.pageDuplicate);
+            cfg.kiosk.pages = collectPages();
+            const source = cfg.kiosk.pages[index];
+            if (source) cfg.kiosk.pages.splice(index + 1, 0, { ...source, name: `${source.name || t("pages")} ${t("copy")}` });
+            syncKioskURLs(cfg.kiosk);
+            state.config = cfg;
+            renderApp();
+          });
+        });
+        document.querySelectorAll("[data-page-move]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const cfg = cloneConfig();
+            cfg.kiosk = cfg.kiosk || {};
+            cfg.kiosk.pages = collectPages();
+            movePage(cfg.kiosk, Number(button.dataset.pageMove), Number(button.dataset.direction));
             state.config = cfg;
             renderApp();
           });
@@ -2321,6 +2482,89 @@
         }, t("checkPage"));
       }
 
+      async function checkAllPages() {
+        const pages = collectPages();
+        const output = document.getElementById("page-check-all-output");
+        await runAction("page-check-all", async () => {
+          if (output) output.innerHTML = "";
+          for (let index = 0; index < pages.length; index++) {
+            const page = pages[index];
+            if (!page.url || page.disabled) continue;
+            const result = await postJSON("/api/browser/check-page", { index, url: page.url });
+            if (output) {
+              output.insertAdjacentHTML("beforeend", `
+                <div class="check-row">
+                  <strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong>
+                  <span class="status-url">${esc(result.url || page.url)}</span>
+                  <span class="chip ${result.ok ? "ok" : "bad"}">${esc(result.ok ? (result.status || t("success")) : (result.error || result.status || t("failed")))}</span>
+                </div>`);
+            }
+          }
+        }, t("checkAllPages"));
+      }
+
+      function bulkSetPagesDisabled(disabled) {
+        const cfg = cloneConfig();
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages().map((page) => ({ ...page, disabled }));
+        syncKioskURLs(cfg.kiosk);
+        state.config = cfg;
+        renderApp();
+      }
+
+      function exportPages() {
+        const payload = JSON.stringify({ pages: collectPages() }, null, 2);
+        const blob = new Blob([payload + "\n"], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "kioskmate-pages.json";
+        link.click();
+        URL.revokeObjectURL(url);
+        recordAction(t("exportPages"), "kioskmate-pages.json", "ok");
+      }
+
+      async function importPages(event) {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        await runAction("pages-import", async () => {
+          const data = JSON.parse(await file.text());
+          const pages = Array.isArray(data) ? data : data.pages;
+          if (!Array.isArray(pages)) throw new Error("Invalid pages file");
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.kiosk.pages = pages.map((page, index) => ({
+            name: String(page.name || `Kiosk ${index + 1}`),
+            url: String(page.url || ""),
+            disabled: !!page.disabled,
+          })).filter((page) => page.name || page.url);
+          syncKioskURLs(cfg.kiosk);
+          state.config = cfg;
+          renderApp();
+        }, t("importPages"));
+      }
+
+      function buildRotationFromPages() {
+        const cfg = cloneConfig();
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages();
+        cfg.kiosk.rotation = cfg.kiosk.pages
+          .map((page, index) => ({ page, index }))
+          .filter((item) => !item.page.disabled && item.page.url)
+          .map((item) => ({ page: item.index, duration_seconds: 3600 }));
+        state.config = cfg;
+        renderApp();
+      }
+
+      function clearKioskList(key) {
+        const cfg = cloneConfig();
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages();
+        cfg.kiosk[key] = [];
+        state.config = cfg;
+        renderApp();
+      }
+
       async function activateSelectedPage() {
         const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
         await runAction("page-activate", async () => {
@@ -2338,6 +2582,36 @@
         window.open(url, "_blank", "noopener");
         const out = document.getElementById("page-check-output");
         if (out) out.textContent = url;
+      }
+
+      function syncKioskURLs(kiosk) {
+        kiosk.urls = (kiosk.pages || []).filter((p) => !p.disabled && p.url).map((p) => p.url);
+      }
+
+      function movePage(kiosk, index, direction) {
+        const pages = kiosk.pages || [];
+        const next = index + direction;
+        if (index < 0 || next < 0 || index >= pages.length || next >= pages.length) return;
+        const order = pages.map((_, i) => i);
+        [order[index], order[next]] = [order[next], order[index]];
+        kiosk.pages = order.map((oldIndex) => pages[oldIndex]);
+        remapPageIndexes(kiosk, order);
+        syncKioskURLs(kiosk);
+      }
+
+      function removePage(kiosk, index) {
+        const pages = kiosk.pages || [];
+        const order = pages.map((_, i) => i).filter((oldIndex) => oldIndex !== index);
+        kiosk.pages = order.map((oldIndex) => pages[oldIndex]);
+        remapPageIndexes(kiosk, order);
+        syncKioskURLs(kiosk);
+      }
+
+      function remapPageIndexes(kiosk, order) {
+        const map = new Map(order.map((oldIndex, newIndex) => [oldIndex, newIndex]));
+        const remap = (page) => map.has(Number(page)) ? map.get(Number(page)) : 0;
+        kiosk.rotation = (kiosk.rotation || []).map((item) => ({ ...item, page: remap(item.page) }));
+        kiosk.time_rules = (kiosk.time_rules || []).map((rule) => ({ ...rule, page: remap(rule.page) }));
       }
 
       function bindScheduler() {
@@ -2743,18 +3017,52 @@
 
       function renderPages(pages) {
         if (!pages.length) return `<div class="empty">${esc(t("noData"))}</div>`;
+        const filter = String(state.pageFilter || "").trim().toLowerCase();
         return `<div class="page-list">${pages
-          .map((page, index) => `
-            <div class="page-card ${state.status?.browser?.active === index ? "active" : ""}">
-              ${field(`page-name-${index}`, t("pageName"), "text", "", page.name || "")}
+          .map((page, index) => {
+            const matches = !filter || String(page.name || "").toLowerCase().includes(filter) || String(page.url || "").toLowerCase().includes(filter);
+            return `
+            <div class="page-card ${state.status?.browser?.active === index ? "active" : ""}" ${matches ? "" : "hidden"}>
+              <div>
+                ${field(`page-name-${index}`, t("pageName"), "text", "", page.name || "")}
+                <div class="page-card-meta">
+                  <span class="chip">${index + 1}</span>
+                  ${page.disabled ? `<span class="chip warn">${esc(t("disabled"))}</span>` : `<span class="chip ok">${esc(t("enabled"))}</span>`}
+                </div>
+              </div>
               ${field(`page-url-${index}`, t("pageUrl"), "url", "", page.url || "")}
               <div class="page-card-actions">
                 <label class="switch"><span>${esc(t("activePage"))}</span><input data-page-active value="${index}" name="active-page" type="radio" ${state.status?.browser?.active === index ? "checked" : ""}></label>
                 <label class="switch"><span>${esc(t("disabled"))}</span><input id="page-disabled-${index}" type="checkbox" ${page.disabled ? "checked" : ""}></label>
+                <div class="row">
+                  <button data-page-move="${index}" data-direction="-1" ${index === 0 ? "disabled" : ""}>${esc(t("moveUp"))}</button>
+                  <button data-page-move="${index}" data-direction="1" ${index === pages.length - 1 ? "disabled" : ""}>${esc(t("moveDown"))}</button>
+                </div>
+                <button data-page-duplicate="${index}">${esc(t("duplicate"))}</button>
                 <button data-page-remove="${index}" class="danger">${esc(t("remove"))}</button>
               </div>
-            </div>`)
+            </div>`;
+          })
           .join("")}</div>`;
+      }
+
+      function renderSchedulerStatus(scheduler) {
+        return `
+          <div class="status-grid">
+            ${metric(t("schedulerStatus"), scheduler.enabled ? t("enabled") : t("disabled"), scheduler.reason || "-")}
+            ${metric(t("nextSwitch"), formatDate(scheduler.next_switch), scheduler.active_rule ? `${t("activeRule")}: ${scheduler.active_rule}` : `${t("mode")}: ${scheduler.mode || "-"}`)}
+          </div>`;
+      }
+
+      function renderActionLog() {
+        if (!state.actionLog.length) return "";
+        return `
+          <div class="grid">
+            <strong>${esc(t("recentActions"))}</strong>
+            <div class="workflow-line">
+              ${state.actionLog.slice(0, 4).map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString())}</span>`).join("")}
+            </div>
+          </div>`;
       }
 
       function renderRotation(items) {
