@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -138,6 +140,46 @@ func TestParseDiscoveryTopic(t *testing.T) {
 	component, object, ok := parseDiscoveryTopic("homeassistant/sensor/kioskmate/version/config")
 	if !ok || component != "sensor" || object != "version" {
 		t.Fatalf("parseDiscoveryTopic = %q %q %v", component, object, ok)
+	}
+}
+
+func TestCheckPageHealth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	health := checkPageHealth(server.URL)
+	if !health.OK || health.StatusCode != http.StatusNoContent || health.Error != "" {
+		t.Fatalf("health = %#v", health)
+	}
+
+	health = checkPageHealth("ftp://example.invalid")
+	if health.OK || health.Error == "" {
+		t.Fatalf("unsupported health = %#v", health)
+	}
+}
+
+func TestRefreshOnePageHealthRotates(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer second.Close()
+
+	service := NewMQTTService(mqttTestConfig(t), &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pages := []pageEntity{{ID: "first", URL: first.URL}, {ID: "second", URL: second.URL}}
+
+	service.refreshOnePageHealth(pages)
+	if !service.health["first"].OK || !service.health["second"].Checked.IsZero() {
+		t.Fatalf("first rotation health = %#v", service.health)
+	}
+	service.refreshOnePageHealth(pages)
+	if service.health["second"].OK || service.health["second"].StatusCode != http.StatusForbidden {
+		t.Fatalf("second rotation health = %#v", service.health)
 	}
 }
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.1-alpha17
+
+- Added browser start and restart counters to Admin UI and MQTT state.
+- Added richer page-check diagnostics with categories and actionable Home Assistant hints for 403, auth redirects and network errors.
+- Added Home Assistant MQTT page-health entities per kiosk page: reachable, status code, last error and last checked.
+- Made MQTT page-health checks round-robin so large/unreachable page lists do not block every publish cycle.
+- Updated MQTT discovery page entity count feedback.
+- Added tests for Home Assistant page-check hints and MQTT page-health rotation.
+
 ## v0.0.1-alpha16
 
 - Added optional separate browser profiles per kiosk page to isolate Home Assistant sessions and cookies.

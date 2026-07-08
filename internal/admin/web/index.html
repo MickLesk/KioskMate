@@ -1009,6 +1009,8 @@
           watchdogLastRestart: "Watchdog last restart",
           watchdogLimits: "Watchdog limits",
           watchdogKilledHint: "The browser was killed by the watchdog. Check the watchdog reason and browser logs.",
+          browserStarts: "Browser starts",
+          browserRestarts: "Browser restarts",
           recentActions: "Recent actions",
           remove: "Remove",
           openPreview: "Open in new tab",
@@ -1273,6 +1275,8 @@
           watchdogLastRestart: "Letzter Watchdog-Restart",
           watchdogLimits: "Watchdog-Limits",
           watchdogKilledHint: "Der Browser wurde vom Watchdog beendet. Prüfe Watchdog-Grund und Browser-Logs.",
+          browserStarts: "Browser-Starts",
+          browserRestarts: "Browser-Restarts",
           recentActions: "Letzte Aktionen",
           remove: "Entfernen",
           openPreview: "In neuem Tab öffnen",
@@ -1949,6 +1953,8 @@
                     [t("command"), browser.command || "-"],
                     [t("lastError"), browser.last_error || "-"],
                     [t("lastExit"), formatDate(browser.last_exit)],
+                    [t("browserStarts"), browser.start_count ?? 0],
+                    [t("browserRestarts"), browser.restart_count ?? 0],
                     [t("watchdogPressure"), watchdog.pressure || "normal"],
                     [t("watchdogLastRestart"), formatDate(watchdog.last_restart)],
                     [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
@@ -2416,7 +2422,7 @@
           await refreshCore();
           const browser = state.status?.browser || {};
           const result = await postJSON("/api/browser/check-page", { index: browser.active || 0, url: browser.url || "" });
-          const detail = result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || result.url || "");
+          const detail = result.hint || (result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || result.url || ""));
           const output = document.getElementById("page-check-output");
           if (output) {
             output.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${detail}`;
@@ -2575,7 +2581,7 @@
         const out = document.getElementById("page-check-output");
         await runAction("page-check", async () => {
           const result = await postJSON("/api/browser/check-page", { index: active, url: pages[active]?.url || "" });
-          const detail = result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || "");
+          const detail = result.hint || (result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || ""));
           out.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${detail}`;
         }, t("checkPage"));
       }
@@ -2594,7 +2600,7 @@
                 <div class="check-row">
                   <strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong>
                   <span class="status-url">${esc(result.url || page.url)}</span>
-                  <span class="chip ${result.ok ? "ok" : "bad"}">${esc(result.statusCode === 403 ? t("haForbiddenHint") : result.ok ? (result.status || t("success")) : (result.error || result.status || t("failed")))}</span>
+                  <span class="chip ${result.ok ? "ok" : "bad"}">${esc(result.hint || (result.statusCode === 403 ? t("haForbiddenHint") : result.ok ? (result.status || t("success")) : (result.error || result.status || t("failed"))))}</span>
                 </div>`);
             }
           }

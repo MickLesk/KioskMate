@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -42,6 +43,8 @@ type MQTTService struct {
 	client   *mqttclient.Client
 	command  *mqttclient.Client
 	cache    map[string]string
+	health   map[string]pageHealth
+	healthIx int
 	cleaned  bool
 }
 
@@ -57,8 +60,15 @@ type pageEntity struct {
 	ID    string
 }
 
+type pageHealth struct {
+	OK         bool
+	StatusCode int
+	Error      string
+	Checked    time.Time
+}
+
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
-	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}}
+	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}}
 }
 
 func (s *MQTTService) PublishNow() error {
@@ -389,20 +399,24 @@ func (s *MQTTService) publishAll() error {
 	if err := s.publishState(client, "browser", boolState(status.Running), true); err != nil {
 		return err
 	}
+	pages := s.pageEntities()
+	s.refreshOnePageHealth(pages)
 	state := map[string]any{
-		"running":      status.Running,
-		"pid":          status.PID,
-		"rss_mb":       status.Stats.RSSMB,
-		"cpu_percent":  status.Stats.CPUPercent,
-		"pids":         status.Stats.PIDs,
-		"page":         status.Active + 1,
-		"page_name":    status.PageName,
-		"page_url":     status.URL,
-		"scheduler":    status.Scheduler,
-		"watchdog":     status.Watchdog,
-		"version":      s.version,
-		"mqtt_version": s.cfg.MQTT.Version,
-		"updated":      time.Now().UTC().Format(time.RFC3339),
+		"running":       status.Running,
+		"pid":           status.PID,
+		"rss_mb":        status.Stats.RSSMB,
+		"cpu_percent":   status.Stats.CPUPercent,
+		"pids":          status.Stats.PIDs,
+		"start_count":   status.StartCount,
+		"restart_count": status.Restarts,
+		"page":          status.Active + 1,
+		"page_name":     status.PageName,
+		"page_url":      status.URL,
+		"scheduler":     status.Scheduler,
+		"watchdog":      status.Watchdog,
+		"version":       s.version,
+		"mqtt_version":  s.cfg.MQTT.Version,
+		"updated":       time.Now().UTC().Format(time.RFC3339),
 	}
 	payload, _ := json.Marshal(state)
 	if err := client.Publish(root+"/state", payload, false); err != nil {
@@ -418,6 +432,8 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "update/release_url", "", true)
 	_ = s.publishState(client, "mqtt_version", s.cfg.MQTT.Version, true)
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
+	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
+	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
 	if status.Started != nil {
 		_ = s.publishState(client, "browser_started", status.Started.Format(time.RFC3339), false)
 	} else {
@@ -429,11 +445,19 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "page_number", fmt.Sprintf("%d", status.Active+1), true)
 	_ = s.publishState(client, "page_name", status.PageName, true)
 	_ = s.publishState(client, "page_url", status.URL, true)
-	for _, page := range s.pageEntities() {
+	for _, page := range pages {
 		_ = s.publishState(client, "pages/"+page.ID+"/active", boolState(page.Index == status.Active), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/index", fmt.Sprintf("%d", page.Index+1), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/name", page.Name, true)
 		_ = s.publishState(client, "pages/"+page.ID+"/url", page.URL, true)
+		health := s.health[page.ID]
+		if health.Checked.IsZero() {
+			health = pageHealth{Checked: time.Now().UTC(), Error: "not checked yet"}
+		}
+		_ = s.publishState(client, "pages/"+page.ID+"/reachable", boolState(health.OK), false)
+		_ = s.publishState(client, "pages/"+page.ID+"/status_code", fmt.Sprintf("%d", health.StatusCode), false)
+		_ = s.publishState(client, "pages/"+page.ID+"/last_error", firstString(health.Error, "none"), false)
+		_ = s.publishState(client, "pages/"+page.ID+"/last_checked", health.Checked.Format(time.RFC3339), false)
 	}
 	_ = s.publishState(client, "scheduler_enabled", boolState(s.cfg.Kiosk.Scheduler.Enabled), true)
 	_ = s.publishState(client, "scheduler_state", schedulerReason, true)
@@ -628,6 +652,8 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 			},
 		},
 		s.diagnosticSensor(device, "browser_pid", "Browser PID", "mdi:identifier", ""),
+		s.diagnosticSensor(device, "browser_start_count", "Browser Start Count", "mdi:counter", ""),
+		s.diagnosticSensor(device, "browser_restart_count", "Browser Restart Count", "mdi:restart", ""),
 		s.diagnosticSensor(device, "browser_started", "Browser Started", "mdi:clock-start", ""),
 		s.diagnosticSensor(device, "browser_command", "Browser Command", "mdi:console", ""),
 		s.diagnosticSensor(device, "browser_last_error", "Browser Last Error", "mdi:alert-circle", ""),
@@ -1255,6 +1281,52 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				},
 			},
 			discoveryItem{
+				Topic: s.discoveryTopic("binary_sensor", object+"_reachable"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Reachable",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_reachable",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/reachable/state",
+					"payload_on":      "ON",
+					"payload_off":     "OFF",
+					"icon":            "mdi:web-check",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("sensor", object+"_status_code"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Status Code",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_status_code",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/status_code/state",
+					"icon":            "mdi:numeric",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("sensor", object+"_last_error"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Last Error",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_last_error",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/last_error/state",
+					"icon":            "mdi:alert",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("sensor", object+"_last_checked"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Last Checked",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_last_checked",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/last_checked/state",
+					"icon":            "mdi:clock-check",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+			discoveryItem{
 				Topic: s.discoveryTopic("sensor", object+"_index"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Index",
@@ -1290,6 +1362,54 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 		)
 	}
 	return items
+}
+
+func checkPageHealth(target string) pageHealth {
+	health := pageHealth{Checked: time.Now().UTC()}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		health.Error = "empty url"
+		return health
+	}
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		health.Error = "unsupported url"
+		return health
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		health.Error = err.Error()
+		return health
+	}
+	req.Header.Set("User-Agent", "KioskMate")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		health.Error = err.Error()
+		return health
+	}
+	defer resp.Body.Close()
+	health.StatusCode = resp.StatusCode
+	health.OK = resp.StatusCode >= 200 && resp.StatusCode < 400
+	if !health.OK {
+		health.Error = resp.Status
+	}
+	return health
+}
+
+func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
+	if len(pages) == 0 {
+		return
+	}
+	if s.health == nil {
+		s.health = map[string]pageHealth{}
+	}
+	if s.healthIx >= len(pages) {
+		s.healthIx = 0
+	}
+	page := pages[s.healthIx]
+	s.health[page.ID] = checkPageHealth(page.URL)
+	s.healthIx = (s.healthIx + 1) % len(pages)
 }
 
 func (s *MQTTService) discoveryTopic(component, object string) string {

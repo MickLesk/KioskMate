@@ -26,6 +26,8 @@ type Browser struct {
 	cmd           *exec.Cmd
 	stopping      bool
 	started       time.Time
+	startCount    int
+	restartCount  int
 	active        int
 	lastStat      system.ProcessTreeStats
 	hotSince      time.Time
@@ -38,19 +40,21 @@ type Browser struct {
 }
 
 type Status struct {
-	Running   bool                    `json:"running"`
-	PID       int                     `json:"pid,omitempty"`
-	Started   *time.Time              `json:"started,omitempty"`
-	Command   string                  `json:"command"`
-	Args      []string                `json:"args"`
-	Stats     system.ProcessTreeStats `json:"stats"`
-	Active    int                     `json:"active"`
-	PageName  string                  `json:"page_name"`
-	URL       string                  `json:"url"`
-	Scheduler SchedulerStatus         `json:"scheduler"`
-	Watchdog  WatchdogStatus          `json:"watchdog"`
-	LastError string                  `json:"last_error,omitempty"`
-	LastExit  *time.Time              `json:"last_exit,omitempty"`
+	Running    bool                    `json:"running"`
+	PID        int                     `json:"pid,omitempty"`
+	Started    *time.Time              `json:"started,omitempty"`
+	StartCount int                     `json:"start_count"`
+	Restarts   int                     `json:"restart_count"`
+	Command    string                  `json:"command"`
+	Args       []string                `json:"args"`
+	Stats      system.ProcessTreeStats `json:"stats"`
+	Active     int                     `json:"active"`
+	PageName   string                  `json:"page_name"`
+	URL        string                  `json:"url"`
+	Scheduler  SchedulerStatus         `json:"scheduler"`
+	Watchdog   WatchdogStatus          `json:"watchdog"`
+	LastError  string                  `json:"last_error,omitempty"`
+	LastExit   *time.Time              `json:"last_exit,omitempty"`
 }
 
 type WatchdogStatus struct {
@@ -110,6 +114,7 @@ func (b *Browser) Start(ctx context.Context) error {
 	}
 	b.cmd = cmd
 	b.started = time.Now()
+	b.startCount++
 	b.lastStat = system.ProcessTreeStats{}
 	b.hotSince = time.Time{}
 	b.lastError = ""
@@ -158,6 +163,9 @@ func (b *Browser) Stop(ctx context.Context) error {
 }
 
 func (b *Browser) Restart(ctx context.Context) error {
+	b.mu.Lock()
+	b.restartCount++
+	b.mu.Unlock()
 	if err := b.Stop(ctx); err != nil {
 		return err
 	}
@@ -222,7 +230,7 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: b.cfg.Kiosk.PageName(b.active), URL: b.activeURL(), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), LastError: b.lastError}
+	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: b.cfg.Kiosk.PageName(b.active), URL: b.activeURL(), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError}
 	if !b.lastExit.IsZero() {
 		lastExit := b.lastExit
 		status.LastExit = &lastExit

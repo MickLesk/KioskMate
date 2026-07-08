@@ -1063,7 +1063,7 @@ func (s *Server) mqttDiscovery(w http.ResponseWriter, r *http.Request) {
 		"root_topic":       strings.Trim(s.cfg.MQTT.BaseTopic, "/") + "/" + strings.Trim(s.cfg.MQTT.Node, "/"),
 		"node":             s.cfg.MQTT.Node,
 		"page_count":       pageCount,
-		"page_entities":    pageCount * 4,
+		"page_entities":    pageCount * 9,
 	})
 }
 
@@ -1229,18 +1229,47 @@ func (s *Server) browserCheckPage(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("User-Agent", "KioskMate/"+s.version)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "url": target, "error": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "url": target, "error": err.Error(), "category": "network", "hint": "The kiosk host could not reach this page. Check DNS, network, firewall and the Home Assistant URL."})
 		return
 	}
 	defer resp.Body.Close()
 	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 400
+	category, hint := pageCheckHint(target, resp)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":         resp.StatusCode >= 200 && resp.StatusCode < 400,
+		"ok":         ok,
 		"url":        target,
 		"final_url":  resp.Request.URL.String(),
 		"status":     resp.Status,
 		"statusCode": resp.StatusCode,
+		"category":   category,
+		"hint":       hint,
 	})
+}
+
+func pageCheckHint(target string, resp *http.Response) (string, string) {
+	finalURL := ""
+	if resp != nil && resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	lowerTarget := strings.ToLower(target + " " + finalURL)
+	isHA := strings.Contains(lowerTarget, "8123") || strings.Contains(lowerTarget, "homeassistant") || strings.Contains(lowerTarget, "home-assistant")
+	if resp.StatusCode == http.StatusForbidden {
+		if isHA {
+			return "home_assistant_forbidden", "Home Assistant returned 403. Remove the kiosk IP from ip_bans.yaml, restart Home Assistant if needed, then reset the KioskMate HA browser session."
+		}
+		return "forbidden", "The server returned 403 Forbidden. Check server ACLs, reverse proxy rules or IP bans."
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "auth_required", "The page requires authentication. Open it on the kiosk display and sign in once, or reset the HA session if the login is broken."
+	}
+	if strings.Contains(strings.ToLower(finalURL), "/auth/") {
+		return "auth_redirect", "The page redirects to authentication. This is normal before the kiosk browser has a valid Home Assistant session."
+	}
+	if resp.StatusCode >= 400 {
+		return "http_error", "The page returned an HTTP error. Check the URL and backend service."
+	}
+	return "ok", "The kiosk host can reach this page."
 }
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
