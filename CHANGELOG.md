@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.0.1-alpha15
+
+- Added watchdog diagnostics to browser status, including pressure, limits, last restart and last restart reason.
+- Raised Raspberry safe-mode watchdog limits from 700 MB / 160% to 1200 MB / 220% with automatic migration for the old alpha values.
+- Added a HA session repair action that resets the browser session and immediately checks the active page.
+- Added watchdog diagnostics to the Dashboard and Kiosk pages.
+- Added Home Assistant MQTT discovery/state for browser start time, watchdog pressure, watchdog limits, watchdog last restart/reason and page indexes.
+- Added watchdog details and log paths to browser diagnostics.
+
 ## v0.0.1-alpha14
 
 - Added a dedicated browser log file at `~/.config/kioskmate/logs/browser.log`.

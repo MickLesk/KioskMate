@@ -31,6 +31,7 @@ type Browser struct {
 	hotSince      time.Time
 	lastError     string
 	lastExit      time.Time
+	watchdog      WatchdogStatus
 	scheduler     SchedulerStatus
 	rotationIndex int
 	rotationUntil time.Time
@@ -47,8 +48,21 @@ type Status struct {
 	PageName  string                  `json:"page_name"`
 	URL       string                  `json:"url"`
 	Scheduler SchedulerStatus         `json:"scheduler"`
+	Watchdog  WatchdogStatus          `json:"watchdog"`
 	LastError string                  `json:"last_error,omitempty"`
 	LastExit  *time.Time              `json:"last_exit,omitempty"`
+}
+
+type WatchdogStatus struct {
+	Enabled       bool       `json:"enabled"`
+	MaxRSSMB      uint64     `json:"max_rss_mb"`
+	MaxCPUPercent float64    `json:"max_cpu_percent"`
+	CheckInterval int        `json:"check_interval_seconds"`
+	CPUGrace      int        `json:"cpu_grace_seconds"`
+	HotSince      *time.Time `json:"hot_since,omitempty"`
+	LastRestart   *time.Time `json:"last_restart,omitempty"`
+	LastReason    string     `json:"last_reason,omitempty"`
+	Pressure      string     `json:"pressure"`
 }
 
 type SchedulerStatus struct {
@@ -205,7 +219,7 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: b.cfg.Kiosk.PageName(b.active), URL: b.activeURL(), Scheduler: b.scheduler, LastError: b.lastError}
+	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: b.cfg.Kiosk.PageName(b.active), URL: b.activeURL(), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), LastError: b.lastError}
 	if !b.lastExit.IsZero() {
 		lastExit := b.lastExit
 		status.LastExit = &lastExit
@@ -291,10 +305,18 @@ func (b *Browser) watch(ctx context.Context, pid int) {
 			}
 			b.mu.Lock()
 			b.lastStat = stats
-			restart := b.shouldRestart(stats)
+			restart, reason := b.shouldRestart(stats)
+			if reason != "" {
+				b.watchdog.LastReason = reason
+			}
+			if restart {
+				now := time.Now()
+				b.watchdog.LastRestart = &now
+				b.watchdog.LastReason = reason
+			}
 			b.mu.Unlock()
 			if restart {
-				b.logger.Warn("browser watchdog restart", "rss_mb", stats.RSSMB, "cpu", stats.CPUPercent)
+				b.logger.Warn("browser watchdog restart", "reason", reason, "rss_mb", stats.RSSMB, "rss_limit_mb", b.cfg.Watchdog.MaxRSSMB, "cpu", stats.CPUPercent, "cpu_limit", b.cfg.Watchdog.MaxCPUPercent)
 				_ = b.Restart(ctx)
 				return
 			}
@@ -302,18 +324,49 @@ func (b *Browser) watch(ctx context.Context, pid int) {
 	}
 }
 
-func (b *Browser) shouldRestart(stats system.ProcessTreeStats) bool {
+func (b *Browser) shouldRestart(stats system.ProcessTreeStats) (bool, string) {
 	overRSS := b.cfg.Watchdog.MaxRSSMB > 0 && stats.RSSMB > b.cfg.Watchdog.MaxRSSMB
 	overCPU := b.cfg.Watchdog.MaxCPUPercent > 0 && stats.CPUPercent > b.cfg.Watchdog.MaxCPUPercent
 	if !overRSS && !overCPU {
 		b.hotSince = time.Time{}
-		return false
+		b.watchdog.Pressure = "normal"
+		return false, ""
 	}
+	reason := b.watchdogReason(stats, overRSS, overCPU)
+	b.watchdog.Pressure = reason
 	if b.hotSince.IsZero() {
 		b.hotSince = time.Now()
-		return false
+		return false, reason
 	}
-	return time.Since(b.hotSince) >= b.cfg.Watchdog.CPUGrace
+	return time.Since(b.hotSince) >= b.cfg.Watchdog.CPUGrace, reason
+}
+
+func (b *Browser) watchdogReason(stats system.ProcessTreeStats, overRSS bool, overCPU bool) string {
+	var reasons []string
+	if overRSS {
+		reasons = append(reasons, fmt.Sprintf("rss %dMB > %dMB", stats.RSSMB, b.cfg.Watchdog.MaxRSSMB))
+	}
+	if overCPU {
+		reasons = append(reasons, fmt.Sprintf("cpu %.1f%% > %.1f%%", stats.CPUPercent, b.cfg.Watchdog.MaxCPUPercent))
+	}
+	return strings.Join(reasons, ", ")
+}
+
+func (b *Browser) watchdogStatusLocked() WatchdogStatus {
+	status := b.watchdog
+	status.Enabled = b.cfg.Watchdog.Enabled
+	status.MaxRSSMB = b.cfg.Watchdog.MaxRSSMB
+	status.MaxCPUPercent = b.cfg.Watchdog.MaxCPUPercent
+	status.CheckInterval = int(b.cfg.Watchdog.CheckInterval / time.Second)
+	status.CPUGrace = int(b.cfg.Watchdog.CPUGrace / time.Second)
+	if !b.hotSince.IsZero() {
+		hotSince := b.hotSince
+		status.HotSince = &hotSince
+	}
+	if status.Pressure == "" {
+		status.Pressure = "normal"
+	}
+	return status
 }
 
 func (b *Browser) command() (string, []string, error) {

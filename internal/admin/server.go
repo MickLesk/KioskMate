@@ -965,6 +965,9 @@ func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"gpu_mode":         s.cfg.Performance.GPUMode,
 		"reduce_motion":    s.cfg.Performance.ReduceMotion,
 		"watchdog":         s.cfg.Watchdog.Enabled,
+		"watchdog_status":  status.Watchdog,
+		"browser_log":      config.BrowserLogFilePath(s.cfg.Path),
+		"core_log":         config.LogFilePath(s.cfg.Path),
 		"last_error":       status.LastError,
 		"last_exit":        status.LastExit,
 	})

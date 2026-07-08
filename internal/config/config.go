@@ -351,6 +351,12 @@ func normalize(cfg *Config) {
 	if cfg.Watchdog.MaxRSSMB == 0 {
 		cfg.Watchdog.MaxRSSMB = 900
 	}
+	if cfg.Performance.Profile == "raspberry" && cfg.Watchdog.MaxRSSMB == 700 {
+		cfg.Watchdog.MaxRSSMB = 1200
+	}
+	if cfg.Performance.Profile == "raspberry" && cfg.Watchdog.MaxCPUPercent == 160 {
+		cfg.Watchdog.MaxCPUPercent = 220
+	}
 	if cfg.Watchdog.MaxCPUPercent == 0 {
 		cfg.Watchdog.MaxCPUPercent = 180
 	}
@@ -439,9 +445,9 @@ func ApplyRaspberrySafeMode(cfg *Config) {
 	cfg.Performance.ReduceMotion = true
 	cfg.Watchdog.Enabled = true
 	cfg.Watchdog.CheckInterval = 10 * time.Second
-	cfg.Watchdog.CPUGrace = 60 * time.Second
-	cfg.Watchdog.MaxRSSMB = 700
-	cfg.Watchdog.MaxCPUPercent = 160
+	cfg.Watchdog.CPUGrace = 120 * time.Second
+	cfg.Watchdog.MaxRSSMB = 1200
+	cfg.Watchdog.MaxCPUPercent = 220
 	cfg.Kiosk.ExtraArgs = appendUnique(cfg.Kiosk.ExtraArgs,
 		"--disable-dev-shm-usage",
 		"--disable-extensions",

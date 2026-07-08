@@ -395,6 +395,7 @@ func (s *MQTTService) publishAll() error {
 		"page_name":    status.PageName,
 		"page_url":     status.URL,
 		"scheduler":    status.Scheduler,
+		"watchdog":     status.Watchdog,
 		"version":      s.version,
 		"mqtt_version": s.cfg.MQTT.Version,
 		"updated":      time.Now().UTC().Format(time.RFC3339),
@@ -413,6 +414,11 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "update/release_url", "", true)
 	_ = s.publishState(client, "mqtt_version", s.cfg.MQTT.Version, true)
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
+	if status.Started != nil {
+		_ = s.publishState(client, "browser_started", status.Started.Format(time.RFC3339), false)
+	} else {
+		_ = s.publishState(client, "browser_started", "none", false)
+	}
 	_ = s.publishState(client, "browser_command", status.Command, true)
 	_ = s.publishState(client, "browser_last_error", firstString(status.LastError, "none"), false)
 	_ = s.publishState(client, "page_count", fmt.Sprintf("%d", s.cfg.Kiosk.PageCount()), true)
@@ -421,6 +427,7 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "page_url", status.URL, true)
 	for _, page := range s.pageEntities() {
 		_ = s.publishState(client, "pages/"+page.ID+"/active", boolState(page.Index == status.Active), true)
+		_ = s.publishState(client, "pages/"+page.ID+"/index", fmt.Sprintf("%d", page.Index+1), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/name", page.Name, true)
 		_ = s.publishState(client, "pages/"+page.ID+"/url", page.URL, true)
 	}
@@ -438,6 +445,15 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "gpu_mode", s.cfg.Performance.GPUMode, true)
 	_ = s.publishState(client, "reduce_motion", boolState(s.cfg.Performance.ReduceMotion), true)
 	_ = s.publishState(client, "watchdog_enabled", boolState(s.cfg.Watchdog.Enabled), true)
+	_ = s.publishState(client, "watchdog_pressure", firstString(status.Watchdog.Pressure, "normal"), false)
+	_ = s.publishState(client, "watchdog_last_reason", firstString(status.Watchdog.LastReason, "none"), false)
+	_ = s.publishState(client, "watchdog_rss_limit", fmt.Sprintf("%d", status.Watchdog.MaxRSSMB), true)
+	_ = s.publishState(client, "watchdog_cpu_limit", trimFloat(status.Watchdog.MaxCPUPercent), true)
+	if status.Watchdog.LastRestart != nil {
+		_ = s.publishState(client, "watchdog_last_restart", status.Watchdog.LastRestart.Format(time.RFC3339), false)
+	} else {
+		_ = s.publishState(client, "watchdog_last_restart", "none", false)
+	}
 	_ = s.publishState(client, "heartbeat", time.Now().Format("2006-01-02T15:04:05"), false)
 	_ = s.publishSystemStates(client, hw)
 	_ = client.Publish(root+"/hardware/state", hardware.MarshalStatus(hw), false)
@@ -607,6 +623,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 			},
 		},
 		s.diagnosticSensor(device, "browser_pid", "Browser PID", "mdi:identifier", ""),
+		s.diagnosticSensor(device, "browser_started", "Browser Started", "mdi:clock-start", ""),
 		s.diagnosticSensor(device, "browser_command", "Browser Command", "mdi:console", ""),
 		s.diagnosticSensor(device, "browser_last_error", "Browser Last Error", "mdi:alert-circle", ""),
 		s.diagnosticSensor(device, "page_count", "Page Count", "mdi:counter", ""),
@@ -633,6 +650,11 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 		s.sensor(device, "scheduler_next_switch", "Scheduler Next Switch", "mdi:clock-end", ""),
 		s.sensor(device, "performance_profile", "Performance Profile", "mdi:speedometer", ""),
 		s.sensor(device, "gpu_mode", "GPU Mode", "mdi:chip", ""),
+		s.diagnosticSensor(device, "watchdog_pressure", "Watchdog Pressure", "mdi:gauge", ""),
+		s.diagnosticSensor(device, "watchdog_last_reason", "Watchdog Last Reason", "mdi:alert-circle-check", ""),
+		s.diagnosticSensor(device, "watchdog_last_restart", "Watchdog Last Restart", "mdi:restart-alert", ""),
+		s.diagnosticSensor(device, "watchdog_rss_limit", "Watchdog RSS Limit", "mdi:memory", "MB"),
+		s.diagnosticSensor(device, "watchdog_cpu_limit", "Watchdog CPU Limit", "mdi:cpu-64-bit", "%"),
 		s.sensor(device, "last_command", "Last Command", "mdi:console-line", ""),
 		s.sensor(device, "last_command_status", "Last Command Status", "mdi:list-status", ""),
 		s.sensor(device, "last_command_error", "Last Command Error", "mdi:alert", ""),
@@ -1211,6 +1233,17 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 					"payload_off": "OFF",
 					"icon":        "mdi:checkbox-marked-circle-outline",
 					"device":      device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("sensor", object+"_index"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Index",
+					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_index",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/index/state",
+					"icon":            "mdi:numeric",
+					"entity_category": "diagnostic",
+					"device":          device,
 				},
 			},
 			discoveryItem{

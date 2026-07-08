@@ -1004,6 +1004,11 @@
           activeRule: "Active rule",
           reason: "Reason",
           browserControls: "Browser controls",
+          repairHA: "Repair HA session",
+          watchdogPressure: "Watchdog pressure",
+          watchdogLastRestart: "Watchdog last restart",
+          watchdogLimits: "Watchdog limits",
+          watchdogKilledHint: "The browser was killed by the watchdog. Check the watchdog reason and browser logs.",
           recentActions: "Recent actions",
           remove: "Remove",
           openPreview: "Open in new tab",
@@ -1258,6 +1263,11 @@
           activeRule: "Aktive Regel",
           reason: "Grund",
           browserControls: "Browser-Steuerung",
+          repairHA: "HA-Sitzung reparieren",
+          watchdogPressure: "Watchdog-Druck",
+          watchdogLastRestart: "Letzter Watchdog-Restart",
+          watchdogLimits: "Watchdog-Limits",
+          watchdogKilledHint: "Der Browser wurde vom Watchdog beendet. Prüfe Watchdog-Grund und Browser-Logs.",
           recentActions: "Letzte Aktionen",
           remove: "Entfernen",
           openPreview: "In neuem Tab öffnen",
@@ -1910,6 +1920,8 @@
         const cfg = state.config || {};
         const hw = state.hardware || {};
         const stats = browser.stats || {};
+        const watchdog = browser.watchdog || {};
+        const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         return `
           <div class="grid">
             <div class="grid three">
@@ -1927,12 +1939,17 @@
                     [t("command"), browser.command || "-"],
                     [t("lastError"), browser.last_error || "-"],
                     [t("lastExit"), formatDate(browser.last_exit)],
+                    [t("watchdogPressure"), watchdog.pressure || "normal"],
+                    [t("watchdogLastRestart"), formatDate(watchdog.last_restart)],
+                    [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
                   ])}
+                  ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
                   <div class="actions">
                     ${button("startBrowser", "browser-start")}
                     ${button("stopBrowser", "browser-stop")}
                     ${button("restartBrowser", "browser-restart", "primary")}
                     ${button("reloadBrowser", "browser-reload")}
+                    ${button("repairHA", "browser-repair-ha")}
                     ${button("resetSession", "browser-reset-session")}
                     ${button("previousPage", "browser-previous")}
                     ${button("nextPage", "browser-next")}
@@ -1960,8 +1977,10 @@
         const cfg = state.config || {};
         const kiosk = cfg.kiosk || {};
         const browser = state.status?.browser || {};
+        const watchdog = browser.watchdog || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
         const enabledPages = pages.filter((page) => !page.disabled && page.url).length;
+        const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         return `
           <div class="kiosk-shell">
             <div class="kiosk-hero">
@@ -1977,6 +1996,11 @@
                   <strong>${esc(browser.page_name || t("noData"))}</strong>
                   <div class="status-url">${esc(browser.url || "-")}</div>
                   ${browser.last_error ? `<div class="chip bad">${esc(browser.last_error)}</div>` : ""}
+                  ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
+                  <div class="status-grid">
+                    ${metric(t("watchdogPressure"), watchdog.pressure || "normal", `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`)}
+                    ${metric(t("watchdogLastRestart"), formatDate(watchdog.last_restart), watchdog.hot_since ? `${t("reason")}: ${watchdog.pressure}` : "")}
+                  </div>
                   <div class="primary-actions">
                     ${button("activatePage", "page-activate", "primary")}
                     ${button("checkPage", "page-check")}
@@ -1987,6 +2011,7 @@
                     ${button("startBrowser", "browser-start")}
                     ${button("stopBrowser", "browser-stop")}
                     ${button("restartBrowser", "browser-restart")}
+                    ${button("repairHA", "browser-repair-ha")}
                     ${button("resetSession", "browser-reset-session")}
                   </div>
                   <div id="page-check-output" class="hint">${esc(t("openExternalHint"))}</div>
@@ -2363,6 +2388,7 @@
         for (const [key, action] of Object.entries(actions)) {
           document.querySelector(`[data-action="${key}"]`)?.addEventListener("click", () => browserAction(action, key));
         }
+        document.querySelector('[data-action="browser-repair-ha"]')?.addEventListener("click", repairHASession);
       }
 
       async function browserAction(action, key) {
@@ -2371,6 +2397,22 @@
           await refreshCore();
           renderApp();
         });
+      }
+
+      async function repairHASession() {
+        await runAction("browser-repair-ha", async () => {
+          await postJSON("/api/browser/reset-session");
+          await refreshCore();
+          const browser = state.status?.browser || {};
+          const result = await postJSON("/api/browser/check-page", { index: browser.active || 0, url: browser.url || "" });
+          const detail = result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || result.url || "");
+          const output = document.getElementById("page-check-output");
+          if (output) {
+            output.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${detail}`;
+          }
+          renderApp();
+          if (!result.ok) throw new Error(detail || t("pageFailed"));
+        }, t("repairHA"));
       }
 
       function bindKiosk() {
