@@ -604,6 +604,9 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
 	}
+	if strings.EqualFold(cfg.Kiosk.Theme, "dark") {
+		args = append(args, "--force-dark-mode", "--enable-features=WebContentsForceDark")
+	}
 	args = append(args, performanceArgs(cfg.Performance.Profile)...)
 	if cfg.Kiosk.ZoomPercent > 0 && cfg.Kiosk.ZoomPercent != 100 {
 		args = append(args, fmt.Sprintf("--force-device-scale-factor=%.2f", float64(cfg.Kiosk.ZoomPercent)/100.0))

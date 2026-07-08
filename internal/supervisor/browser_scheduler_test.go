@@ -173,6 +173,23 @@ func TestPerformanceProfileArgs(t *testing.T) {
 	}
 }
 
+func TestKioskDarkThemeForcesChromiumDarkMode(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.UserDataDir = t.TempDir()
+	cfg.Kiosk.Theme = "dark"
+
+	args := browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
+	if !contains(args, "--force-dark-mode") || !contains(args, "--enable-features=WebContentsForceDark") {
+		t.Fatalf("dark theme args = %#v", args)
+	}
+
+	cfg.Kiosk.Theme = "light"
+	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
+	if contains(args, "--force-dark-mode") {
+		t.Fatalf("light theme should not force dark mode: %#v", args)
+	}
+}
+
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.0.1-alpha19
+
+- Fixed kiosk display dark mode by passing Chromium dark-rendering flags when the configured kiosk theme is `dark`.
+- Added test coverage so the stored kiosk theme actually affects Chromium launch arguments.
+- Hardened Admin UI theme initialization so old local `light` state does not override a dark kiosk config unless the Admin theme was explicitly selected.
+
 ## v0.0.1-alpha18
 
 - Added render health checks for kiosk pages using a short-lived headless browser screenshot.

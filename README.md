@@ -11,6 +11,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Embedded Admin UI with setup token, password login and session protection.
 - Kiosk page management with manual switching, rotation and time rules.
 - Performance profiles for Raspberry Pi and small kiosk hardware.
+- Kiosk theme handling, including Chromium dark rendering when the kiosk theme is set to `dark`.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.
 - HTTP and render checks for kiosk pages, including Home Assistant 403/auth hints.
@@ -160,6 +161,8 @@ If entities become stale after page renames, use **MQTT -> Reset discovery** in 
 If Home Assistant returns `403 Forbidden`, check `ip_bans.yaml` on the Home Assistant host and remove the kiosk IP if it was banned. Then use **Kiosk -> HA session repair** in KioskMate to clear the browser session and reload the active dashboard.
 
 If HTTP checks are OK but the display is white, use **Kiosk -> Render check**. It starts a short-lived headless browser, captures a screenshot and reports whether the page looks blank. This checks rendering separately from plain HTTP reachability.
+
+If Home Assistant renders in a light theme while KioskMate is configured for dark mode, set the KioskMate **Kiosk theme** to `dark` and restart the display. KioskMate passes Chromium dark-rendering flags in that mode. For the most accurate Home Assistant colors, also set the Home Assistant user/profile theme to dark.
 
 For multi-dashboard setups, enable **Settings -> Browser and performance -> Separate browser profile per page** when one broken Home Assistant session should not affect every page.
 
