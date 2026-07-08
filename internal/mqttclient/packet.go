@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -156,6 +157,81 @@ func parsePublish(payload []byte, version string) (string, []byte, error) {
 		body = body[used+propertyLength:]
 	}
 	return string(payload[2 : 2+size]), body, nil
+}
+
+func connAckError(packet byte, payload []byte, version string) error {
+	if packet != packetConnAck {
+		return fmt.Errorf("mqtt connack failed: expected CONNACK packet=2 got packet=%d payload=%v", packet, payload)
+	}
+	if len(payload) < 2 {
+		return fmt.Errorf("mqtt connack failed: short payload=%v", payload)
+	}
+	if payload[1] == 0 {
+		return nil
+	}
+	code := payload[1]
+	if protocolLevel(version) == 5 {
+		return fmt.Errorf("mqtt connack failed: %s (reason=0x%02x, payload=%v)", mqtt5Reason(code), code, payload)
+	}
+	return fmt.Errorf("mqtt connack failed: %s (return_code=%d, payload=%v)", mqtt311ReturnCode(code), code, payload)
+}
+
+func mqtt311ReturnCode(code byte) string {
+	switch code {
+	case 1:
+		return "unacceptable protocol version"
+	case 2:
+		return "identifier rejected"
+	case 3:
+		return "server unavailable"
+	case 4:
+		return "bad username or password"
+	case 5:
+		return "not authorized"
+	default:
+		return "unknown return code"
+	}
+}
+
+func mqtt5Reason(code byte) string {
+	switch code {
+	case 0x80:
+		return "unspecified error"
+	case 0x81:
+		return "malformed packet"
+	case 0x82:
+		return "protocol error"
+	case 0x83:
+		return "implementation specific error"
+	case 0x84:
+		return "unsupported protocol version"
+	case 0x85:
+		return "client identifier not valid"
+	case 0x86:
+		return "bad username or password"
+	case 0x87:
+		return "not authorized"
+	case 0x88:
+		return "server unavailable"
+	case 0x89:
+		return "server busy"
+	case 0x8a:
+		return "banned"
+	case 0x8c:
+		return "bad authentication method"
+	case 0x95:
+		return "packet too large"
+	case 0x97:
+		return "quota exceeded"
+	case 0x9c:
+		return "use another server"
+	case 0x9d:
+		return "server moved"
+	case 0x9f:
+		return "connection rate exceeded"
+	default:
+		return "unknown reason code"
+	}
 }
 
 func protocolLevel(version string) byte {

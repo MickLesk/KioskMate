@@ -805,7 +805,11 @@
           mqttVersion: "MQTT version",
           username: "Username",
           discoveryPrefix: "Discovery prefix",
+          baseTopic: "Base topic",
           node: "Node",
+          clientId: "Client ID",
+          keepalive: "Keepalive seconds",
+          forceDisableRetain: "Disable retained messages",
           interval: "Interval seconds",
           commandTopic: "Command topic",
           publishedTopics: "Published topics",
@@ -813,6 +817,7 @@
           mqttLiveHint: "Live protocol log. Each line is sent by the KioskMate backend while the test runs.",
           close: "Close",
           testConnection: "Test connection",
+          publishDiscovery: "Publish discovery",
           connected: "Connected",
           disconnected: "Disconnected",
           hardwareStatus: "Hardware status",
@@ -1003,7 +1008,11 @@
           mqttVersion: "MQTT-Version",
           username: "Benutzername",
           discoveryPrefix: "Discovery-Prefix",
+          baseTopic: "Base-Topic",
           node: "Node",
+          clientId: "Client-ID",
+          keepalive: "Keepalive Sekunden",
+          forceDisableRetain: "Retained Messages deaktivieren",
           interval: "Intervall Sekunden",
           commandTopic: "Command-Topic",
           publishedTopics: "Veröffentlichte Topics",
@@ -1011,6 +1020,7 @@
           mqttLiveHint: "Live-Protokoll. Jede Zeile kommt während des Tests direkt vom KioskMate-Backend.",
           close: "Schließen",
           testConnection: "Verbindung testen",
+          publishDiscovery: "Discovery veröffentlichen",
           connected: "Verbunden",
           disconnected: "Getrennt",
           hardwareStatus: "Hardware-Status",
@@ -1634,7 +1644,7 @@
         const mqtt = state.config?.mqtt || {};
         return `
           <div class="card">
-            <div class="head"><h3>${esc(t("mqttSettings"))}</h3><div class="actions">${button("testConnection", "mqtt-test")}${button("save", "mqtt-save", "primary")}</div></div>
+            <div class="head"><h3>${esc(t("mqttSettings"))}</h3><div class="actions">${button("testConnection", "mqtt-test")}${button("publishDiscovery", "mqtt-discovery")}${button("save", "mqtt-save", "primary")}</div></div>
             <div class="body grid">
               ${switchHtml("mqtt-enabled", t("enabled"), !!mqtt.enabled)}
               <div class="form-grid">
@@ -1643,8 +1653,12 @@
                 ${field("mqtt-user", t("username"), "text", "username", mqtt.username || "")}
                 ${field("mqtt-password", t("password"), "password", "current-password", mqtt.password || "")}
                 ${field("mqtt-discovery", t("discoveryPrefix"), "text", "", mqtt.discovery || "homeassistant")}
+                ${field("mqtt-base-topic", t("baseTopic"), "text", "", mqtt.base_topic || "kioskmate")}
                 ${field("mqtt-node", t("node"), "text", "", mqtt.node || "kioskmate")}
+                ${field("mqtt-client-id", t("clientId"), "text", "", mqtt.client_id || "")}
+                ${field("mqtt-keepalive", t("keepalive"), "number", "", secondsToDuration(mqtt.keepalive, 60))}
                 ${field("mqtt-interval", t("interval"), "number", "", secondsToDuration(mqtt.interval, 30))}
+                <div class="span-2">${switchHtml("mqtt-disable-retain", t("forceDisableRetain"), !!mqtt.force_disable_retain)}</div>
               </div>
               <div class="metric"><span class="muted">${esc(t("commandTopic"))}</span><strong id="mqtt-topic">${esc(commandTopic())}</strong></div>
               <pre id="mqtt-result" class="logbox"></pre>
@@ -2018,12 +2032,13 @@
       }
 
       function bindMQTT() {
-        ["mqtt-node", "mqtt-discovery"].forEach((id) => document.getElementById(id)?.addEventListener("input", () => {
+        ["mqtt-node", "mqtt-base-topic", "mqtt-discovery"].forEach((id) => document.getElementById(id)?.addEventListener("input", () => {
           const topic = document.getElementById("mqtt-topic");
           if (topic) topic.textContent = commandTopic();
         }));
         document.querySelector('[data-action="mqtt-save"]')?.addEventListener("click", saveMQTT);
         document.querySelector('[data-action="mqtt-test"]')?.addEventListener("click", testMQTT);
+        document.querySelector('[data-action="mqtt-discovery"]')?.addEventListener("click", publishMQTTDiscovery);
       }
 
       async function saveMQTT() {
@@ -2037,7 +2052,11 @@
             username: val("mqtt-user"),
             password: val("mqtt-password"),
             discovery: val("mqtt-discovery") || "homeassistant",
+            base_topic: val("mqtt-base-topic") || "kioskmate",
             node: val("mqtt-node") || "kioskmate",
+            client_id: val("mqtt-client-id"),
+            keepalive: durationToNs(val("mqtt-keepalive") || 60),
+            force_disable_retain: checked("mqtt-disable-retain"),
             interval: durationToNs(val("mqtt-interval")),
           });
           await postJSON("/api/config", cfg);
@@ -2056,7 +2075,11 @@
             username: val("mqtt-user"),
             password: val("mqtt-password"),
             discovery: val("mqtt-discovery") || "homeassistant",
+            base_topic: val("mqtt-base-topic") || "kioskmate",
             node: val("mqtt-node"),
+            client_id: val("mqtt-client-id"),
+            keepalive_seconds: Number(val("mqtt-keepalive") || 60),
+            force_disable_retain: checked("mqtt-disable-retain"),
           };
           if (output) output.textContent = `${t("loading")}...`;
           const controller = new AbortController();
@@ -2087,6 +2110,15 @@
             ? `${t("connected")} (${result.latency_ms} ms)\n${t("publishedTopics")}:\n${topics}`
             : `${t("disconnected")}: ${result.error || t("unknown")}`;
         }, t("testConnection"));
+      }
+
+      async function publishMQTTDiscovery() {
+        const output = document.getElementById("mqtt-result");
+        await runAction("mqtt-discovery", async () => {
+          const result = await postJSON("/api/mqtt/discovery", {});
+          if (!result.ok) throw new Error(result.error || t("failed"));
+          if (output) output.textContent = `${t("success")}: ${t("publishDiscovery")}\n${t("commandTopic")}: ${commandTopic()}`;
+        }, t("publishDiscovery"));
       }
 
       function bindHardware() {
@@ -2410,7 +2442,9 @@
       }
 
       function commandTopic() {
-        return "kioskmate/" + String(val("mqtt-node") || state.config?.mqtt?.node || "kioskmate").replace(/^\/+|\/+$/g, "") + "/command";
+        const base = String(val("mqtt-base-topic") || state.config?.mqtt?.base_topic || "kioskmate").replace(/^\/+|\/+$/g, "");
+        const node = String(val("mqtt-node") || state.config?.mqtt?.node || "kioskmate").replace(/^\/+|\/+$/g, "");
+        return `${base}/${node}/command`;
       }
 
       function objectEntries(obj) {

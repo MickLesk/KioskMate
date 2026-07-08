@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -53,6 +54,16 @@ func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, u
 	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}}
 }
 
+func (s *MQTTService) PublishNow() error {
+	if !s.cfg.MQTT.Enabled {
+		return errors.New("mqtt is disabled")
+	}
+	if s.cfg.MQTT.URL == "" {
+		return errors.New("mqtt url is empty")
+	}
+	return s.publishAll()
+}
+
 func (s *MQTTService) Run(ctx context.Context) {
 	var commandCancel context.CancelFunc
 	activeKey := ""
@@ -100,7 +111,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 		}
 		if !sleepContext(ctx, mqttInterval(s.cfg.MQTT.Interval)) {
 			if s.client != nil {
-				_ = s.client.Publish(s.root()+"/availability", []byte("offline"), true)
+				_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
 			}
 			return
 		}
@@ -133,15 +144,19 @@ func (s *MQTTService) connectionKey() string {
 		s.cfg.MQTT.URL,
 		s.cfg.MQTT.Username,
 		s.cfg.MQTT.Password,
+		s.cfg.MQTT.BaseTopic,
 		s.cfg.MQTT.Node,
+		s.cfg.MQTT.ClientID,
 		s.cfg.MQTT.Discovery,
 		s.cfg.MQTT.Version,
+		s.cfg.MQTT.KeepAlive.String(),
+		fmt.Sprint(s.cfg.MQTT.ForceDisableRetain),
 	}, "\x00")
 }
 
 func (s *MQTTService) closeClients() {
 	if s.client != nil {
-		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), true)
+		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
 		_ = s.client.Close()
 		s.client = nil
 	}
@@ -153,11 +168,12 @@ func (s *MQTTService) closeClients() {
 
 func (s *MQTTService) commands(ctx context.Context) {
 	client := &mqttclient.Client{
-		URL:      s.cfg.MQTT.URL,
-		ClientID: s.cfg.MQTT.Node + "_cmd",
-		Username: s.cfg.MQTT.Username,
-		Password: s.cfg.MQTT.Password,
-		Version:  s.cfg.MQTT.Version,
+		URL:       s.cfg.MQTT.URL,
+		ClientID:  firstNonEmpty(s.cfg.MQTT.ClientID, s.cfg.MQTT.Node) + "_cmd",
+		Username:  s.cfg.MQTT.Username,
+		Password:  s.cfg.MQTT.Password,
+		Version:   s.cfg.MQTT.Version,
+		KeepAlive: s.cfg.MQTT.KeepAlive,
 	}
 	s.command = client
 	topics := []string{
@@ -375,7 +391,7 @@ func (s *MQTTService) publishAll() error {
 	if err := client.Publish(root+"/state", payload, false); err != nil {
 		return err
 	}
-	_ = client.Publish(root+"/availability", []byte("online"), true)
+	_ = client.Publish(root+"/availability", []byte("online"), s.retained(true))
 	_ = s.publishState(client, "rss", fmt.Sprintf("%d", status.Stats.RSSMB), false)
 	_ = s.publishState(client, "cpu", fmt.Sprintf("%.1f", status.Stats.CPUPercent), false)
 	_ = s.publishState(client, "version", s.version, true)
@@ -825,7 +841,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 	for _, item := range items {
 		s.decorateDiscovery(item.Data)
 		payload, _ := json.Marshal(item.Data)
-		if err := client.Publish(item.Topic, payload, true); err != nil {
+		if err := client.Publish(item.Topic, payload, s.retained(true)); err != nil {
 			return err
 		}
 	}
@@ -880,7 +896,7 @@ func (s *MQTTService) cleanupLegacyDiscovery(client *mqttclient.Client, current 
 				continue
 			}
 			seen[topic] = true
-			if err := client.Publish(topic, []byte{}, true); err != nil {
+			if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
 				return err
 			}
 		}
@@ -1048,24 +1064,41 @@ func (s *MQTTService) publishState(client *mqttclient.Client, path string, value
 		return nil
 	}
 	s.cache[path] = value
-	return client.Publish(s.root()+"/"+path+"/state", []byte(value), retained)
+	return client.Publish(s.root()+"/"+path+"/state", []byte(value), s.retained(retained))
 }
 
 func (s *MQTTService) mqtt() *mqttclient.Client {
 	if s.client == nil {
 		s.client = &mqttclient.Client{
-			URL:      s.cfg.MQTT.URL,
-			ClientID: s.cfg.MQTT.Node,
-			Username: s.cfg.MQTT.Username,
-			Password: s.cfg.MQTT.Password,
-			Version:  s.cfg.MQTT.Version,
+			URL:       s.cfg.MQTT.URL,
+			ClientID:  firstNonEmpty(s.cfg.MQTT.ClientID, s.cfg.MQTT.Node),
+			Username:  s.cfg.MQTT.Username,
+			Password:  s.cfg.MQTT.Password,
+			Version:   s.cfg.MQTT.Version,
+			KeepAlive: s.cfg.MQTT.KeepAlive,
 		}
 	}
 	return s.client
 }
 
 func (s *MQTTService) root() string {
-	return "kioskmate/" + strings.Trim(s.cfg.MQTT.Node, "/")
+	base := strings.Trim(firstNonEmpty(s.cfg.MQTT.BaseTopic, "kioskmate"), "/")
+	node := strings.Trim(firstNonEmpty(s.cfg.MQTT.Node, "kioskmate"), "/")
+	return base + "/" + node
+}
+
+func (s *MQTTService) retained(retained bool) bool {
+	return retained && !s.cfg.MQTT.ForceDisableRetain
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *MQTTService) pageNames() []string {

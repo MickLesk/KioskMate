@@ -12,12 +12,13 @@ import (
 )
 
 type Client struct {
-	URL      string
-	ClientID string
-	Username string
-	Password string
-	Version  string
-	Timeout  time.Duration
+	URL       string
+	ClientID  string
+	Username  string
+	Password  string
+	Version   string
+	Timeout   time.Duration
+	KeepAlive time.Duration
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -29,6 +30,20 @@ func (c *Client) timeout() time.Duration {
 		return c.Timeout
 	}
 	return 6 * time.Second
+}
+
+func (c *Client) keepAlive() uint16 {
+	if c.KeepAlive <= 0 {
+		return 30
+	}
+	seconds := int(c.KeepAlive.Seconds())
+	if seconds <= 0 {
+		return 30
+	}
+	if seconds > 65535 {
+		return 65535
+	}
+	return uint16(seconds)
 }
 
 func (c *Client) Connect() error {
@@ -71,7 +86,7 @@ func (c *Client) connectLocked() error {
 		_ = c.closeLocked()
 		return err
 	}
-	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, 30, c.Version)); err != nil {
+	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, c.keepAlive(), c.Version)); err != nil {
 		_ = c.closeLocked()
 		return err
 	}
@@ -81,9 +96,9 @@ func (c *Client) connectLocked() error {
 		return err
 	}
 	_ = conn.SetDeadline(time.Time{})
-	if packet != packetConnAck || len(payload) < 2 || payload[1] != 0 {
+	if err := connAckError(packet, payload, c.Version); err != nil {
 		_ = c.closeLocked()
-		return fmt.Errorf("mqtt connack failed: packet=%d payload=%v", packet, payload)
+		return err
 	}
 	return nil
 }

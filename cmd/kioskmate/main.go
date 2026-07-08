@@ -65,7 +65,7 @@ func main() {
 	actionService := actions.New(cfg)
 	hardwareService := hardware.New()
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"))
-	server := admin.NewServer(cfg, browser, updateService, actionService, hardwareService, version, logger.With("component", "admin"))
+	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"))
 
 	if err := browser.Start(ctx); err != nil {
 		logger.Warn("initial browser start failed", "error", err)

@@ -90,14 +90,18 @@ type WatchdogConfig struct {
 }
 
 type MQTTConfig struct {
-	Enabled   bool          `json:"enabled"`
-	URL       string        `json:"url"`
-	Version   string        `json:"version"`
-	Username  string        `json:"username"`
-	Password  string        `json:"password"`
-	Discovery string        `json:"discovery"`
-	Node      string        `json:"node"`
-	Interval  time.Duration `json:"interval"`
+	Enabled            bool          `json:"enabled"`
+	URL                string        `json:"url"`
+	Version            string        `json:"version"`
+	Username           string        `json:"username"`
+	Password           string        `json:"password"`
+	Discovery          string        `json:"discovery"`
+	BaseTopic          string        `json:"base_topic"`
+	Node               string        `json:"node"`
+	ClientID           string        `json:"client_id"`
+	KeepAlive          time.Duration `json:"keepalive"`
+	ForceDisableRetain bool          `json:"force_disable_retain"`
+	Interval           time.Duration `json:"interval"`
 }
 
 type UpdateConfig struct {
@@ -259,7 +263,9 @@ func defaults(path string) Config {
 		MQTT: MQTTConfig{
 			Enabled:   false,
 			Discovery: "homeassistant",
+			BaseTopic: "kioskmate",
 			Node:      "kioskmate",
+			KeepAlive: 60 * time.Second,
 			Interval:  30 * time.Second,
 		},
 		Update: UpdateConfig{
@@ -333,6 +339,9 @@ func normalize(cfg *Config) {
 	if cfg.MQTT.Discovery == "" {
 		cfg.MQTT.Discovery = "homeassistant"
 	}
+	if cfg.MQTT.BaseTopic == "" {
+		cfg.MQTT.BaseTopic = "kioskmate"
+	}
 	if cfg.MQTT.Version == "" || !supportedMQTTVersion(cfg.MQTT.Version) {
 		cfg.MQTT.Version = "3.1.1"
 	}
@@ -341,6 +350,9 @@ func normalize(cfg *Config) {
 	}
 	if cfg.MQTT.Interval == 0 {
 		cfg.MQTT.Interval = 30 * time.Second
+	}
+	if cfg.MQTT.KeepAlive == 0 {
+		cfg.MQTT.KeepAlive = 60 * time.Second
 	}
 	if cfg.Update.Repository == "" || staleProjectValue(cfg.Update.Repository) {
 		cfg.Update.Repository = "MickLesk/KioskMate"
@@ -377,6 +389,10 @@ func Repair(cfg *Config) RepairReport {
 	if cfg.MQTT.Node == "" || staleProjectValue(cfg.MQTT.Node) {
 		cfg.MQTT.Node = "kioskmate"
 		add("mqtt_node", "MQTT node reset to kioskmate.", true)
+	}
+	if cfg.MQTT.BaseTopic == "" || staleProjectValue(cfg.MQTT.BaseTopic) {
+		cfg.MQTT.BaseTopic = "kioskmate"
+		add("mqtt_base_topic", "MQTT base topic reset to kioskmate.", true)
 	}
 	if cfg.MQTT.Version == "" || !supportedMQTTVersion(cfg.MQTT.Version) {
 		cfg.MQTT.Version = "3.1.1"
