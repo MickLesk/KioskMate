@@ -466,49 +466,119 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 			lines = value
 		}
 	}
+	source := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
+	if source == "" {
+		source = "combined"
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if _, err := exec.LookPath("journalctl"); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"lines": s.fallbackLogs(ctx, "journalctl not found"), "warning": "journalctl not found"})
-		return
-	}
-	out, err := exec.CommandContext(ctx, "journalctl", "--user", "-u", s.cfg.Update.Service, "-n", strconv.Itoa(lines), "--no-pager").CombinedOutput()
-	if err != nil {
-		fallback := s.fallbackLogs(ctx, strings.TrimSpace(string(out))+" "+err.Error())
-		writeJSON(w, http.StatusOK, map[string]any{"lines": fallback, "warning": "journalctl failed"})
-		return
-	}
-	text := strings.TrimSpace(string(out))
-	if text == "" || strings.Contains(text, "No journal files were found") || strings.Contains(text, "-- No entries --") {
-		writeJSON(w, http.StatusOK, map[string]any{"lines": s.fallbackLogs(ctx, text), "warning": "no journal entries"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"lines": strings.Split(text, "\n")})
+	result := s.logLines(ctx, source, lines)
+	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) fallbackLogs(ctx context.Context, reason string) []string {
+func (s *Server) logLines(ctx context.Context, source string, limit int) map[string]any {
+	sources := []string{"combined", "core", "browser", "journal", "status", "paths"}
+	result := map[string]any{"source": source, "sources": sources}
+	switch source {
+	case "core":
+		result["lines"] = labeledTail("core", config.LogFilePath(s.cfg.Path), limit)
+	case "browser":
+		result["lines"] = labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), limit)
+	case "journal":
+		lines, warning := s.journalLines(ctx, limit)
+		result["lines"] = lines
+		if warning != "" {
+			result["warning"] = warning
+		}
+	case "status":
+		result["lines"] = s.statusLines(ctx)
+	case "paths":
+		result["lines"] = s.logPathLines()
+	default:
+		result["source"] = "combined"
+		result["lines"] = s.combinedLogs(ctx, limit)
+	}
+	return result
+}
+
+func (s *Server) combinedLogs(ctx context.Context, limit int) []string {
 	var lines []string
-	if reason != "" {
-		lines = append(lines, reason)
+	lines = append(lines, labeledTail("core", config.LogFilePath(s.cfg.Path), limit/2)...)
+	lines = append(lines, labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), limit/2)...)
+	if journal, warning := s.journalLines(ctx, max(40, limit/4)); len(journal) > 0 {
+		lines = append(lines, sectionHeader("journal")...)
+		lines = append(lines, journal...)
+	} else if warning != "" {
+		lines = append(lines, sectionHeader("journal")...)
+		lines = append(lines, warning)
 	}
-	logFile := config.LogFilePath(s.cfg.Path)
-	if fileLines := readTail(logFile, 220); len(fileLines) > 0 {
-		lines = append(lines, "$ tail "+logFile)
-		lines = append(lines, fileLines...)
+	lines = append(lines, s.statusLines(ctx)...)
+	lines = append(lines, s.logPathLines()...)
+	if len(lines) == 0 {
+		return []string{"No logs available yet."}
 	}
+	return lines
+}
+
+func labeledTail(label string, path string, limit int) []string {
+	lines := sectionHeader(label + " log")
+	lines = append(lines, "$ tail "+path)
+	fileLines := readTail(path, max(1, limit))
+	if len(fileLines) == 0 {
+		lines = append(lines, "(empty or not found)")
+		return lines
+	}
+	return append(lines, fileLines...)
+}
+
+func (s *Server) journalLines(ctx context.Context, limit int) ([]string, string) {
+	if _, err := exec.LookPath("journalctl"); err != nil {
+		return nil, "journalctl not found"
+	}
+	out, err := exec.CommandContext(ctx, "journalctl", "--user", "-u", s.cfg.Update.Service, "-n", strconv.Itoa(max(1, limit)), "--no-pager").CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return splitLines(text), "journalctl failed: " + err.Error()
+	}
+	if text == "" || strings.Contains(text, "No journal files were found") || strings.Contains(text, "-- No entries --") {
+		return splitLines(text), "no journal entries"
+	}
+	return splitLines(text), ""
+}
+
+func (s *Server) statusLines(ctx context.Context) []string {
+	lines := sectionHeader("service status")
 	if out, err := exec.CommandContext(ctx, "systemctl", "--user", "status", s.cfg.Update.Service, "--no-pager", "--full").CombinedOutput(); len(out) > 0 || err != nil {
 		lines = append(lines, "$ systemctl --user status "+s.cfg.Update.Service+" --no-pager --full")
-		lines = append(lines, strings.Split(strings.TrimSpace(string(out)), "\n")...)
+		lines = append(lines, splitLines(strings.TrimSpace(string(out)))...)
 		if err != nil {
 			lines = append(lines, "error: "+err.Error())
 		}
+		return lines
 	}
-	lines = append(lines,
-		"Config: "+s.cfg.Path,
-		"Config backup: "+s.cfg.Path+".bak",
+	return append(lines, "(status unavailable)")
+}
+
+func (s *Server) logPathLines() []string {
+	return []string{
+		"== paths ==",
+		"Core log: " + config.LogFilePath(s.cfg.Path),
+		"Browser log: " + config.BrowserLogFilePath(s.cfg.Path),
+		"Config: " + s.cfg.Path,
+		"Config backup: " + s.cfg.Path + ".bak",
 		"Tip: run `kioskmate --admin-info` on the kiosk for full recovery paths.",
-	)
-	return lines
+	}
+}
+
+func sectionHeader(label string) []string {
+	return []string{"", "== " + label + " =="}
+}
+
+func splitLines(text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(text), "\n")
 }
 
 func readTail(path string, limit int) []string {

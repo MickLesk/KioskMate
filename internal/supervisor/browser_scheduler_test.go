@@ -84,7 +84,7 @@ func TestExpectedBrowserStopDoesNotRecordLastError(t *testing.T) {
 	browser.stopping = true
 	browser.mu.Unlock()
 
-	browser.wait(cmd)
+	browser.wait(cmd, nil)
 
 	status := browser.Status()
 	if status.LastError != "" {
@@ -108,7 +108,7 @@ func TestUnexpectedBrowserExitRecordsLastError(t *testing.T) {
 	browser.cmd = cmd
 	browser.mu.Unlock()
 
-	browser.wait(cmd)
+	browser.wait(cmd, nil)
 
 	status := browser.Status()
 	if status.LastError == "" {

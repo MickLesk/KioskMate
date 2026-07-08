@@ -361,6 +361,19 @@
         color: var(--red);
       }
 
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel-2);
+        color: var(--soft);
+        padding: 10px 12px;
+      }
+
+      .notice.warn {
+        border-color: color-mix(in srgb, var(--amber) 45%, var(--line));
+        color: var(--amber);
+      }
+
       .content {
         padding: 18px;
       }
@@ -1100,6 +1113,13 @@
           generateKey: "Generate SSH key",
           publicKey: "Public key",
           logLines: "Log lines",
+          logSource: "Log source",
+          logCombined: "Combined",
+          logCore: "KioskMate core",
+          logBrowser: "Browser",
+          logJournal: "Systemd journal",
+          logStatus: "Service status",
+          logPaths: "Paths",
           refreshLogs: "Refresh logs",
           adminSettings: "Admin settings",
           bindAddress: "Bind address",
@@ -1347,6 +1367,13 @@
           generateKey: "SSH-Key erstellen",
           publicKey: "Public Key",
           logLines: "Log-Zeilen",
+          logSource: "Log-Quelle",
+          logCombined: "Kombiniert",
+          logCore: "KioskMate Core",
+          logBrowser: "Browser",
+          logJournal: "Systemd Journal",
+          logStatus: "Service-Status",
+          logPaths: "Pfade",
           refreshLogs: "Logs aktualisieren",
           adminSettings: "Admin-Einstellungen",
           bindAddress: "Bind-Adresse",
@@ -1460,6 +1487,8 @@
         pageFilter: "",
         actionLog: [],
         logs: [],
+        logSource: localStorage.getItem("kioskmate.logSource") || "combined",
+        logWarning: "",
         ssh: null,
         terminal: "",
         jobs: [],
@@ -2166,16 +2195,28 @@
       }
 
       function renderLogs() {
+        const sources = [
+          ["combined", t("logCombined")],
+          ["core", t("logCore")],
+          ["browser", t("logBrowser")],
+          ["journal", t("logJournal")],
+          ["status", t("logStatus")],
+          ["paths", t("logPaths")],
+        ];
         return `
           <div class="card">
             <div class="head">
               <h3>${esc(t("logs"))}</h3>
               <div class="row">
                 <input id="log-lines" type="number" min="20" max="2000" value="300" />
+                <select id="log-source">${sources.map(([value, label]) => `<option value="${esc(value)}" ${state.logSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
                 <button data-busy="logs-refresh" data-action="logs-refresh">${esc(t("refreshLogs"))}</button>
               </div>
             </div>
-            <div class="body"><pre class="logbox">${esc((state.logs || []).join("\n"))}</pre></div>
+            <div class="body grid">
+              ${state.logWarning ? `<div class="notice warn">${esc(state.logWarning)}</div>` : ""}
+              <pre class="logbox">${esc((state.logs || []).join("\n"))}</pre>
+            </div>
           </div>`;
       }
 
@@ -2843,6 +2884,11 @@
 
       function bindLogs() {
         document.querySelector('[data-action="logs-refresh"]')?.addEventListener("click", refreshLogs);
+        document.getElementById("log-source")?.addEventListener("change", (event) => {
+          state.logSource = event.target.value;
+          localStorage.setItem("kioskmate.logSource", state.logSource);
+          refreshLogs().catch(() => {});
+        });
         if (!state.loaded.logs) {
           state.loaded.logs = true;
           refreshLogs().catch(() => {});
@@ -2851,8 +2897,11 @@
 
       async function refreshLogs() {
         await runAction("logs-refresh", async () => {
-          const result = await getJSON("/api/logs?lines=" + encodeURIComponent(val("log-lines") || "300"));
+          const source = state.logSource || "combined";
+          const result = await getJSON("/api/logs?source=" + encodeURIComponent(source) + "&lines=" + encodeURIComponent(val("log-lines") || "300"));
           state.logs = result.lines || [];
+          state.logSource = result.source || source;
+          state.logWarning = result.warning || "";
           renderApp();
         }, t("refreshLogs"));
       }

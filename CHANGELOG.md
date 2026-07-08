@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.0.1-alpha14
+
+- Added a dedicated browser log file at `~/.config/kioskmate/logs/browser.log`.
+- Extended Admin UI logs with selectable sources: combined, core, browser, systemd journal, service status and paths.
+- Improved log fallback behavior for user sessions where `journalctl --user` has no entries.
+- Added service/config/log path output to the Logs page for faster Raspberry Pi troubleshooting.
+- Kept browser stdout and stderr in both the service output and browser log file.
+
 ## v0.0.1-alpha13
 
 - Added one Home Assistant MQTT button entity per enabled kiosk page so automations can switch directly to a specific page.

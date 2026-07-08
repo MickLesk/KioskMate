@@ -233,6 +233,10 @@ func LogFilePath(path string) string {
 	return filepath.Join(ConfigDir(path), "logs", "kioskmate.log")
 }
 
+func BrowserLogFilePath(path string) string {
+	return filepath.Join(ConfigDir(path), "logs", "browser.log")
+}
+
 func defaults(path string) Config {
 	return Config{
 		Path:    path,

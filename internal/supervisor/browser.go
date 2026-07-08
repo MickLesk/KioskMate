@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -76,10 +77,20 @@ func (b *Browser) Start(ctx context.Context) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	logFile := b.openBrowserLog()
+	if logFile != nil {
+		writer := io.MultiWriter(os.Stdout, logFile)
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.SysProcAttr = processGroupAttr()
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		b.lastError = err.Error()
 		return err
 	}
@@ -90,9 +101,24 @@ func (b *Browser) Start(ctx context.Context) error {
 	b.lastError = ""
 	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command)
 
-	go b.wait(cmd)
+	go b.wait(cmd, logFile)
 	go b.watch(ctx, cmd.Process.Pid)
 	return nil
+}
+
+func (b *Browser) openBrowserLog() *os.File {
+	path := config.BrowserLogFilePath(b.cfg.Path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		b.logger.Warn("browser log directory failed", "path", path, "error", err)
+		return nil
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		b.logger.Warn("browser log open failed", "path", path, "error", err)
+		return nil
+	}
+	_, _ = fmt.Fprintf(file, "\n--- browser start %s ---\n", time.Now().Format(time.RFC3339))
+	return file
 }
 
 func (b *Browser) Stop(ctx context.Context) error {
@@ -223,7 +249,10 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 	}
 }
 
-func (b *Browser) wait(cmd *exec.Cmd) {
+func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
+	if logFile != nil {
+		defer logFile.Close()
+	}
 	err := cmd.Wait()
 	b.mu.Lock()
 	expected := b.stopping
