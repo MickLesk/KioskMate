@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.3
+
+- Added a stronger `low-power` performance profile for Raspberry Pi dashboards.
+- Tightened the existing `raspberry` profile to use one renderer, one raster thread and reduced GPU/raster features.
+- Changed Raspberry Safe Mode to use `chromium-lite`, `low-power` and GPU `auto` instead of software GPU rendering.
+- Added Admin UI and Home Assistant MQTT support for the `low-power` performance profile.
+- Added tests for low-power Chromium flags and Safe Mode browser settings.
+
 ## v0.1.2
 
 - Changed kiosk theme behavior so `dark` uses the website's native dark theme instead of forcing Chromium's expensive page-wide dark renderer.

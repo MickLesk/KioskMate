@@ -448,8 +448,9 @@ func Repair(cfg *Config) RepairReport {
 }
 
 func ApplyRaspberrySafeMode(cfg *Config) {
-	cfg.Performance.Profile = "raspberry"
-	cfg.Performance.GPUMode = "software"
+	cfg.Kiosk.BrowserPreset = "chromium-lite"
+	cfg.Performance.Profile = "low-power"
+	cfg.Performance.GPUMode = "auto"
 	cfg.Performance.ReduceMotion = true
 	cfg.Watchdog.Enabled = true
 	cfg.Watchdog.CheckInterval = 10 * time.Second
@@ -497,7 +498,7 @@ func supportedMQTTVersion(version string) bool {
 
 func supportedPerformanceProfile(profile string) bool {
 	switch strings.TrimSpace(strings.ToLower(profile)) {
-	case "quality", "balanced", "raspberry", "minimal", "conservative":
+	case "quality", "balanced", "raspberry", "low-power", "minimal", "conservative":
 		return true
 	default:
 		return false
@@ -582,7 +583,7 @@ func saveIfMissing(path string, cfg *Config) error {
 
 func defaultProfile() string {
 	if runtime.GOARCH == "arm64" {
-		return "raspberry"
+		return "low-power"
 	}
 	return "balanced"
 }

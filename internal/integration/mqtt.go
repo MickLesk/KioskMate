@@ -927,7 +927,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 				"unique_id":       s.cfg.MQTT.Node + "_performance_profile_select",
 				"command_topic":   s.root() + "/performance_profile/set",
 				"state_topic":     s.root() + "/performance_profile/state",
-				"options":         []string{"quality", "balanced", "raspberry", "minimal", "conservative"},
+				"options":         []string{"low-power", "raspberry", "minimal", "balanced", "quality", "conservative"},
 				"icon":            "mdi:speedometer",
 				"entity_category": "config",
 				"device":          device,
@@ -1587,7 +1587,7 @@ func validSchedulerMode(mode string) bool {
 
 func validPerformanceProfile(profile string) bool {
 	switch profile {
-	case "quality", "balanced", "raspberry", "minimal", "conservative":
+	case "quality", "balanced", "raspberry", "low-power", "minimal", "conservative":
 		return true
 	default:
 		return false

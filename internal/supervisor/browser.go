@@ -681,17 +681,8 @@ func performanceArgs(profile string) []string {
 			"--renderer-process-limit=1",
 			"--process-per-site",
 		}
-	case "raspberry":
-		return []string{
-			"--disable-dev-shm-usage",
-			"--disable-extensions",
-			"--disable-sync",
-			"--disable-print-preview",
-			"--disable-speech-api",
-			"--disable-notifications",
-			"--renderer-process-limit=2",
-			"--process-per-site",
-		}
+	case "raspberry", "low-power":
+		return raspberryLowPowerArgs()
 	case "quality":
 		return nil
 	default:
@@ -703,7 +694,7 @@ func performanceArgs(profile string) []string {
 	}
 }
 
-func chromiumLiteArgs() []string {
+func raspberryLowPowerArgs() []string {
 	return []string{
 		"--disable-dev-shm-usage",
 		"--disable-extensions",
@@ -711,11 +702,23 @@ func chromiumLiteArgs() []string {
 		"--disable-print-preview",
 		"--disable-speech-api",
 		"--disable-notifications",
+		"--renderer-process-limit=1",
+		"--process-per-site",
+		"--num-raster-threads=1",
+		"--enable-low-end-device-mode",
+		"--disable-gpu-rasterization",
+		"--disable-zero-copy",
+		"--disable-accelerated-2d-canvas",
+		"--disable-accelerated-video-decode",
+		"--disable-accelerated-video-encode",
+	}
+}
+
+func chromiumLiteArgs() []string {
+	return append(raspberryLowPowerArgs(),
 		"--disable-background-timer-throttling",
 		"--disable-renderer-backgrounding",
-		"--renderer-process-limit=2",
-		"--process-per-site",
-	}
+	)
 }
 
 func browserUserDataDir(cfg *config.Config, page int) string {

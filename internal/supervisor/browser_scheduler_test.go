@@ -123,7 +123,7 @@ func TestBrowserPresetArgs(t *testing.T) {
 	cfg.Kiosk.ExtraArgs = []string{"--flag"}
 
 	chromium := browserArgs(cfg, "chromium-lite", "http://ha.local", cfg.Kiosk.ExtraArgs, 0)
-	if !contains(chromium, "--renderer-process-limit=2") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
+	if !contains(chromium, "--renderer-process-limit=1") || !contains(chromium, "--num-raster-threads=1") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
 		t.Fatalf("chromium-lite args = %#v", chromium)
 	}
 	if !containsPrefix(chromium, "--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests") {
@@ -171,6 +171,14 @@ func TestPerformanceProfileArgs(t *testing.T) {
 	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
 	if contains(args, "--renderer-process-limit=1") || contains(args, "--renderer-process-limit=2") {
 		t.Fatalf("quality profile should not limit renderers: %#v", args)
+	}
+
+	cfg.Performance.Profile = "raspberry"
+	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
+	for _, want := range []string{"--renderer-process-limit=1", "--num-raster-threads=1", "--enable-low-end-device-mode", "--disable-gpu-rasterization"} {
+		if !contains(args, want) {
+			t.Fatalf("raspberry profile missing %s in %#v", want, args)
+		}
 	}
 }
 

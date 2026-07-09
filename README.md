@@ -10,7 +10,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - External Chromium rendering instead of bundling Electron.
 - Embedded Admin UI with setup token, password login and session protection.
 - Kiosk page management with manual switching, rotation and time rules.
-- Performance profiles for Raspberry Pi and small kiosk hardware.
+- Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.
@@ -96,7 +96,7 @@ For amd64, use the `_amd64.deb` asset.
     "zoom_percent": 125
   },
   "performance": {
-    "profile": "raspberry",
+    "profile": "low-power",
     "gpu_mode": "auto",
     "reduce_motion": true
   },
@@ -110,6 +110,8 @@ For amd64, use the `_amd64.deb` asset.
 ```
 
 Durations are currently stored as Go JSON durations in nanoseconds. The watchdog treats memory pressure as the main automatic restart signal. CPU-only pressure is tolerated for at least 10 minutes and automatic watchdog restarts are rate-limited to avoid restart loops on busy Raspberry Pi dashboards.
+
+For dashboards with sustained Chromium CPU/GPU load on Raspberry Pi hardware, use **Settings -> Browser and performance -> Performance profile -> Low power** or apply **Safe Mode**. Chromium will still show several processes for a single kiosk window; the low-power profile reduces renderer/raster parallelism and expensive GPU raster features.
 
 ## MQTT
 

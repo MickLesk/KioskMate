@@ -155,6 +155,21 @@ func TestLoadNormalizesKioskTheme(t *testing.T) {
 	}
 }
 
+func TestRaspberrySafeModeUsesLowPowerBrowser(t *testing.T) {
+	cfg := defaults("")
+	ApplyRaspberrySafeMode(&cfg)
+
+	if cfg.Kiosk.BrowserPreset != "chromium-lite" {
+		t.Fatalf("browser preset = %s, want chromium-lite", cfg.Kiosk.BrowserPreset)
+	}
+	if cfg.Performance.Profile != "low-power" {
+		t.Fatalf("profile = %s, want low-power", cfg.Performance.Profile)
+	}
+	if cfg.Performance.GPUMode != "auto" {
+		t.Fatalf("gpu mode = %s, want auto", cfg.Performance.GPUMode)
+	}
+}
+
 func TestSaveBacksUpChangedConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")
