@@ -174,20 +174,20 @@ func TestPerformanceProfileArgs(t *testing.T) {
 	}
 }
 
-func TestKioskDarkThemeForcesChromiumDarkMode(t *testing.T) {
+func TestKioskForceDarkThemeForcesChromiumDarkMode(t *testing.T) {
 	cfg := schedulerTestConfig()
 	cfg.Kiosk.UserDataDir = t.TempDir()
-	cfg.Kiosk.Theme = "dark"
+	cfg.Kiosk.Theme = "force-dark"
 
 	args := browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
 	if !contains(args, "--force-dark-mode") || !contains(args, "--enable-features=WebContentsForceDark") {
-		t.Fatalf("dark theme args = %#v", args)
+		t.Fatalf("force-dark theme args = %#v", args)
 	}
 
-	cfg.Kiosk.Theme = "light"
+	cfg.Kiosk.Theme = "dark"
 	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
 	if contains(args, "--force-dark-mode") {
-		t.Fatalf("light theme should not force dark mode: %#v", args)
+		t.Fatalf("native dark theme should not force Chromium dark mode: %#v", args)
 	}
 }
 

@@ -955,6 +955,7 @@
           theme: "Theme",
           dark: "Dark",
           light: "Light",
+          forceDark: "Force dark (slower)",
           logout: "Logout",
           refresh: "Refresh",
           save: "Save",
@@ -1230,6 +1231,7 @@
           theme: "Theme",
           dark: "Dunkel",
           light: "Hell",
+          forceDark: "Dunkel erzwingen (langsamer)",
           logout: "Abmelden",
           refresh: "Aktualisieren",
           save: "Speichern",
@@ -2366,7 +2368,7 @@
                 ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
                 ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
                 <div class="span-2">${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}</div>
-                ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")]])}
+                ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")], ["force-dark", t("forceDark")]])}
                 ${field("kiosk-zoom", t("zoomPercent"), "number", "", kiosk.zoom_percent || 125)}
                 ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "raspberry", [["raspberry", t("raspberry")], ["minimal", t("minimal")], ["balanced", t("balanced")], ["quality", t("quality")], ["conservative", t("conservative")]])}
                 ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}

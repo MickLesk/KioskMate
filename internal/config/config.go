@@ -325,6 +325,7 @@ func normalize(cfg *Config) {
 	if cfg.Kiosk.Theme == "" {
 		cfg.Kiosk.Theme = "dark"
 	}
+	cfg.Kiosk.Theme = NormalizeKioskTheme(cfg.Kiosk.Theme)
 	if cfg.Kiosk.ZoomPercent == 0 {
 		cfg.Kiosk.ZoomPercent = 125
 	}
@@ -500,6 +501,15 @@ func supportedPerformanceProfile(profile string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func NormalizeKioskTheme(theme string) string {
+	switch strings.TrimSpace(strings.ToLower(theme)) {
+	case "light", "dark", "force-dark":
+		return strings.TrimSpace(strings.ToLower(theme))
+	default:
+		return "dark"
 	}
 }
 

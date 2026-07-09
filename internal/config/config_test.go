@@ -130,6 +130,31 @@ func TestLoadMigratesAggressiveWatchdogDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadNormalizesKioskTheme(t *testing.T) {
+	home := testHome(t)
+	path := filepath.Join(home, ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{
+  "version": 2,
+  "admin": {"bind": "0.0.0.0", "port": 33333},
+  "kiosk": {"theme": "force-dark", "pages": [{"name": "Main", "url": "http://homeassistant.local:8123"}]},
+  "update": {"repository": "MickLesk/KioskMate", "service": "kioskmate.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Kiosk.Theme != "force-dark" {
+		t.Fatalf("theme = %s, want force-dark", cfg.Kiosk.Theme)
+	}
+
+	cfg.Kiosk.Theme = "invalid"
+	normalize(cfg)
+	if cfg.Kiosk.Theme != "dark" {
+		t.Fatalf("invalid theme normalized to %s, want dark", cfg.Kiosk.Theme)
+	}
+}
+
 func TestSaveBacksUpChangedConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")

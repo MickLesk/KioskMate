@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.2
+
+- Changed kiosk theme behavior so `dark` uses the website's native dark theme instead of forcing Chromium's expensive page-wide dark renderer.
+- Added explicit `force-dark` theme mode for installations that still need Chromium ForceDark, with Admin UI and MQTT config support.
+- Updated tests and documentation to cover native dark versus forced dark behavior.
+
 ## v0.1.1
 
 - Fixed a browser restart loop where CPU-only watchdog pressure could restart Chromium about once per minute on Raspberry Pi dashboards.

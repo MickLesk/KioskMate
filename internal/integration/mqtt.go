@@ -369,6 +369,9 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	case strings.HasSuffix(topic, "/isolate_page_sessions/set"):
 		s.cfg.Kiosk.IsolateSessions = boolCommand(command)
 		err = config.Save(s.cfg)
+	case strings.HasSuffix(topic, "/kiosk_theme/set"):
+		s.cfg.Kiosk.Theme = config.NormalizeKioskTheme(command)
+		err = config.Save(s.cfg)
 	case strings.HasSuffix(topic, "/watchdog_enabled/set"):
 		s.cfg.Watchdog.Enabled = boolCommand(command)
 		err = config.Save(s.cfg)
@@ -494,6 +497,7 @@ func (s *MQTTService) publishAll() error {
 	}
 	_ = s.publishState(client, "performance_profile", s.cfg.Performance.Profile, true)
 	_ = s.publishState(client, "gpu_mode", s.cfg.Performance.GPUMode, true)
+	_ = s.publishState(client, "kiosk_theme", s.cfg.Kiosk.Theme, true)
 	_ = s.publishState(client, "reduce_motion", boolState(s.cfg.Performance.ReduceMotion), true)
 	_ = s.publishState(client, "isolate_page_sessions", boolState(s.cfg.Kiosk.IsolateSessions), true)
 	_ = s.publishState(client, "watchdog_enabled", boolState(s.cfg.Watchdog.Enabled), true)
@@ -904,6 +908,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 			},
 		},
 		{
+			Topic: s.discoveryTopic("select", "kiosk_theme"),
+			Data: map[string]any{
+				"name":            "Kiosk Theme",
+				"unique_id":       s.cfg.MQTT.Node + "_kiosk_theme_select",
+				"command_topic":   s.root() + "/kiosk_theme/set",
+				"state_topic":     s.root() + "/kiosk_theme/state",
+				"options":         []string{"dark", "light", "force-dark"},
+				"icon":            "mdi:theme-light-dark",
+				"entity_category": "config",
+				"device":          device,
+			},
+		},
+		{
 			Topic: s.discoveryTopic("select", "performance_profile"),
 			Data: map[string]any{
 				"name":            "Performance Profile",
@@ -1077,6 +1094,7 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"switch", "isolate_page_sessions"},
 		[2]string{"select", "page_name"},
 		[2]string{"select", "scheduler_mode"},
+		[2]string{"select", "kiosk_theme"},
 		[2]string{"select", "performance_profile"},
 		[2]string{"select", "gpu_mode"},
 		[2]string{"number", "scheduler_tick"},
