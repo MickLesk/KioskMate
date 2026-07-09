@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.4
+
+- Stabilized Raspberry Pi low-power browser startup by removing risky GPU/raster feature overrides from the default `raspberry` and `low-power` profiles.
+- Kept the safer CPU and process reductions for low-power mode: one renderer, one raster thread and background-service reductions.
+- Added automatic repair for stale browser profile paths that still point to old TouchKio/KioskMate alpha directories.
+- Improved browser diagnostics so very fast Chromium exits are shown as a visible last error even when Chromium exits without stderr output.
+- Logged the full browser launch arguments in the core log for easier Raspberry Pi troubleshooting.
+
 ## v0.1.3
 
 - Added a stronger `low-power` performance profile for Raspberry Pi dashboards.

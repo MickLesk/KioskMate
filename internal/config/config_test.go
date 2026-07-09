@@ -170,6 +170,21 @@ func TestRaspberrySafeModeUsesLowPowerBrowser(t *testing.T) {
 	}
 }
 
+func TestRepairMigratesStaleBrowserProfilePath(t *testing.T) {
+	home := testHome(t)
+	cfg := defaults(filepath.Join(home, ".config", "kioskmate", "config.json"))
+	cfg.Kiosk.UserDataDir = filepath.Join(home, ".config", "touchkio-v2", "Browser")
+
+	report := Repair(&cfg)
+
+	if cfg.Kiosk.UserDataDir != filepath.Join(home, ".config", "kioskmate", "Browser") {
+		t.Fatalf("user data dir = %s", cfg.Kiosk.UserDataDir)
+	}
+	if !report.Changed {
+		t.Fatal("expected repair report to mark config as changed")
+	}
+}
+
 func TestSaveBacksUpChangedConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")

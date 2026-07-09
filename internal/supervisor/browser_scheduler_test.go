@@ -117,6 +117,28 @@ func TestUnexpectedBrowserExitRecordsLastError(t *testing.T) {
 	}
 }
 
+func TestQuickSuccessfulBrowserExitRecordsLastError(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.BrowserPreset = "custom"
+	cfg.Kiosk.BrowserCommand = "go"
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cmd := exec.Command("go", "version")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("go command unavailable: %v", err)
+	}
+	browser.mu.Lock()
+	browser.cmd = cmd
+	browser.started = time.Now()
+	browser.mu.Unlock()
+
+	browser.wait(cmd, nil)
+
+	status := browser.Status()
+	if status.LastError == "" || !strings.Contains(status.LastError, "without error") {
+		t.Fatalf("expected quick successful exit to be visible, got %q", status.LastError)
+	}
+}
+
 func TestBrowserPresetArgs(t *testing.T) {
 	cfg := schedulerTestConfig()
 	cfg.Kiosk.UserDataDir = t.TempDir()
@@ -175,9 +197,14 @@ func TestPerformanceProfileArgs(t *testing.T) {
 
 	cfg.Performance.Profile = "raspberry"
 	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
-	for _, want := range []string{"--renderer-process-limit=1", "--num-raster-threads=1", "--enable-low-end-device-mode", "--disable-gpu-rasterization"} {
+	for _, want := range []string{"--renderer-process-limit=1", "--num-raster-threads=1", "--disable-dev-shm-usage"} {
 		if !contains(args, want) {
 			t.Fatalf("raspberry profile missing %s in %#v", want, args)
+		}
+	}
+	for _, risky := range []string{"--enable-low-end-device-mode", "--disable-gpu-rasterization", "--disable-zero-copy"} {
+		if contains(args, risky) {
+			t.Fatalf("raspberry profile should not include risky startup flag %s in %#v", risky, args)
 		}
 	}
 }

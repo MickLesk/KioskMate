@@ -129,7 +129,7 @@ func (b *Browser) Start(ctx context.Context) error {
 	b.lastStat = system.ProcessTreeStats{}
 	b.hotSince = time.Time{}
 	b.lastError = ""
-	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command)
+	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command, "args", args)
 
 	go b.wait(cmd, logFile)
 	go b.watch(ctx, cmd.Process.Pid)
@@ -292,6 +292,10 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	err := cmd.Wait()
 	b.mu.Lock()
 	expected := b.stopping
+	runtime := time.Duration(0)
+	if b.cmd == cmd && !b.started.IsZero() {
+		runtime = time.Since(b.started)
+	}
 	if b.cmd == cmd {
 		b.cmd = nil
 	}
@@ -301,13 +305,23 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		b.stopping = false
 	} else if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		b.lastError = err.Error()
+		if runtime > 0 && runtime < 5*time.Second {
+			b.lastError = fmt.Sprintf("browser exited after %s: %v", runtime.Round(time.Millisecond), err)
+		}
+	} else if runtime > 0 && runtime < 5*time.Second {
+		b.lastError = fmt.Sprintf("browser exited after %s without error", runtime.Round(time.Millisecond))
 	}
+	lastError := b.lastError
 	b.mu.Unlock()
 	if err != nil && !expected && !errors.Is(err, os.ErrProcessDone) {
-		b.logger.Warn("browser exited", "error", err)
+		b.logger.Warn("browser exited", "error", err, "runtime", runtime)
 		return
 	}
-	b.logger.Info("browser exited")
+	if !expected && lastError != "" {
+		b.logger.Warn("browser exited unexpectedly", "error", lastError, "runtime", runtime)
+		return
+	}
+	b.logger.Info("browser exited", "runtime", runtime)
 }
 
 func (b *Browser) watch(ctx context.Context, pid int) {
@@ -705,12 +719,6 @@ func raspberryLowPowerArgs() []string {
 		"--renderer-process-limit=1",
 		"--process-per-site",
 		"--num-raster-threads=1",
-		"--enable-low-end-device-mode",
-		"--disable-gpu-rasterization",
-		"--disable-zero-copy",
-		"--disable-accelerated-2d-canvas",
-		"--disable-accelerated-video-decode",
-		"--disable-accelerated-video-encode",
 	}
 }
 

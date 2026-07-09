@@ -319,7 +319,7 @@ func normalize(cfg *Config) {
 	if cfg.Kiosk.BrowserPreset == "" {
 		cfg.Kiosk.BrowserPreset = "chromium"
 	}
-	if cfg.Kiosk.UserDataDir == "" {
+	if cfg.Kiosk.UserDataDir == "" || staleProjectValue(cfg.Kiosk.UserDataDir) {
 		cfg.Kiosk.UserDataDir = defaultBrowserDataDir()
 	}
 	if cfg.Kiosk.Theme == "" {
@@ -434,6 +434,10 @@ func Repair(cfg *Config) RepairReport {
 	if cfg.MQTT.Version == "" || !supportedMQTTVersion(cfg.MQTT.Version) {
 		cfg.MQTT.Version = "3.1.1"
 		add("mqtt_version", "MQTT protocol reset to 3.1.1 because the configured version is unsupported.", true)
+	}
+	if cfg.Kiosk.UserDataDir == "" || staleProjectValue(cfg.Kiosk.UserDataDir) {
+		cfg.Kiosk.UserDataDir = defaultBrowserDataDir()
+		add("browser_profile", "Browser profile path reset to KioskMate config directory.", true)
 	}
 	if len(cfg.Kiosk.PageURLs()) == 0 {
 		cfg.Kiosk.Pages = []KioskPage{{Name: "Home Assistant Demo", URL: "https://demo.home-assistant.io"}}
