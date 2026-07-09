@@ -1018,6 +1018,9 @@
           watchdogPressure: "Watchdog pressure",
           watchdogLastRestart: "Watchdog last restart",
           watchdogLimits: "Watchdog limits",
+          watchdogAction: "Watchdog action",
+          watchdogSuppressedUntil: "Restarts suppressed until",
+          watchdogRestartWindow: "Restarts in window",
           watchdogKilledHint: "The browser was killed by the watchdog. Check the watchdog reason and browser logs.",
           browserStarts: "Browser starts",
           browserRestarts: "Browser restarts",
@@ -1290,6 +1293,9 @@
           watchdogPressure: "Watchdog-Druck",
           watchdogLastRestart: "Letzter Watchdog-Restart",
           watchdogLimits: "Watchdog-Limits",
+          watchdogAction: "Watchdog-Aktion",
+          watchdogSuppressedUntil: "Restarts unterdrückt bis",
+          watchdogRestartWindow: "Restarts im Zeitfenster",
           watchdogKilledHint: "Der Browser wurde vom Watchdog beendet. Prüfe Watchdog-Grund und Browser-Logs.",
           browserStarts: "Browser-Starts",
           browserRestarts: "Browser-Restarts",
@@ -1996,6 +2002,9 @@
                     [t("browserRestarts"), browser.restart_count ?? 0],
                     [t("watchdogPressure"), watchdog.pressure || "normal"],
                     [t("watchdogLastRestart"), formatDate(watchdog.last_restart)],
+                    [t("watchdogAction"), watchdog.last_action || "-"],
+                    [t("watchdogSuppressedUntil"), formatDate(watchdog.suppressed_until)],
+                    [t("watchdogRestartWindow"), watchdog.restart_window_count ?? 0],
                     [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
                   ])}
                   ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
@@ -2055,6 +2064,7 @@
                   <div class="status-grid">
                     ${metric(t("watchdogPressure"), watchdog.pressure || "normal", `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`)}
                     ${metric(t("watchdogLastRestart"), formatDate(watchdog.last_restart), watchdog.hot_since ? `${t("reason")}: ${watchdog.pressure}` : "")}
+                    ${metric(t("watchdogAction"), watchdog.last_action || "-", watchdog.suppressed_until ? `${t("watchdogSuppressedUntil")}: ${formatDate(watchdog.suppressed_until)}` : `${t("watchdogRestartWindow")}: ${watchdog.restart_window_count ?? 0}`)}
                   </div>
                   <div class="primary-actions">
                     ${button("activatePage", "page-activate", "primary")}
@@ -2365,8 +2375,8 @@
                 <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
                 <div class="span-2">${switchHtml("watchdog-enabled", t("watchdogEnabled"), watchdog.enabled !== false)}</div>
                 ${field("watchdog-rss", t("maxMemory"), "number", "", watchdog.max_rss_mb || 900)}
-                ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 180)}
-                ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 45))}
+                ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 300)}
+                ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 600))}
                 ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
                 <div class="span-2">${state.diagnostics ? kvTable(objectEntries(state.diagnostics)) : `<p class="hint">${esc(t("safeModeHint"))}</p>`}</div>
               </div>
@@ -3121,7 +3131,7 @@
           cfg.performance.reduce_motion = checked("perf-reduce");
           cfg.watchdog.enabled = checked("watchdog-enabled");
           cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
-          cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 180);
+          cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 300);
           cfg.watchdog.cpu_grace = durationToNs(val("watchdog-grace"));
           cfg.watchdog.check_interval = durationToNs(val("watchdog-interval"));
           await postJSON("/api/config", cfg);

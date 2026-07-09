@@ -103,12 +103,13 @@ For amd64, use the `_amd64.deb` asset.
   "watchdog": {
     "enabled": true,
     "max_rss_mb": 900,
-    "max_cpu_percent": 180
+    "max_cpu_percent": 300,
+    "cpu_grace": 600000000000
   }
 }
 ```
 
-Durations are currently stored as Go JSON durations in nanoseconds.
+Durations are currently stored as Go JSON durations in nanoseconds. The watchdog treats memory pressure as the main automatic restart signal. CPU-only pressure is tolerated for at least 10 minutes and automatic watchdog restarts are rate-limited to avoid restart loops on busy Raspberry Pi dashboards.
 
 ## MQTT
 

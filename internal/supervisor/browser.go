@@ -34,6 +34,7 @@ type Browser struct {
 	lastError     string
 	lastExit      time.Time
 	watchdog      WatchdogStatus
+	watchdogRuns  []time.Time
 	scheduler     SchedulerStatus
 	rotationIndex int
 	rotationUntil time.Time
@@ -58,16 +59,26 @@ type Status struct {
 }
 
 type WatchdogStatus struct {
-	Enabled       bool       `json:"enabled"`
-	MaxRSSMB      uint64     `json:"max_rss_mb"`
-	MaxCPUPercent float64    `json:"max_cpu_percent"`
-	CheckInterval int        `json:"check_interval_seconds"`
-	CPUGrace      int        `json:"cpu_grace_seconds"`
-	HotSince      *time.Time `json:"hot_since,omitempty"`
-	LastRestart   *time.Time `json:"last_restart,omitempty"`
-	LastReason    string     `json:"last_reason,omitempty"`
-	Pressure      string     `json:"pressure"`
+	Enabled            bool       `json:"enabled"`
+	MaxRSSMB           uint64     `json:"max_rss_mb"`
+	MaxCPUPercent      float64    `json:"max_cpu_percent"`
+	CheckInterval      int        `json:"check_interval_seconds"`
+	CPUGrace           int        `json:"cpu_grace_seconds"`
+	HotSince           *time.Time `json:"hot_since,omitempty"`
+	LastRestart        *time.Time `json:"last_restart,omitempty"`
+	LastReason         string     `json:"last_reason,omitempty"`
+	LastAction         string     `json:"last_action,omitempty"`
+	SuppressedUntil    *time.Time `json:"suppressed_until,omitempty"`
+	RestartWindowCount int        `json:"restart_window_count"`
+	Pressure           string     `json:"pressure"`
 }
+
+const (
+	watchdogRestartWindow       = 30 * time.Minute
+	watchdogSuppressDuration    = 30 * time.Minute
+	watchdogMaxRestartsInWindow = 3
+	watchdogMinCPUOnlyGrace     = 10 * time.Minute
+)
 
 type SchedulerStatus struct {
 	Enabled       bool       `json:"enabled"`
@@ -322,8 +333,15 @@ func (b *Browser) watch(ctx context.Context, pid int) {
 			}
 			if restart {
 				now := time.Now()
+				if !b.watchdogRestartAllowedLocked(now) {
+					until := b.watchdog.SuppressedUntil
+					b.mu.Unlock()
+					b.logger.Warn("browser watchdog restart suppressed", "reason", reason, "suppressed_until", until)
+					continue
+				}
 				b.watchdog.LastRestart = &now
 				b.watchdog.LastReason = reason
+				b.watchdog.LastAction = "restart"
 			}
 			b.mu.Unlock()
 			if restart {
@@ -349,7 +367,37 @@ func (b *Browser) shouldRestart(stats system.ProcessTreeStats) (bool, string) {
 		b.hotSince = time.Now()
 		return false, reason
 	}
-	return time.Since(b.hotSince) >= b.cfg.Watchdog.CPUGrace, reason
+	grace := b.cfg.Watchdog.CPUGrace
+	if overCPU && !overRSS && grace < watchdogMinCPUOnlyGrace {
+		grace = watchdogMinCPUOnlyGrace
+	}
+	return time.Since(b.hotSince) >= grace, reason
+}
+
+func (b *Browser) watchdogRestartAllowedLocked(now time.Time) bool {
+	if b.watchdog.SuppressedUntil != nil && now.Before(*b.watchdog.SuppressedUntil) {
+		b.watchdog.LastAction = "restart suppressed"
+		return false
+	}
+	cutoff := now.Add(-watchdogRestartWindow)
+	var recent []time.Time
+	for _, item := range b.watchdogRuns {
+		if item.After(cutoff) {
+			recent = append(recent, item)
+		}
+	}
+	b.watchdogRuns = recent
+	b.watchdog.RestartWindowCount = len(recent)
+	if len(recent) >= watchdogMaxRestartsInWindow {
+		until := now.Add(watchdogSuppressDuration)
+		b.watchdog.SuppressedUntil = &until
+		b.watchdog.LastAction = "restart suppressed"
+		return false
+	}
+	b.watchdogRuns = append(b.watchdogRuns, now)
+	b.watchdog.RestartWindowCount = len(b.watchdogRuns)
+	b.watchdog.SuppressedUntil = nil
+	return true
 }
 
 func (b *Browser) watchdogReason(stats system.ProcessTreeStats, overRSS bool, overCPU bool) string {
@@ -374,6 +422,7 @@ func (b *Browser) watchdogStatusLocked() WatchdogStatus {
 		hotSince := b.hotSince
 		status.HotSince = &hotSince
 	}
+	status.RestartWindowCount = len(b.watchdogRuns)
 	if status.Pressure == "" {
 		status.Pressure = "normal"
 	}

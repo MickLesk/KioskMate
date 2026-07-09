@@ -270,8 +270,8 @@ func defaults(path string) Config {
 			Enabled:       true,
 			CheckInterval: 10 * time.Second,
 			MaxRSSMB:      900,
-			MaxCPUPercent: 180,
-			CPUGrace:      45 * time.Second,
+			MaxCPUPercent: 300,
+			CPUGrace:      10 * time.Minute,
 		},
 		MQTT: MQTTConfig{
 			Enabled:   false,
@@ -350,7 +350,10 @@ func normalize(cfg *Config) {
 		cfg.Watchdog.CheckInterval = 10 * time.Second
 	}
 	if cfg.Watchdog.CPUGrace == 0 {
-		cfg.Watchdog.CPUGrace = 45 * time.Second
+		cfg.Watchdog.CPUGrace = 10 * time.Minute
+	}
+	if cfg.Watchdog.CPUGrace == 45*time.Second || cfg.Watchdog.CPUGrace == 120*time.Second {
+		cfg.Watchdog.CPUGrace = 10 * time.Minute
 	}
 	if cfg.Watchdog.MaxRSSMB == 0 {
 		cfg.Watchdog.MaxRSSMB = 900
@@ -361,8 +364,8 @@ func normalize(cfg *Config) {
 	if cfg.Performance.Profile == "raspberry" && cfg.Watchdog.MaxCPUPercent == 160 {
 		cfg.Watchdog.MaxCPUPercent = 220
 	}
-	if cfg.Watchdog.MaxCPUPercent == 0 {
-		cfg.Watchdog.MaxCPUPercent = 180
+	if cfg.Watchdog.MaxCPUPercent == 0 || cfg.Watchdog.MaxCPUPercent == 180 || cfg.Watchdog.MaxCPUPercent == 220 {
+		cfg.Watchdog.MaxCPUPercent = 300
 	}
 	if cfg.MQTT.Discovery == "" {
 		cfg.MQTT.Discovery = "homeassistant"
@@ -449,9 +452,9 @@ func ApplyRaspberrySafeMode(cfg *Config) {
 	cfg.Performance.ReduceMotion = true
 	cfg.Watchdog.Enabled = true
 	cfg.Watchdog.CheckInterval = 10 * time.Second
-	cfg.Watchdog.CPUGrace = 120 * time.Second
+	cfg.Watchdog.CPUGrace = 10 * time.Minute
 	cfg.Watchdog.MaxRSSMB = 1200
-	cfg.Watchdog.MaxCPUPercent = 220
+	cfg.Watchdog.MaxCPUPercent = 300
 	cfg.Kiosk.ExtraArgs = appendUnique(cfg.Kiosk.ExtraArgs,
 		"--disable-dev-shm-usage",
 		"--disable-extensions",

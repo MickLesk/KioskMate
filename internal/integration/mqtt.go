@@ -499,12 +499,19 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "watchdog_enabled", boolState(s.cfg.Watchdog.Enabled), true)
 	_ = s.publishState(client, "watchdog_pressure", firstString(status.Watchdog.Pressure, "normal"), false)
 	_ = s.publishState(client, "watchdog_last_reason", firstString(status.Watchdog.LastReason, "none"), false)
+	_ = s.publishState(client, "watchdog_last_action", firstString(status.Watchdog.LastAction, "none"), false)
+	_ = s.publishState(client, "watchdog_restart_window_count", fmt.Sprintf("%d", status.Watchdog.RestartWindowCount), false)
 	_ = s.publishState(client, "watchdog_rss_limit", fmt.Sprintf("%d", status.Watchdog.MaxRSSMB), true)
 	_ = s.publishState(client, "watchdog_cpu_limit", trimFloat(status.Watchdog.MaxCPUPercent), true)
 	if status.Watchdog.LastRestart != nil {
 		_ = s.publishState(client, "watchdog_last_restart", status.Watchdog.LastRestart.Format(time.RFC3339), false)
 	} else {
 		_ = s.publishState(client, "watchdog_last_restart", "none", false)
+	}
+	if status.Watchdog.SuppressedUntil != nil {
+		_ = s.publishState(client, "watchdog_suppressed_until", status.Watchdog.SuppressedUntil.Format(time.RFC3339), false)
+	} else {
+		_ = s.publishState(client, "watchdog_suppressed_until", "none", false)
 	}
 	_ = s.publishState(client, "heartbeat", time.Now().Format("2006-01-02T15:04:05"), false)
 	_ = s.publishSystemStates(client, hw)
@@ -706,7 +713,10 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 		s.sensor(device, "gpu_mode", "GPU Mode", "mdi:chip", ""),
 		s.diagnosticSensor(device, "watchdog_pressure", "Watchdog Pressure", "mdi:gauge", ""),
 		s.diagnosticSensor(device, "watchdog_last_reason", "Watchdog Last Reason", "mdi:alert-circle-check", ""),
+		s.diagnosticSensor(device, "watchdog_last_action", "Watchdog Last Action", "mdi:shield-sync", ""),
 		s.diagnosticSensor(device, "watchdog_last_restart", "Watchdog Last Restart", "mdi:restart-alert", ""),
+		s.diagnosticSensor(device, "watchdog_suppressed_until", "Watchdog Suppressed Until", "mdi:timer-lock", ""),
+		s.diagnosticSensor(device, "watchdog_restart_window_count", "Watchdog Restarts In Window", "mdi:counter", ""),
 		s.diagnosticSensor(device, "watchdog_rss_limit", "Watchdog RSS Limit", "mdi:memory", "MB"),
 		s.diagnosticSensor(device, "watchdog_cpu_limit", "Watchdog CPU Limit", "mdi:cpu-64-bit", "%"),
 		s.sensor(device, "last_command", "Last Command", "mdi:console-line", ""),
@@ -1089,7 +1099,10 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "gpu_mode"},
 		[2]string{"sensor", "watchdog_pressure"},
 		[2]string{"sensor", "watchdog_last_reason"},
+		[2]string{"sensor", "watchdog_last_action"},
 		[2]string{"sensor", "watchdog_last_restart"},
+		[2]string{"sensor", "watchdog_suppressed_until"},
+		[2]string{"sensor", "watchdog_restart_window_count"},
 		[2]string{"sensor", "watchdog_rss_limit"},
 		[2]string{"sensor", "watchdog_cpu_limit"},
 		[2]string{"sensor", "last_command"},

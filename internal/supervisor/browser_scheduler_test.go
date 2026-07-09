@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/system"
 )
 
 func TestSchedulerRotationTargetsConfiguredDurations(t *testing.T) {
@@ -190,6 +191,43 @@ func TestKioskDarkThemeForcesChromiumDarkMode(t *testing.T) {
 	}
 }
 
+func TestCPUOnlyWatchdogUsesMinimumGrace(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Watchdog.MaxCPUPercent = 100
+	cfg.Watchdog.CPUGrace = 45 * time.Second
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	browser.hotSince = time.Now().Add(-2 * time.Minute)
+
+	restart, reason := browser.shouldRestart(processStats(0, 250))
+	if restart {
+		t.Fatalf("cpu-only pressure restarted too early: %s", reason)
+	}
+
+	browser.hotSince = time.Now().Add(-11 * time.Minute)
+	restart, reason = browser.shouldRestart(processStats(0, 250))
+	if !restart {
+		t.Fatalf("expected cpu-only restart after minimum grace, reason %q", reason)
+	}
+}
+
+func TestWatchdogRestartRateLimit(t *testing.T) {
+	cfg := schedulerTestConfig()
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	now := time.Now()
+
+	for i := 0; i < watchdogMaxRestartsInWindow; i++ {
+		if !browser.watchdogRestartAllowedLocked(now.Add(time.Duration(i) * time.Minute)) {
+			t.Fatalf("restart %d was unexpectedly suppressed", i+1)
+		}
+	}
+	if browser.watchdogRestartAllowedLocked(now.Add(4 * time.Minute)) {
+		t.Fatal("expected restart loop to be suppressed")
+	}
+	if browser.watchdog.SuppressedUntil == nil {
+		t.Fatal("expected suppressed_until to be set")
+	}
+}
+
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -206,6 +244,10 @@ func containsPrefix(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func processStats(rss uint64, cpu float64) system.ProcessTreeStats {
+	return system.ProcessTreeStats{RSSMB: rss, CPUPercent: cpu}
 }
 
 func schedulerTestConfig() *config.Config {

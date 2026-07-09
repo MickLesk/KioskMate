@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+
+- Fixed a browser restart loop where CPU-only watchdog pressure could restart Chromium about once per minute on Raspberry Pi dashboards.
+- Increased default watchdog CPU tolerance to 10 minutes and the default CPU limit to 300%.
+- Added a watchdog restart rate limit: at most three automatic watchdog restarts per 30 minutes, then restarts are suppressed for 30 minutes.
+- Added Admin UI and MQTT diagnostics for watchdog action, suppressed-until time and restarts in the current watchdog window.
+- Added tests for aggressive watchdog config migration, CPU-only grace handling and restart-loop suppression.
+
 ## v0.1.0
 
 - First public KioskMate release.
