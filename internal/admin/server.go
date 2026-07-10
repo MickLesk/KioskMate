@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/updater"
+	"golang.org/x/crypto/argon2"
 )
 
 //go:embed web/index.html web/assets/*
@@ -49,6 +51,8 @@ type Browser interface {
 	ResetSession(context.Context) error
 	Reload(context.Context) error
 	SetActive(context.Context, int) error
+	CaptureScreenshot(context.Context) ([]byte, error)
+	TripAuthGuard(string)
 	Status() supervisor.Status
 }
 
@@ -69,6 +73,14 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]Session
 	attempts map[string][]time.Time
+	snapshot snapshotCache
+}
+
+type snapshotCache struct {
+	mu   sync.Mutex
+	png  []byte
+	url  string
+	time time.Time
 }
 
 type Session struct {
@@ -151,6 +163,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		Addr:              s.cfg.Admin.Addr(),
 		Handler:           securityHeaders(mux),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
@@ -164,6 +179,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		errc <- server.Shutdown(shutdownCtx)
 	}()
 	go func() {
+		if s.cfg.Admin.TLSCert != "" && s.cfg.Admin.TLSKey != "" {
+			errc <- server.ServeTLS(listener, s.cfg.Admin.TLSCert, s.cfg.Admin.TLSKey)
+			return
+		}
 		errc <- server.Serve(listener)
 	}()
 	err = <-errc
@@ -347,6 +366,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Admin.Token)) != 1 {
+		s.recordFailedAttempt(r)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid setup token"})
 		return
 	}
@@ -359,11 +379,14 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.cfg.Admin.PasswordHash = hash
-	if err := config.Save(s.cfg); err != nil {
+	if err := s.cfg.Mutate(func(next *config.Config) error {
+		next.Admin.PasswordHash = hash
+		return nil
+	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.clearAttempts(r)
 	s.createSession(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
@@ -392,9 +415,19 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		ok = subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Admin.Token)) == 1
 	}
 	if !ok {
+		s.recordFailedAttempt(r)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
+	if strings.HasPrefix(s.cfg.Admin.PasswordHash, "sha256iter$") {
+		if hash, err := HashPassword(body.Password); err == nil {
+			_ = s.cfg.Mutate(func(next *config.Config) error {
+				next.Admin.PasswordHash = hash
+				return nil
+			})
+		}
+	}
+	s.clearAttempts(r)
 	s.createSession(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
@@ -419,6 +452,7 @@ func (s *Server) authSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	s.pruneSessionsLocked(time.Now())
 	out := make([]Session, 0, len(s.sessions))
 	for _, session := range s.sessions {
 		out = append(out, session)
@@ -464,8 +498,10 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.cfg.Admin.PasswordHash = hash
-	if err := config.Save(s.cfg); err != nil {
+	if err := s.cfg.Mutate(func(next *config.Config) error {
+		next.Admin.PasswordHash = hash
+		return nil
+	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -814,7 +850,7 @@ func (s *Server) sshKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.cfg)
+		writeJSON(w, http.StatusOK, publicConfig(s.cfg))
 	case http.MethodPost:
 		data, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 		if err != nil {
@@ -826,11 +862,10 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if err := config.Save(next); err != nil {
+		if err := s.cfg.Replace(next); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		*s.cfg = *next
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -842,7 +877,7 @@ func (s *Server) configExport(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	data, err := json.MarshalIndent(s.cfg, "", "  ")
+	data, err := json.MarshalIndent(publicConfig(s.cfg), "", "  ")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -867,11 +902,10 @@ func (s *Server) configImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := config.Save(next); err != nil {
+	if err := s.cfg.Replace(next); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	*s.cfg = *next
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -889,13 +923,14 @@ func (s *Server) configBackups(w http.ResponseWriter, r *http.Request) {
 func (s *Server) repair(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfg := *s.cfg
-		data, _ := json.Marshal(s.cfg)
-		_ = json.Unmarshal(data, &cfg)
-		writeJSON(w, http.StatusOK, config.Repair(&cfg))
+		cfg := s.cfg.Snapshot()
+		writeJSON(w, http.StatusOK, config.Repair(cfg))
 	case http.MethodPost:
-		report := config.Repair(s.cfg)
-		if err := config.Save(s.cfg); err != nil {
+		var report config.RepairReport
+		if err := s.cfg.Mutate(func(next *config.Config) error {
+			report = config.Repair(next)
+			return nil
+		}); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -938,11 +973,10 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := config.Save(next); err != nil {
+	if err := s.cfg.Replace(next); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	*s.cfg = *next
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -962,6 +996,12 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 	next.Path = s.cfg.Path
 	if next.Admin.Token == "" {
 		next.Admin.Token = s.cfg.Admin.Token
+	}
+	if next.Admin.PasswordHash == "" {
+		next.Admin.PasswordHash = s.cfg.Admin.PasswordHash
+	}
+	if next.MQTT.Password == "" {
+		next.MQTT.Password = s.cfg.MQTT.Password
 	}
 	return &next, nil
 }
@@ -1230,6 +1270,9 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	} else if pageResult := checkHTTPPage(ctx, status.URL, s.version); pageResult["ok"] == true {
 		add("active_page", "ok", "Active page is reachable from the kiosk host.", pageResult)
 	} else {
+		if pageResult["statusCode"] == http.StatusForbidden && isHomeAssistantURL(status.URL) {
+			s.browser.TripAuthGuard("Home Assistant returned HTTP 403 during Browser Doctor")
+		}
 		add("active_page", "error", "Active page is not reachable from the kiosk host.", pageResult)
 	}
 	add("logs", "ok", "Log files checked.", map[string]any{
@@ -1291,14 +1334,15 @@ func (s *Server) browserRecover(w http.ResponseWriter, r *http.Request) {
 			level = "ok"
 		}
 		step("page_check", level, page)
-		if status.Command != "" {
-			snapshot, err := renderPageSnapshot(ctx, status.Command, status.URL, 1024, 768)
+		if status.Running {
+			pngData, err := s.browser.CaptureScreenshot(ctx)
+			analysis := analyzePNG(pngData)
 			if err != nil {
-				step("render_check", "warn", map[string]any{"error": err.Error(), "output_tail": snapshot.OutputTail, "analysis": snapshot.Analysis})
-			} else if snapshot.Analysis["visible"] == true {
-				step("render_check", "ok", snapshot.Analysis)
+				step("render_check", "warn", map[string]any{"error": err.Error(), "analysis": analysis})
+			} else if analysis["visible"] == true {
+				step("render_check", "ok", analysis)
 			} else {
-				step("render_check", "warn", snapshot.Analysis)
+				step("render_check", "warn", analysis)
 			}
 		}
 	}
@@ -1314,8 +1358,10 @@ func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {
 		Restart bool `json:"restart"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	config.ApplyRaspberrySafeMode(s.cfg)
-	if err := config.Save(s.cfg); err != nil {
+	if err := s.cfg.Mutate(func(next *config.Config) error {
+		config.ApplyRaspberrySafeMode(next)
+		return nil
+	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1327,7 +1373,15 @@ func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "config": s.cfg})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "config": publicConfig(s.cfg)})
+}
+
+func publicConfig(cfg *config.Config) *config.Config {
+	out := cfg.Snapshot()
+	out.Admin.Token = ""
+	out.Admin.PasswordHash = ""
+	out.MQTT.Password = ""
+	return out
 }
 
 func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
@@ -1584,6 +1638,9 @@ func (s *Server) browserCheckPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 400
 	category, hint := pageCheckHint(target, resp)
+	if resp.StatusCode == http.StatusForbidden && isHomeAssistantURL(target) {
+		s.browser.TripAuthGuard("Home Assistant returned HTTP 403 during page check")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         ok,
 		"url":        target,
@@ -1698,7 +1755,14 @@ func (s *Server) browserRenderCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	result, err := renderPageSnapshot(ctx, command, target, 1024, 768)
+	var result renderSnapshotResult
+	var err error
+	if status.Running && target == status.URL && status.DevTools {
+		result.PNG, err = s.browser.CaptureScreenshot(ctx)
+		result.Analysis = analyzePNG(result.PNG)
+	} else {
+		result, err = renderPageSnapshot(ctx, command, target, 1024, 768)
+	}
 	if err != nil {
 		result.Error = err.Error()
 	}
@@ -1728,22 +1792,39 @@ func (s *Server) browserSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only http and https URLs can be rendered"})
 		return
 	}
-	command := status.Command
-	if command == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "browser command is empty"})
+	refresh := r.URL.Query().Get("refresh") == "1"
+	s.snapshot.mu.Lock()
+	defer s.snapshot.mu.Unlock()
+	if !refresh && len(s.snapshot.png) > 0 && s.snapshot.url == target {
+		writeSnapshot(w, s.snapshot.png, s.snapshot.time)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	if !refresh {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no cached snapshot; request refresh=1 explicitly"})
+		return
+	}
+	if !status.Running || !status.DevTools {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the running Chromium session is not connected to DevTools"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	result, err := renderPageSnapshot(ctx, command, target, 1280, 800)
+	pngData, err := s.browser.CaptureScreenshot(ctx)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "output_tail": result.OutputTail, "analysis": result.Analysis})
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
+	s.snapshot.png = append(s.snapshot.png[:0], pngData...)
+	s.snapshot.url = target
+	s.snapshot.time = time.Now()
+	writeSnapshot(w, s.snapshot.png, s.snapshot.time)
+}
+
+func writeSnapshot(w http.ResponseWriter, pngData []byte, created time.Time) {
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(result.PNG)
+	w.Header().Set("Cache-Control", "private, max-age=15")
+	w.Header().Set("X-KioskMate-Snapshot-Time", created.UTC().Format(time.RFC3339))
+	_, _ = w.Write(pngData)
 }
 
 type renderSnapshotResult struct {
@@ -1793,12 +1874,15 @@ func renderPageSnapshot(ctx context.Context, command string, target string, widt
 }
 
 func analyzeScreenshot(path string) map[string]any {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return map[string]any{"visible": false, "error": err.Error()}
 	}
-	defer file.Close()
-	img, err := png.Decode(file)
+	return analyzePNG(data)
+}
+
+func analyzePNG(data []byte) map[string]any {
+	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
 		return map[string]any{"visible": false, "error": err.Error()}
 	}
@@ -1862,10 +1946,19 @@ func pageCheckHint(target string, resp *http.Response) (string, string) {
 	return "ok", "The kiosk host can reach this page."
 }
 
+func isHomeAssistantURL(raw string) bool {
+	lower := strings.ToLower(raw)
+	return strings.Contains(lower, ":8123") || strings.Contains(lower, "homeassistant") || strings.Contains(lower, "home-assistant") || strings.Contains(lower, "/api/websocket")
+}
+
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.authenticated(r) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.validToken(r) && !sameOrigin(r) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
 			return
 		}
 		next(w, r)
@@ -1881,6 +1974,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 		return false
 	}
 	s.mu.Lock()
+	s.pruneSessionsLocked(time.Now())
 	session, ok := s.sessions[cookie.Value]
 	if ok {
 		session.LastSeen = time.Now()
@@ -1911,7 +2005,19 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		UserAgent: r.UserAgent(),
 	}
 	s.mu.Lock()
+	s.pruneSessionsLocked(time.Now())
 	s.sessions[id] = session
+	for len(s.sessions) > 32 {
+		var oldestID string
+		var oldest time.Time
+		for sessionID, item := range s.sessions {
+			if oldestID == "" || item.LastSeen.Before(oldest) {
+				oldestID = sessionID
+				oldest = item.LastSeen
+			}
+		}
+		delete(s.sessions, oldestID)
+	}
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -1920,6 +2026,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int((7 * 24 * time.Hour).Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   requestIsHTTPS(r),
 	})
 }
 
@@ -1934,9 +2041,28 @@ func (s *Server) allowAttempt(r *http.Request) bool {
 			kept = append(kept, ts)
 		}
 	}
-	kept = append(kept, time.Now())
 	s.attempts[key] = kept
-	return len(kept) <= 8
+	return len(kept) < 8
+}
+
+func (s *Server) recordFailedAttempt(r *http.Request) {
+	s.mu.Lock()
+	s.attempts[remoteIP(r)] = append(s.attempts[remoteIP(r)], time.Now())
+	s.mu.Unlock()
+}
+
+func (s *Server) clearAttempts(r *http.Request) {
+	s.mu.Lock()
+	delete(s.attempts, remoteIP(r))
+	s.mu.Unlock()
+}
+
+func (s *Server) pruneSessionsLocked(now time.Time) {
+	for id, session := range s.sessions {
+		if now.Sub(session.Created) > 7*24*time.Hour || now.Sub(session.LastSeen) > 24*time.Hour {
+			delete(s.sessions, id)
+		}
+	}
 }
 
 func HashPassword(password string) (string, error) {
@@ -1944,12 +2070,47 @@ func HashPassword(password string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return "", err
 	}
-	iterations := 120000
-	hash := passwordDigest([]byte(password), salt, iterations)
-	return fmt.Sprintf("sha256iter$%d$%s$%s", iterations, base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash)), nil
+	const (
+		memory      = 64 * 1024
+		iterations  = 3
+		parallelism = 2
+		keyLength   = 32
+	)
+	hash := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLength)
+	return fmt.Sprintf("argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", memory, iterations, parallelism, base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash)), nil
 }
 
 func VerifyPassword(password, encoded string) bool {
+	if strings.HasPrefix(encoded, "argon2id$") {
+		return verifyArgon2ID(password, encoded)
+	}
+	return verifyLegacyPassword(password, encoded)
+}
+
+func verifyArgon2ID(password, encoded string) bool {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 5 || parts[0] != "argon2id" || parts[1] != "v=19" {
+		return false
+	}
+	var memory uint32
+	var iterations uint32
+	var parallelism uint8
+	if _, err := fmt.Sscanf(parts[2], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil || memory < 8*1024 || memory > 256*1024 || iterations < 1 || iterations > 10 || parallelism < 1 || parallelism > 8 {
+		return false
+	}
+	salt, err := base64.RawURLEncoding.DecodeString(parts[3])
+	if err != nil || len(salt) < 16 {
+		return false
+	}
+	want, err := base64.RawURLEncoding.DecodeString(parts[4])
+	if err != nil || len(want) < 16 || len(want) > 64 {
+		return false
+	}
+	got := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, uint32(len(want)))
+	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+func verifyLegacyPassword(password, encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 4 || parts[0] != "sha256iter" {
 		return false
@@ -2051,13 +2212,30 @@ func fileExists(path string) bool {
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), payment=(), usb=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' blob: data:; script-src 'self'; style-src 'self'; connect-src 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func sameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(parsed.Host, r.Host)
+}
+
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }

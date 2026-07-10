@@ -103,6 +103,7 @@ func (s *Service) Install(ctx context.Context) *Job {
 	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Started: time.Now(), ExitCode: -1}
 	s.mu.Lock()
 	s.jobs[job.ID] = job
+	s.pruneJobsLocked(50)
 	s.mu.Unlock()
 	go s.install(ctx, job)
 	return job
@@ -138,7 +139,7 @@ func (s *Service) install(ctx context.Context, job *Job) {
 		return
 	}
 	file := filepath.Join(os.TempDir(), info.Asset.Name)
-	if err := s.download(ctx, info.Asset.URL, file, job); err != nil {
+	if err := s.download(ctx, info.Asset.URL, file, info.Asset.Size, job); err != nil {
 		s.fail(job, err)
 		return
 	}
@@ -181,7 +182,7 @@ func (s *Service) latest(ctx context.Context) (githubRelease, error) {
 	return githubRelease{}, errors.New("no release found")
 }
 
-func (s *Service) download(ctx context.Context, url, file string, job *Job) error {
+func (s *Service) download(ctx context.Context, url, file string, expectedSize int64, job *Job) error {
 	s.log(job, "downloading "+filepath.Base(file))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -195,13 +196,26 @@ func (s *Service) download(ctx context.Context, url, file string, job *Job) erro
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("download failed: %s", resp.Status)
 	}
+	const maxPackageSize = int64(512 << 20)
+	if resp.ContentLength > maxPackageSize || expectedSize > maxPackageSize {
+		return errors.New("release package exceeds 512 MiB safety limit")
+	}
 	out, err := os.OpenFile(file, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
-	return err
+	written, err := io.Copy(out, io.LimitReader(resp.Body, maxPackageSize+1))
+	if err != nil {
+		return err
+	}
+	if written > maxPackageSize {
+		return errors.New("release package exceeds 512 MiB safety limit")
+	}
+	if expectedSize > 0 && written != expectedSize {
+		return fmt.Errorf("release package size mismatch: got %d, want %d", written, expectedSize)
+	}
+	return nil
 }
 
 func selectAsset(assets []githubAsset) Asset {
@@ -217,7 +231,7 @@ func selectAsset(assets []githubAsset) Asset {
 
 func verify(file, digest string) error {
 	if digest == "" {
-		return nil
+		return errors.New("release asset has no SHA-256 digest")
 	}
 	parts := strings.SplitN(digest, ":", 2)
 	if len(parts) != 2 || parts[0] != "sha256" {
@@ -232,6 +246,20 @@ func verify(file, digest string) error {
 		return errors.New("sha256 verification failed")
 	}
 	return nil
+}
+
+func (s *Service) pruneJobsLocked(keep int) {
+	for len(s.jobs) > keep {
+		var oldestID string
+		var oldest time.Time
+		for id, job := range s.jobs {
+			if oldestID == "" || job.Started.Before(oldest) {
+				oldestID = id
+				oldest = job.Started
+			}
+		}
+		delete(s.jobs, oldestID)
+	}
 }
 
 func run(ctx context.Context, job *Job, command string, args ...string) error {

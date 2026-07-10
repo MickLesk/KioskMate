@@ -1,6 +1,9 @@
 package admin
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPasswordHashRoundTrip(t *testing.T) {
 	hash, err := HashPassword("long-enough-password")
@@ -12,6 +15,9 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 	}
 	if VerifyPassword("wrong-password", hash) {
 		t.Fatal("expected wrong password to fail")
+	}
+	if !strings.HasPrefix(hash, "argon2id$") {
+		t.Fatalf("hash = %q, want Argon2id", hash)
 	}
 }
 

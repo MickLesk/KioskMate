@@ -52,6 +52,12 @@ func (b *fakeActionBrowser) SetActive(context.Context, int) error {
 	return nil
 }
 
+func (b *fakeActionBrowser) CaptureScreenshot(context.Context) ([]byte, error) {
+	return nil, nil
+}
+
+func (b *fakeActionBrowser) TripAuthGuard(string) {}
+
 func (b *fakeActionBrowser) Status() supervisor.Status {
 	return b.status
 }

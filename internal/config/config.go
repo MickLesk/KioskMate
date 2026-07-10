@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Config struct {
+	mu          *sync.RWMutex  `json:"-"`
 	Path        string         `json:"-"`
 	Version     int            `json:"version"`
 	Admin       AdminConfig    `json:"admin"`
@@ -30,6 +32,8 @@ type AdminConfig struct {
 	Port         int    `json:"port"`
 	Token        string `json:"token"`
 	PasswordHash string `json:"password_hash,omitempty"`
+	TLSCert      string `json:"tls_cert,omitempty"`
+	TLSKey       string `json:"tls_key,omitempty"`
 }
 
 func (c AdminConfig) Addr() string {
@@ -179,6 +183,7 @@ func Load(path string) (*Config, error) {
 		path = defaultPath()
 	}
 	cfg := defaults(path)
+	cfg.mu = &sync.RWMutex{}
 	if data, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return nil, err
@@ -195,6 +200,13 @@ func Load(path string) (*Config, error) {
 }
 
 func Save(cfg *Config) error {
+	mu := cfg.mutex()
+	mu.Lock()
+	defer mu.Unlock()
+	return saveLocked(cfg)
+}
+
+func saveLocked(cfg *Config) error {
 	if cfg.Path == "" {
 		cfg.Path = defaultPath()
 	}
@@ -209,7 +221,99 @@ func Save(cfg *Config) error {
 	if err := backupIfChanged(cfg.Path, data); err != nil {
 		return err
 	}
-	return os.WriteFile(cfg.Path, append(data, '\n'), 0o600)
+	return atomicWriteFile(cfg.Path, append(data, '\n'), 0o600)
+}
+
+func (cfg *Config) mutex() *sync.RWMutex {
+	if cfg.mu == nil {
+		// Configs constructed by tests or embedders are initialized lazily before
+		// they are shared with worker goroutines.
+		cfg.mu = &sync.RWMutex{}
+	}
+	return cfg.mu
+}
+
+func (cfg *Config) Snapshot() *Config {
+	mu := cfg.mutex()
+	mu.RLock()
+	defer mu.RUnlock()
+	clone := *cfg
+	clone.mu = mu
+	return &clone
+}
+
+func (cfg *Config) ReadLock() {
+	cfg.mutex().RLock()
+}
+
+func (cfg *Config) ReadUnlock() {
+	cfg.mutex().RUnlock()
+}
+
+func (cfg *Config) Mutate(change func(*Config) error) error {
+	mu := cfg.mutex()
+	mu.Lock()
+	defer mu.Unlock()
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	var next Config
+	if err := json.Unmarshal(data, &next); err != nil {
+		return err
+	}
+	next.Path = cfg.Path
+	next.mu = mu
+	if err := change(&next); err != nil {
+		return err
+	}
+	if err := saveLocked(&next); err != nil {
+		return err
+	}
+	*cfg = next
+	return nil
+}
+
+func (cfg *Config) Replace(next *Config) error {
+	if next == nil {
+		return errors.New("replacement config is nil")
+	}
+	mu := cfg.mutex()
+	mu.Lock()
+	defer mu.Unlock()
+	next.Path = cfg.Path
+	next.mu = mu
+	if err := saveLocked(next); err != nil {
+		return err
+	}
+	*cfg = *next
+	return nil
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".kioskmate-config-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func defaultPath() string {
@@ -240,6 +344,7 @@ func BrowserLogFilePath(path string) string {
 
 func defaults(path string) Config {
 	return Config{
+		mu:      &sync.RWMutex{},
 		Path:    path,
 		Version: 2,
 		Admin: AdminConfig{
@@ -391,7 +496,7 @@ func normalize(cfg *Config) {
 	}
 	cfg.Time.NTPServer = strings.TrimSpace(cfg.Time.NTPServer)
 	cfg.Time.Timezone = strings.TrimSpace(cfg.Time.Timezone)
-	if cfg.Update.Repository == "" || staleProjectValue(cfg.Update.Repository) {
+	if cfg.Update.Repository != "MickLesk/KioskMate" {
 		cfg.Update.Repository = "MickLesk/KioskMate"
 	}
 	if cfg.Update.Service == "" || staleProjectValue(cfg.Update.Service) {

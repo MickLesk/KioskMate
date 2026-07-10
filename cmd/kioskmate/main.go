@@ -21,6 +21,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/config"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/integration"
+	"github.com/MickLesk/KioskMate/internal/logutil"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/updater"
 )
@@ -134,6 +135,7 @@ func setupLogger(cfg *config.Config) (*slog.Logger, string) {
 	if err := os.MkdirAll(filepath.Dir(logFile), 0o700); err != nil {
 		return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})), logFile
 	}
+	_ = logutil.Rotate(logFile, 5<<20, 3)
 	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})), logFile

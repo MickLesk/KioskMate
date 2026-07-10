@@ -68,8 +68,13 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: name, Started: time.Now(), ExitCode: -1}
 	s.mu.Lock()
 	s.jobs[job.ID] = job
+	s.pruneJobsLocked(100)
 	s.mu.Unlock()
-	go run(ctx, job, command, args, input)
+	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), actionTimeout(name))
+	go func() {
+		defer cancel()
+		run(jobCtx, job, command, args, input)
+	}()
 	return job, nil
 }
 
@@ -95,7 +100,8 @@ func (s *Service) ClearPrivilege() {
 func (s *Service) PrivilegeStatus() Credential {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.credential == nil {
+	if s.credential == nil || time.Since(s.credential.Created) > 15*time.Minute {
+		s.credential = nil
 		return Credential{}
 	}
 	return Credential{Mode: s.credential.Mode, Configured: true, Created: s.credential.Created}
@@ -104,10 +110,34 @@ func (s *Service) PrivilegeStatus() Credential {
 func (s *Service) privilegeCredential() (string, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.credential == nil || s.credential.password == "" {
+	if s.credential == nil || s.credential.password == "" || time.Since(s.credential.Created) > 15*time.Minute {
+		s.credential = nil
 		return "", "", false
 	}
 	return s.credential.Mode, s.credential.password, true
+}
+
+func actionTimeout(name string) time.Duration {
+	switch name {
+	case "apt-update", "apt-upgrade":
+		return 2 * time.Hour
+	default:
+		return 2 * time.Minute
+	}
+}
+
+func (s *Service) pruneJobsLocked(keep int) {
+	for len(s.jobs) > keep {
+		var oldestID string
+		var oldest time.Time
+		for id, job := range s.jobs {
+			if oldestID == "" || job.Started.Before(oldest) {
+				oldestID = id
+				oldest = job.Started
+			}
+		}
+		delete(s.jobs, oldestID)
+	}
 }
 
 func (s *Service) Job(id string) (*Job, bool) {

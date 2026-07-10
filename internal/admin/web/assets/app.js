@@ -59,6 +59,8 @@
         jobs: [],
         loaded: {},
         busy: new Set(),
+        snapshotURL: "",
+        snapshotTime: "",
       };
 
       document.documentElement.dataset.theme = state.theme;
@@ -611,7 +613,7 @@
                   </div>
                 </div>
                 <div class="preview-shell">
-                  ${browser.url ? `<img id="snapshot-image" class="snapshot-image" src="/api/browser/snapshot?ts=${Date.now()}" alt="${esc(t("liveView"))}" />` : `<div class="empty">${esc(t("liveViewStopped"))}</div>`}
+                  ${state.snapshotURL ? `<img id="snapshot-image" class="snapshot-image" src="${esc(state.snapshotURL)}" alt="${esc(t("liveView"))}" />` : `<div id="snapshot-empty" class="empty">${esc(browser.running ? t("snapshotOnDemand") : t("liveViewStopped"))}</div>`}
                 </div>
                 <div class="body">
                   <p class="hint">${esc(t("liveViewHint"))}</p>
@@ -1110,10 +1112,20 @@
         if (out) out.textContent = url;
       }
 
-      function refreshDashboardSnapshot() {
-        const img = document.getElementById("snapshot-image");
-        if (img) img.src = "/api/browser/snapshot?ts=" + Date.now();
-        recordAction(t("refreshSnapshot"), state.status?.browser?.url || "", "ok");
+      async function refreshDashboardSnapshot() {
+        await runAction("dashboard-snapshot-refresh", async () => {
+          const response = await fetch("/api/browser/snapshot?refresh=1", { credentials: "same-origin" });
+          if (!response.ok) {
+            let detail = response.statusText;
+            try { detail = (await response.json()).error || detail; } catch (_) {}
+            throw new Error(detail || `HTTP ${response.status}`);
+          }
+          const blob = await response.blob();
+          if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
+          state.snapshotURL = URL.createObjectURL(blob);
+          state.snapshotTime = response.headers.get("X-KioskMate-Snapshot-Time") || new Date().toISOString();
+          renderApp();
+        }, t("refreshSnapshot"));
       }
 
       async function loadBrowserDoctor() {

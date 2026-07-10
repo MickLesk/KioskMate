@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MickLesk/KioskMate/internal/actions"
@@ -29,23 +31,27 @@ type Browser interface {
 	Previous(context.Context) error
 	SetActive(context.Context, int) error
 	ResetSession(context.Context) error
+	TripAuthGuard(string)
 	Status() supervisor.Status
 }
 
 type MQTTService struct {
-	cfg      *config.Config
-	browser  Browser
-	hardware *hardware.Service
-	updater  *updater.Service
-	actions  *actions.Service
-	logger   *slog.Logger
-	version  string
-	client   *mqttclient.Client
-	command  *mqttclient.Client
-	cache    map[string]string
-	health   map[string]pageHealth
-	healthIx int
-	cleaned  bool
+	cfg            *config.Config
+	browser        Browser
+	hardware       *hardware.Service
+	updater        *updater.Service
+	actions        *actions.Service
+	logger         *slog.Logger
+	version        string
+	client         *mqttclient.Client
+	command        *mqttclient.Client
+	cache          map[string]string
+	health         map[string]pageHealth
+	healthIx       int
+	cleaned        bool
+	mu             sync.Mutex
+	healthNext     map[string]time.Time
+	healthFailures map[string]int
 }
 
 type discoveryItem struct {
@@ -68,7 +74,8 @@ type pageHealth struct {
 }
 
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
-	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}}
+	_ = cfg.Snapshot()
+	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}}
 }
 
 func (s *MQTTService) PublishNow() error {
@@ -114,7 +121,8 @@ func (s *MQTTService) Run(ctx context.Context) {
 		s.closeClients()
 	}()
 	for {
-		if !s.cfg.MQTT.Enabled || s.cfg.MQTT.URL == "" {
+		cfg := s.cfg.Snapshot()
+		if !cfg.MQTT.Enabled || cfg.MQTT.URL == "" {
 			if activeKey != "" {
 				s.closeClients()
 				if commandCancel != nil {
@@ -148,6 +156,9 @@ func (s *MQTTService) Run(ctx context.Context) {
 				_ = s.client.Close()
 				s.client = nil
 			}
+			s.mu.Lock()
+			s.cache = map[string]string{}
+			s.mu.Unlock()
 		}
 		if !sleepContext(ctx, mqttInterval(s.cfg.MQTT.Interval)) {
 			if s.client != nil {
@@ -180,17 +191,18 @@ func mqttInterval(interval time.Duration) time.Duration {
 }
 
 func (s *MQTTService) connectionKey() string {
+	cfg := s.cfg.Snapshot()
 	return strings.Join([]string{
-		s.cfg.MQTT.URL,
-		s.cfg.MQTT.Username,
-		s.cfg.MQTT.Password,
-		s.cfg.MQTT.BaseTopic,
-		s.cfg.MQTT.Node,
-		s.cfg.MQTT.ClientID,
-		s.cfg.MQTT.Discovery,
-		s.cfg.MQTT.Version,
-		s.cfg.MQTT.KeepAlive.String(),
-		fmt.Sprint(s.cfg.MQTT.ForceDisableRetain),
+		cfg.MQTT.URL,
+		cfg.MQTT.Username,
+		cfg.MQTT.Password,
+		cfg.MQTT.BaseTopic,
+		cfg.MQTT.Node,
+		cfg.MQTT.ClientID,
+		cfg.MQTT.Discovery,
+		cfg.MQTT.Version,
+		cfg.MQTT.KeepAlive.String(),
+		fmt.Sprint(cfg.MQTT.ForceDisableRetain),
 	}, "\x00")
 }
 
@@ -207,13 +219,14 @@ func (s *MQTTService) closeClients() {
 }
 
 func (s *MQTTService) commands(ctx context.Context) {
+	cfg := s.cfg.Snapshot()
 	client := &mqttclient.Client{
-		URL:       s.cfg.MQTT.URL,
-		ClientID:  firstNonEmpty(s.cfg.MQTT.ClientID, s.cfg.MQTT.Node) + "_cmd",
-		Username:  s.cfg.MQTT.Username,
-		Password:  s.cfg.MQTT.Password,
-		Version:   s.cfg.MQTT.Version,
-		KeepAlive: s.cfg.MQTT.KeepAlive,
+		URL:       cfg.MQTT.URL,
+		ClientID:  firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node) + "_cmd",
+		Username:  cfg.MQTT.Username,
+		Password:  cfg.MQTT.Password,
+		Version:   cfg.MQTT.Version,
+		KeepAlive: cfg.MQTT.KeepAlive,
 	}
 	s.command = client
 	topics := []string{
@@ -325,63 +338,63 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		err = s.setPageByName(actionCtx, command)
 	case strings.HasSuffix(topic, "/page_url/set"):
 		if strings.HasPrefix(command, "http://") || strings.HasPrefix(command, "https://") {
-			s.cfg.Kiosk.URLs = []string{command}
-			s.cfg.Kiosk.Pages = []config.KioskPage{{Name: "MQTT Page", URL: command}}
-			if err = config.Save(s.cfg); err == nil {
+			err = s.cfg.Mutate(func(next *config.Config) error {
+				next.Kiosk.URLs = []string{command}
+				next.Kiosk.Pages = []config.KioskPage{{Name: "MQTT Page", URL: command}}
+				return nil
+			})
+			if err == nil {
 				err = s.browser.SetActive(actionCtx, 0)
 			}
 		}
 	case strings.Contains(topic, "/pages/") && strings.HasSuffix(topic, "/activate"):
 		err = s.setPageByEntityTopic(actionCtx, topic)
 	case strings.HasSuffix(topic, "/scheduler_enabled/set"):
-		s.cfg.Kiosk.Scheduler.Enabled = boolCommand(command)
-		if s.cfg.Kiosk.Scheduler.Mode == "" {
-			s.cfg.Kiosk.Scheduler.Mode = "rotation"
-		}
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error {
+			next.Kiosk.Scheduler.Enabled = boolCommand(command)
+			if next.Kiosk.Scheduler.Mode == "" {
+				next.Kiosk.Scheduler.Mode = "rotation"
+			}
+			return nil
+		})
 	case strings.HasSuffix(topic, "/scheduler_mode/set"):
 		mode := strings.ToLower(command)
 		if !validSchedulerMode(mode) {
 			err = fmt.Errorf("unsupported scheduler mode %q", command)
 			break
 		}
-		s.cfg.Kiosk.Scheduler.Mode = mode
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Kiosk.Scheduler.Mode = mode; return nil })
 	case strings.HasSuffix(topic, "/scheduler_tick/set"):
 		seconds := atoi(command)
 		if seconds < 5 {
 			seconds = 5
 		}
-		s.cfg.Kiosk.Scheduler.TickInterval = time.Duration(seconds) * time.Second
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error {
+			next.Kiosk.Scheduler.TickInterval = time.Duration(seconds) * time.Second
+			return nil
+		})
 	case strings.HasSuffix(topic, "/performance_profile/set"):
 		profile := strings.ToLower(strings.TrimSpace(command))
 		if !validPerformanceProfile(profile) {
 			err = fmt.Errorf("unsupported performance profile %q", command)
 			break
 		}
-		s.cfg.Performance.Profile = profile
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Performance.Profile = profile; return nil })
 	case strings.HasSuffix(topic, "/gpu_mode/set"):
 		mode := strings.ToLower(strings.TrimSpace(command))
 		if mode != "auto" && mode != "software" {
 			err = fmt.Errorf("unsupported gpu mode %q", command)
 			break
 		}
-		s.cfg.Performance.GPUMode = mode
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Performance.GPUMode = mode; return nil })
 	case strings.HasSuffix(topic, "/reduce_motion/set"):
-		s.cfg.Performance.ReduceMotion = boolCommand(command)
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Performance.ReduceMotion = boolCommand(command); return nil })
 	case strings.HasSuffix(topic, "/isolate_page_sessions/set"):
-		s.cfg.Kiosk.IsolateSessions = boolCommand(command)
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Kiosk.IsolateSessions = boolCommand(command); return nil })
 	case strings.HasSuffix(topic, "/kiosk_theme/set"):
-		s.cfg.Kiosk.Theme = config.NormalizeKioskTheme(command)
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Kiosk.Theme = config.NormalizeKioskTheme(command); return nil })
 	case strings.HasSuffix(topic, "/watchdog_enabled/set"):
-		s.cfg.Watchdog.Enabled = boolCommand(command)
-		err = config.Save(s.cfg)
+		err = s.cfg.Mutate(func(next *config.Config) error { next.Watchdog.Enabled = boolCommand(command); return nil })
 	default:
 		switch strings.ToLower(command) {
 		case "start":
@@ -410,16 +423,19 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 }
 
 func (s *MQTTService) publishAll() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	client := s.mqtt()
-	if err := s.publishDiscovery(client); err != nil {
+	cfg := s.cfg.Snapshot()
+	hw := s.hardware.Status(context.Background())
+	if err := s.publishDiscovery(client, hw); err != nil {
 		return err
 	}
 	status := s.browser.Status()
-	hw := s.hardware.Status(context.Background())
 	root := s.root()
 	schedulerReason := status.Scheduler.Reason
 	if schedulerReason == "" {
-		if s.cfg.Kiosk.Scheduler.Enabled {
+		if cfg.Kiosk.Scheduler.Enabled {
 			schedulerReason = "waiting"
 		} else {
 			schedulerReason = "disabled"
@@ -427,7 +443,7 @@ func (s *MQTTService) publishAll() error {
 	}
 	schedulerMode := status.Scheduler.Mode
 	if schedulerMode == "" {
-		schedulerMode = s.cfg.Kiosk.Scheduler.Mode
+		schedulerMode = cfg.Kiosk.Scheduler.Mode
 	}
 	if err := s.publishState(client, "browser", boolState(status.Running), true); err != nil {
 		return err
@@ -448,7 +464,7 @@ func (s *MQTTService) publishAll() error {
 		"scheduler":     status.Scheduler,
 		"watchdog":      status.Watchdog,
 		"version":       s.version,
-		"mqtt_version":  s.cfg.MQTT.Version,
+		"mqtt_version":  cfg.MQTT.Version,
 		"updated":       time.Now().UTC().Format(time.RFC3339),
 	}
 	payload, _ := json.Marshal(state)
@@ -463,7 +479,7 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "update/latest_version", s.version, true)
 	_ = s.publishState(client, "update/title", "KioskMate "+s.version, true)
 	_ = s.publishState(client, "update/release_url", "", true)
-	_ = s.publishState(client, "mqtt_version", s.cfg.MQTT.Version, true)
+	_ = s.publishState(client, "mqtt_version", cfg.MQTT.Version, true)
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
 	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
 	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
@@ -474,7 +490,7 @@ func (s *MQTTService) publishAll() error {
 	}
 	_ = s.publishState(client, "browser_command", status.Command, true)
 	_ = s.publishState(client, "browser_last_error", firstString(status.LastError, "none"), false)
-	_ = s.publishState(client, "page_count", fmt.Sprintf("%d", s.cfg.Kiosk.PageCount()), true)
+	_ = s.publishState(client, "page_count", fmt.Sprintf("%d", cfg.Kiosk.PageCount()), true)
 	_ = s.publishState(client, "page_number", fmt.Sprintf("%d", status.Active+1), true)
 	_ = s.publishState(client, "page_name", status.PageName, true)
 	_ = s.publishState(client, "page_url", status.URL, true)
@@ -492,22 +508,22 @@ func (s *MQTTService) publishAll() error {
 		_ = s.publishState(client, "pages/"+page.ID+"/last_error", firstString(health.Error, "none"), false)
 		_ = s.publishState(client, "pages/"+page.ID+"/last_checked", health.Checked.Format(time.RFC3339), false)
 	}
-	_ = s.publishState(client, "scheduler_enabled", boolState(s.cfg.Kiosk.Scheduler.Enabled), true)
+	_ = s.publishState(client, "scheduler_enabled", boolState(cfg.Kiosk.Scheduler.Enabled), true)
 	_ = s.publishState(client, "scheduler_state", schedulerReason, true)
 	_ = s.publishState(client, "scheduler_mode", schedulerMode, true)
-	_ = s.publishState(client, "scheduler_tick", fmt.Sprintf("%d", int(s.cfg.Kiosk.Scheduler.TickInterval/time.Second)), true)
+	_ = s.publishState(client, "scheduler_tick", fmt.Sprintf("%d", int(cfg.Kiosk.Scheduler.TickInterval/time.Second)), true)
 	_ = s.publishState(client, "scheduler_active_rule", firstString(status.Scheduler.ActiveRule, "none"), true)
 	if status.Scheduler.NextSwitch != nil {
 		_ = s.publishState(client, "scheduler_next_switch", status.Scheduler.NextSwitch.Format(time.RFC3339), true)
 	} else {
 		_ = s.publishState(client, "scheduler_next_switch", "none", true)
 	}
-	_ = s.publishState(client, "performance_profile", s.cfg.Performance.Profile, true)
-	_ = s.publishState(client, "gpu_mode", s.cfg.Performance.GPUMode, true)
-	_ = s.publishState(client, "kiosk_theme", s.cfg.Kiosk.Theme, true)
-	_ = s.publishState(client, "reduce_motion", boolState(s.cfg.Performance.ReduceMotion), true)
-	_ = s.publishState(client, "isolate_page_sessions", boolState(s.cfg.Kiosk.IsolateSessions), true)
-	_ = s.publishState(client, "watchdog_enabled", boolState(s.cfg.Watchdog.Enabled), true)
+	_ = s.publishState(client, "performance_profile", cfg.Performance.Profile, true)
+	_ = s.publishState(client, "gpu_mode", cfg.Performance.GPUMode, true)
+	_ = s.publishState(client, "kiosk_theme", cfg.Kiosk.Theme, true)
+	_ = s.publishState(client, "reduce_motion", boolState(cfg.Performance.ReduceMotion), true)
+	_ = s.publishState(client, "isolate_page_sessions", boolState(cfg.Kiosk.IsolateSessions), true)
+	_ = s.publishState(client, "watchdog_enabled", boolState(cfg.Watchdog.Enabled), true)
 	_ = s.publishState(client, "watchdog_pressure", firstString(status.Watchdog.Pressure, "normal"), false)
 	_ = s.publishState(client, "watchdog_last_reason", firstString(status.Watchdog.LastReason, "none"), false)
 	_ = s.publishState(client, "watchdog_last_action", firstString(status.Watchdog.LastAction, "none"), false)
@@ -530,8 +546,7 @@ func (s *MQTTService) publishAll() error {
 	return nil
 }
 
-func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
-	status := s.hardware.Status(context.Background())
+func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardware.Status) error {
 	device := map[string]any{
 		"identifiers":   []string{"kioskmate", s.cfg.MQTT.Node},
 		"name":          "KioskMate",
@@ -1320,32 +1335,37 @@ func (s *MQTTService) publishState(client *mqttclient.Client, path string, value
 	if s.cache[path] == value {
 		return nil
 	}
+	if err := client.Publish(s.root()+"/"+path+"/state", []byte(value), s.retained(retained)); err != nil {
+		return err
+	}
 	s.cache[path] = value
-	return client.Publish(s.root()+"/"+path+"/state", []byte(value), s.retained(retained))
+	return nil
 }
 
 func (s *MQTTService) mqtt() *mqttclient.Client {
 	if s.client == nil {
+		cfg := s.cfg.Snapshot()
 		s.client = &mqttclient.Client{
-			URL:       s.cfg.MQTT.URL,
-			ClientID:  firstNonEmpty(s.cfg.MQTT.ClientID, s.cfg.MQTT.Node),
-			Username:  s.cfg.MQTT.Username,
-			Password:  s.cfg.MQTT.Password,
-			Version:   s.cfg.MQTT.Version,
-			KeepAlive: s.cfg.MQTT.KeepAlive,
+			URL:       cfg.MQTT.URL,
+			ClientID:  firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node),
+			Username:  cfg.MQTT.Username,
+			Password:  cfg.MQTT.Password,
+			Version:   cfg.MQTT.Version,
+			KeepAlive: cfg.MQTT.KeepAlive,
 		}
 	}
 	return s.client
 }
 
 func (s *MQTTService) root() string {
-	base := strings.Trim(firstNonEmpty(s.cfg.MQTT.BaseTopic, "kioskmate"), "/")
-	node := strings.Trim(firstNonEmpty(s.cfg.MQTT.Node, "kioskmate"), "/")
+	cfg := s.cfg.Snapshot()
+	base := strings.Trim(firstNonEmpty(cfg.MQTT.BaseTopic, "kioskmate"), "/")
+	node := strings.Trim(firstNonEmpty(cfg.MQTT.Node, "kioskmate"), "/")
 	return base + "/" + node
 }
 
 func (s *MQTTService) retained(retained bool) bool {
-	return retained && !s.cfg.MQTT.ForceDisableRetain
+	return retained && !s.cfg.Snapshot().MQTT.ForceDisableRetain
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1547,15 +1567,25 @@ func checkPageHealth(target string) pageHealth {
 		health.Error = "unsupported url"
 		return health
 	}
+	checkTarget := safeHealthCheckURL(target)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkTarget, nil)
 	if err != nil {
 		health.Error = err.Error()
 		return health
 	}
 	req.Header.Set("User-Agent", "KioskMate")
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		Timeout: 6 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 || (len(via) > 0 && req.URL.Host != via[0].URL.Host) {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		health.Error = err.Error()
 		return health
@@ -1580,8 +1610,58 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 		s.healthIx = 0
 	}
 	page := pages[s.healthIx]
-	s.health[page.ID] = checkPageHealth(page.URL)
+	now := time.Now()
+	if next := s.healthNext[page.ID]; now.Before(next) {
+		s.healthIx = (s.healthIx + 1) % len(pages)
+		return
+	}
+	health := checkPageHealth(page.URL)
+	s.health[page.ID] = health
+	if health.OK {
+		s.healthFailures[page.ID] = 0
+		s.healthNext[page.ID] = now.Add(maxDuration(30*time.Second, mqttInterval(s.cfg.MQTT.Interval)*time.Duration(len(pages))))
+	} else {
+		failures := min(6, s.healthFailures[page.ID]+1)
+		s.healthFailures[page.ID] = failures
+		s.healthNext[page.ID] = now.Add(minDuration(15*time.Minute, 30*time.Second*time.Duration(1<<(failures-1))))
+		if health.StatusCode == http.StatusForbidden && likelyHomeAssistantPage(page.URL) {
+			s.browser.TripAuthGuard("Home Assistant returned HTTP 403 during passive health check")
+		}
+	}
 	s.healthIx = (s.healthIx + 1) % len(pages)
+}
+
+func safeHealthCheckURL(target string) string {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return target
+	}
+	if likelyHomeAssistantPage(target) {
+		parsed.Path = "/manifest.json"
+		parsed.RawPath = ""
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+	}
+	return parsed.String()
+}
+
+func likelyHomeAssistantPage(target string) bool {
+	lower := strings.ToLower(target)
+	return strings.Contains(lower, ":8123") || strings.Contains(lower, "homeassistant") || strings.Contains(lower, "home-assistant")
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func minDuration(left, right time.Duration) time.Duration {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (s *MQTTService) discoveryTopic(component, object string) string {

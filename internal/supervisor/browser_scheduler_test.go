@@ -1,9 +1,12 @@
 package supervisor
 
 import (
+	"context"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,67 @@ import (
 	"github.com/MickLesk/KioskMate/internal/config"
 	"github.com/MickLesk/KioskMate/internal/system"
 )
+
+func TestBrowserProcessOutlivesStartRequestContext(t *testing.T) {
+	if os.Getenv("KIOSKMATE_BROWSER_HELPER") == "1" {
+		time.Sleep(30 * time.Second)
+		return
+	}
+	cfg := schedulerTestConfig()
+	cfg.Path = filepath.Join(t.TempDir(), "config.json")
+	cfg.Kiosk.BrowserPreset = "custom"
+	cfg.Kiosk.BrowserCommand = os.Args[0]
+	cfg.Kiosk.ExtraArgs = []string{"-test.run=TestBrowserProcessOutlivesStartRequestContext"}
+	t.Setenv("KIOSKMATE_BROWSER_HELPER", "1")
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	requestCtx, cancel := context.WithCancel(context.Background())
+	if err := browser.Start(requestCtx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	time.Sleep(250 * time.Millisecond)
+	if !browser.Status().Running {
+		t.Fatalf("browser was killed with request context: %#v", browser.Status())
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	if err := browser.Stop(stopCtx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBackupAndResetSessionMovesCurrentChromiumStorage(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"Default/Local Storage/leveldb/data", "Default/Network/Cookies", "Default/WebStorage/data"} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("session"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := backupAndResetSession(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Default", "Local Storage")); !os.IsNotExist(err) {
+		t.Fatalf("local storage still exists: %v", err)
+	}
+	backups, err := os.ReadDir(filepath.Join(dir, "SessionBackups"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("session backup missing: %v %#v", err, backups)
+	}
+}
+
+func TestAuthGuardBlocksBrowserStartUntilSessionReset(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Path = filepath.Join(t.TempDir(), "config.json")
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	browser.TripAuthGuard("invalid access token")
+	if err := browser.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "authentication guard") {
+		t.Fatalf("start error = %v", err)
+	}
+}
 
 func TestSchedulerRotationTargetsConfiguredDurations(t *testing.T) {
 	cfg := schedulerTestConfig()
