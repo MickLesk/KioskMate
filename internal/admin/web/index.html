@@ -732,6 +732,76 @@
         background: var(--field);
       }
 
+      .dashboard-layout {
+        display: grid;
+        grid-template-columns: minmax(360px, 0.82fr) minmax(360px, 1.18fr);
+        gap: 14px;
+        align-items: start;
+      }
+
+      .control-stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .control-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .control-grid.compact {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .control-card {
+        display: grid;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-2);
+        padding: 12px;
+      }
+
+      .control-card h4 {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .live-preview {
+        display: grid;
+        grid-template-rows: auto minmax(320px, 62vh) auto;
+        min-height: 0;
+      }
+
+      .live-frame {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: var(--field);
+      }
+
+      .preview-shell {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--field);
+      }
+
+      .recovery-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .recovery-step {
+        display: grid;
+        gap: 3px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-2);
+        padding: 10px;
+      }
+
       .toasts {
         position: fixed;
         right: 16px;
@@ -899,6 +969,7 @@
         .rule-row,
         .rotation-row,
         .live-line,
+        .dashboard-layout,
         .kiosk-hero,
         .page-card,
         .workflow-board {
@@ -921,6 +992,10 @@
         .row {
           align-items: stretch;
           flex-direction: column;
+        }
+
+        .control-grid {
+          grid-template-columns: 1fr;
         }
 
         .actions button,
@@ -968,6 +1043,28 @@
           previousPage: "Previous kiosk page",
           resetSession: "Reset HA session",
           activatePage: "Show selected page",
+          controlCenter: "Control center",
+          displayControls: "Display controls",
+          pageControls: "Page controls",
+          recovery: "Recovery",
+          displayAudio: "Display and audio",
+          applyDisplay: "Apply display",
+          applyAudio: "Apply audio",
+          sessionHealth: "Session health",
+          liveView: "Live view",
+          liveViewHint: "This embeds the active dashboard if Home Assistant allows framing. If it stays blank, use Open in new tab or Render check.",
+          "browser-startHint": "Starts the kiosk browser on the display.",
+          "browser-stopHint": "Stops the kiosk browser process without stopping KioskMate.",
+          "browser-restartHint": "Stops and starts the kiosk browser. Use this after browser setting changes or a stuck session.",
+          "browser-reloadHint": "Reloads the active dashboard by restarting the browser on the same page.",
+          "browser-previousHint": "Switches to the previous enabled kiosk page.",
+          "browser-nextHint": "Switches to the next enabled kiosk page.",
+          "browser-reset-sessionHint": "Deletes Home Assistant browser session data for the active page and restarts the display.",
+          "browser-repair-haHint": "Resets the HA session and immediately checks whether the active page is reachable.",
+          "dashboard-page-checkHint": "Runs a fast HTTP check against the active page.",
+          "dashboard-render-checkHint": "Runs a headless render check to detect blank or white pages.",
+          "dashboard-preview-openHint": "Opens the active dashboard in a normal browser tab.",
+          "dashboard-diagnosticsHint": "Loads browser command, arguments, profile and watchdog diagnostics.",
           dashboard: "Dashboard",
           kiosk: "Kiosk",
           scheduler: "Scheduler",
@@ -1245,6 +1342,28 @@
           previousPage: "Vorherige Kiosk-Seite",
           resetSession: "HA-Sitzung zurücksetzen",
           activatePage: "Ausgewählte Seite anzeigen",
+          controlCenter: "Kontrollzentrum",
+          displayControls: "Anzeige-Steuerung",
+          pageControls: "Seiten-Steuerung",
+          recovery: "Recovery",
+          displayAudio: "Display und Audio",
+          applyDisplay: "Display anwenden",
+          applyAudio: "Audio anwenden",
+          sessionHealth: "Session-Zustand",
+          liveView: "Liveansicht",
+          liveViewHint: "Diese Ansicht bettet das aktive Dashboard ein, wenn Home Assistant Frames erlaubt. Wenn sie leer bleibt: In neuem Tab öffnen oder Render prüfen nutzen.",
+          "browser-startHint": "Startet den Kiosk-Browser auf dem Display.",
+          "browser-stopHint": "Stoppt nur den Kiosk-Browser, nicht KioskMate.",
+          "browser-restartHint": "Stoppt und startet den Kiosk-Browser. Sinnvoll nach Browser-Settings oder bei hängender Session.",
+          "browser-reloadHint": "Lädt das aktive Dashboard neu, indem der Browser auf derselben Seite neu startet.",
+          "browser-previousHint": "Wechselt zur vorherigen aktiven Kiosk-Seite.",
+          "browser-nextHint": "Wechselt zur nächsten aktiven Kiosk-Seite.",
+          "browser-reset-sessionHint": "Löscht Home-Assistant-Sessiondaten der aktiven Seite und startet die Anzeige neu.",
+          "browser-repair-haHint": "Setzt die HA-Session zurück und prüft direkt, ob die aktive Seite erreichbar ist.",
+          "dashboard-page-checkHint": "Macht einen schnellen HTTP-Check gegen die aktive Seite.",
+          "dashboard-render-checkHint": "Prüft per Headless-Render, ob die Seite sichtbar oder weiß/leer ist.",
+          "dashboard-preview-openHint": "Öffnet das aktive Dashboard in einem normalen Browser-Tab.",
+          "dashboard-diagnosticsHint": "Lädt Browser-Befehl, Argumente, Profil und Watchdog-Diagnose.",
           dashboard: "Dashboard",
           kiosk: "Kiosk",
           scheduler: "Zeitsteuerung",
@@ -1984,6 +2103,9 @@
         const hw = state.hardware || {};
         const stats = browser.stats || {};
         const watchdog = browser.watchdog || {};
+        const pages = normalizePages(cfg.kiosk?.pages, cfg.kiosk?.urls);
+        const activeIndex = Number(browser.active || 0);
+        const activePage = pages[activeIndex] || {};
         const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         return `
           <div class="grid">
@@ -1992,49 +2114,89 @@
               ${metric(t("currentPage"), browser.page_name || "-", browser.url || "-")}
               ${metric(t("performance"), formatValue(stats.cpu_percent, "% CPU"), formatValue(stats.rss_mb, " MB RSS"))}
             </div>
-            <div class="grid two">
-              <div class="card">
-                <div class="head"><h3>${esc(t("browser"))}</h3><span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span></div>
-                <div class="body grid">
-                  ${kvTable([
-                    [t("pid"), browser.pid || "-"],
-                    [t("activePage"), `${browser.active ?? 0} / ${(cfg.kiosk?.pages || cfg.kiosk?.urls || []).length}`],
-                    [t("command"), browser.command || "-"],
-                    [t("lastError"), browser.last_error || "-"],
-                    [t("lastExit"), formatDate(browser.last_exit)],
-                    [t("browserStarts"), browser.start_count ?? 0],
-                    [t("browserRestarts"), browser.restart_count ?? 0],
-                    [t("watchdogPressure"), watchdog.pressure || "normal"],
-                    [t("watchdogLastRestart"), formatDate(watchdog.last_restart)],
-                    [t("watchdogAction"), watchdog.last_action || "-"],
-                    [t("watchdogSuppressedUntil"), formatDate(watchdog.suppressed_until)],
-                    [t("watchdogRestartWindow"), watchdog.restart_window_count ?? 0],
-                    [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
-                  ])}
-                  ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
-                  <div class="actions">
-                    ${button("startBrowser", "browser-start")}
-                    ${button("stopBrowser", "browser-stop")}
-                    ${button("restartBrowser", "browser-restart", "primary")}
-                    ${button("reloadBrowser", "browser-reload")}
-                    ${button("repairHA", "browser-repair-ha")}
-                    ${button("resetSession", "browser-reset-session")}
-                    ${button("previousPage", "browser-previous")}
-                    ${button("nextPage", "browser-next")}
+            <div class="dashboard-layout">
+              <div class="control-stack">
+                <div class="card">
+                  <div class="head">
+                    <h3>${esc(t("controlCenter"))}</h3>
+                    <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
+                  </div>
+                  <div class="body grid">
+                    <div class="control-card">
+                      <h4>${esc(t("displayControls"))}</h4>
+                      <div class="control-grid">
+                        ${button("startBrowser", "browser-start")}
+                        ${button("stopBrowser", "browser-stop")}
+                        ${button("restartBrowser", "browser-restart", "primary")}
+                        ${button("reloadBrowser", "browser-reload")}
+                      </div>
+                    </div>
+                    <div class="control-card">
+                      <h4>${esc(t("pageControls"))}</h4>
+                      <div class="control-grid">
+                        ${button("previousPage", "browser-previous")}
+                        ${button("nextPage", "browser-next")}
+                        ${button("checkPage", "dashboard-page-check")}
+                        ${button("renderCheck", "dashboard-render-check")}
+                      </div>
+                      <div id="page-check-output" class="hint">${esc(activePage.name || browser.page_name || "-")} · ${esc(activePage.url || browser.url || "-")}</div>
+                    </div>
+                    <div class="control-card">
+                      <h4>${esc(t("recovery"))}</h4>
+                      <div class="control-grid">
+                        ${button("repairHA", "browser-repair-ha", "primary")}
+                        ${button("resetSession", "browser-reset-session")}
+                        ${button("openPreview", "dashboard-preview-open")}
+                        ${button("diagnostics", "dashboard-diagnostics")}
+                      </div>
+                    </div>
+                    <div class="control-card">
+                      <h4>${esc(t("displayAudio"))}</h4>
+                      <div class="form-grid">
+                        ${selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]])}
+                        ${field("display-brightness", t("brightness"), "number", "", hw.display?.brightness || 80)}
+                        ${field("audio-volume", t("volume"), "number", "", hw.audio?.volume || 50)}
+                        ${field("audio-mic", t("microphone"), "number", "", hw.audio?.microphone || 50)}
+                        ${selectHtml("keyboard-power", t("keyboard"), "ON", [["ON", t("on")], ["OFF", t("off")]])}
+                        <button data-action="display-apply" class="primary">${esc(t("applyDisplay"))}</button>
+                        <button data-action="audio-apply" class="span-2">${esc(t("applyAudio"))}</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="head"><h3>${esc(t("sessionHealth"))}</h3><button data-action="hardware-refresh">${esc(t("refresh"))}</button></div>
+                  <div class="body grid">
+                    ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
+                    ${kvTable([
+                      [t("pid"), browser.pid || "-"],
+                      [t("activePage"), `${activeIndex + 1} / ${Math.max(1, pages.length)}`],
+                      [t("lastError"), browser.last_error || "-"],
+                      [t("lastExit"), formatDate(browser.last_exit)],
+                      [t("browserStarts"), browser.start_count ?? 0],
+                      [t("browserRestarts"), browser.restart_count ?? 0],
+                      [t("watchdogPressure"), watchdog.pressure || "normal"],
+                      [t("watchdogAction"), watchdog.last_action || "-"],
+                      [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
+                    ])}
+                    ${renderRecoveryHints(browser)}
+                    ${renderActionLog()}
                   </div>
                 </div>
               </div>
-              <div class="card">
-                <div class="head"><h3>${esc(t("hardwareStatus"))}</h3><button data-action="hardware-refresh">${esc(t("refresh"))}</button></div>
-                <div class="body grid">
-                  ${kvTable([
-                    [t("device"), hw.device?.model || "-"],
-                    [t("network"), hw.network?.primary || "-"],
-                    [t("runtime"), `${hw.runtime?.go || "-"} ${hw.runtime?.goarch || ""}`],
-                    ["CPU", formatValue(hw.system?.processor_usage_percent, "%")],
-                    ["RAM", formatValue(hw.system?.memory_usage_percent, "%")],
-                    ["Temp", formatValue(hw.system?.processor_temperature_c, " C")],
-                  ])}
+              <div class="card live-preview">
+                <div class="head">
+                  <h3>${esc(t("liveView"))}</h3>
+                  <div class="actions">
+                    <span class="chip">${esc(browser.page_name || activePage.name || "-")}</span>
+                    ${button("openPreview", "dashboard-preview-open")}
+                  </div>
+                </div>
+                <div class="preview-shell">
+                  ${browser.url ? `<iframe class="live-frame" src="${esc(browser.url)}" referrerpolicy="no-referrer"></iframe>` : `<div class="empty">${esc(t("noData"))}</div>`}
+                </div>
+                <div class="body">
+                  <p class="hint">${esc(t("liveViewHint"))}</p>
                 </div>
               </div>
             </div>
@@ -2443,6 +2605,11 @@
 
       function bindDashboard() {
         bindBrowserButtons();
+        bindHardware();
+        document.querySelector('[data-action="dashboard-page-check"]')?.addEventListener("click", checkDashboardPage);
+        document.querySelector('[data-action="dashboard-render-check"]')?.addEventListener("click", renderCheckDashboardPage);
+        document.querySelector('[data-action="dashboard-preview-open"]')?.addEventListener("click", openDashboardPreview);
+        document.querySelector('[data-action="dashboard-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
         document.querySelector('[data-action="hardware-refresh"]')?.addEventListener("click", async () => {
           state.hardware = await getJSON("/api/hardware");
           renderApp();
@@ -2487,6 +2654,39 @@
           renderApp();
           if (!result.ok) throw new Error(detail || t("pageFailed"));
         }, t("repairHA"));
+      }
+
+      async function checkDashboardPage() {
+        const browser = state.status?.browser || {};
+        const active = Number(browser.active || 0);
+        const out = document.getElementById("page-check-output");
+        await runAction("dashboard-page-check", async () => {
+          const result = await postJSON("/api/browser/check-page", { index: active, url: browser.url || "" });
+          const detail = result.hint || (result.statusCode === 403 ? t("haForbiddenHint") : (result.error || result.status || ""));
+          if (out) out.textContent = result.ok ? `${t("pageReachable")}: ${result.status || result.url}` : `${t("pageFailed")}: ${detail}`;
+          if (!result.ok) throw new Error(detail || t("pageFailed"));
+        }, t("checkPage"));
+      }
+
+      async function renderCheckDashboardPage() {
+        const browser = state.status?.browser || {};
+        const active = Number(browser.active || 0);
+        const out = document.getElementById("page-check-output");
+        await runAction("dashboard-render-check", async () => {
+          if (out) out.textContent = `${t("loading")}...`;
+          const result = await postJSON("/api/browser/render-check", { index: active, url: browser.url || "" });
+          const ratio = result.analysis?.blank_ratio !== undefined ? ` (${Math.round(result.analysis.blank_ratio * 1000) / 10}% blank)` : "";
+          if (out) out.textContent = result.ok ? `${t("pageVisible")}${ratio}` : `${t("pageBlank")}${ratio}: ${result.error || result.output_tail || ""}`;
+          if (!result.ok) throw new Error(result.error || t("pageBlank"));
+        }, t("renderCheck"));
+      }
+
+      function openDashboardPreview() {
+        const url = state.status?.browser?.url || "";
+        if (!url) return;
+        window.open(url, "_blank", "noopener");
+        const out = document.getElementById("page-check-output");
+        if (out) out.textContent = url;
       }
 
       function bindKiosk() {
@@ -3340,6 +3540,20 @@
           </div>`;
       }
 
+      function renderRecoveryHints(browser) {
+        const hints = [
+          [t("reloadBrowser"), t("reloadBrowserHint")],
+          [t("repairHA"), t("repairHAHint")],
+          [t("resetSession"), t("resetSessionHint")],
+          [t("restartBrowser"), t("restartBrowserHint")],
+        ];
+        if (browser?.last_error) hints.unshift([t("lastError"), browser.last_error]);
+        return `
+          <div class="recovery-list">
+            ${hints.map(([title, text]) => `<div class="recovery-step"><strong>${esc(title)}</strong><span class="hint">${esc(text)}</span></div>`).join("")}
+          </div>`;
+      }
+
       function renderSessions() {
         if (!state.sessions.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return table([t("device"), t("start"), t("lastExit")], state.sessions.map((s) => [s.remote || "-", formatDate(s.created), formatDate(s.last_seen)]));
@@ -3454,7 +3668,9 @@
       }
 
       function button(labelKey, action, cls = "") {
-        return `<button class="${esc(cls)}" data-busy="${esc(action)}" data-action="${esc(action)}">${esc(t(labelKey))}</button>`;
+        const hint = t(action + "Hint");
+        const title = hint === action + "Hint" ? t(labelKey) : hint;
+        return `<button class="${esc(cls)}" title="${esc(title)}" data-busy="${esc(action)}" data-action="${esc(action)}">${esc(t(labelKey))}</button>`;
       }
 
       boot();

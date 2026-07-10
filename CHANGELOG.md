@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.5
+
+- Reworked the Admin Dashboard into a central control center with grouped display, page, recovery and hardware/audio actions.
+- Added a right-side live dashboard view with fallback guidance for Home Assistant installations that block iframe previews.
+- Added button tooltips and clearer recovery guidance for reload, Home Assistant session repair, session reset and browser restart.
+- Added Home Assistant MQTT discovery for a browser switch, display power switch and browser restart button while keeping `light.kioskmate_display`.
+- Improved Chromium dark mode startup by requesting a dark preferred color scheme for the normal `dark` theme without enabling heavy forced dark rendering.
+
 ## v0.1.4
 
 - Stabilized Raspberry Pi low-power browser startup by removing risky GPU/raster feature overrides from the default `raspberry` and `low-power` profiles.

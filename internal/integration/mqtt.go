@@ -218,6 +218,7 @@ func (s *MQTTService) commands(ctx context.Context) {
 	s.command = client
 	topics := []string{
 		s.root() + "/command",
+		s.root() + "/browser/set",
 		s.root() + "/start/execute",
 		s.root() + "/stop/execute",
 		s.root() + "/restart/execute",
@@ -272,6 +273,12 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	defer cancel()
 	var err error
 	switch {
+	case strings.HasSuffix(topic, "/browser/set"):
+		if boolCommand(command) {
+			err = s.browser.Start(actionCtx)
+		} else {
+			err = s.browser.Stop(actionCtx)
+		}
 	case strings.HasSuffix(topic, "/start/execute"):
 		err = s.browser.Start(actionCtx)
 	case strings.HasSuffix(topic, "/stop/execute"):
@@ -536,6 +543,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 	}
 	items := []discoveryItem{
 		{
+			Topic: s.discoveryTopic("switch", "browser"),
+			Data: map[string]any{
+				"name":          "Display Browser",
+				"unique_id":     s.cfg.MQTT.Node + "_display_browser",
+				"command_topic": s.root() + "/browser/set",
+				"state_topic":   s.root() + "/browser/state",
+				"payload_on":    "ON",
+				"payload_off":   "OFF",
+				"icon":          "mdi:monitor",
+				"device":        device,
+			},
+		},
+		{
 			Topic: s.discoveryTopic("binary_sensor", "browser"),
 			Data: map[string]any{
 				"name":        "Browser Running",
@@ -563,6 +583,16 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 				"unique_id":     s.cfg.MQTT.Node + "_stop_browser",
 				"command_topic": s.root() + "/stop/execute",
 				"icon":          "mdi:stop",
+				"device":        device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("button", "restart"),
+			Data: map[string]any{
+				"name":          "Restart Browser",
+				"unique_id":     s.cfg.MQTT.Node + "_restart_browser",
+				"command_topic": s.root() + "/restart/execute",
+				"icon":          "mdi:restart",
 				"device":        device,
 			},
 		},
@@ -727,6 +757,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client) error {
 		s.sensor(device, "last_command_status", "Last Command Status", "mdi:list-status", ""),
 		s.sensor(device, "last_command_error", "Last Command Error", "mdi:alert", ""),
 		s.diagnosticSensor(device, "last_command_json", "Last Command JSON", "mdi:code-json", ""),
+		{
+			Topic: s.discoveryTopic("switch", "display_power"),
+			Data: map[string]any{
+				"name":          "Display Power",
+				"unique_id":     s.cfg.MQTT.Node + "_display_power",
+				"command_topic": s.root() + "/display/power/set",
+				"state_topic":   s.root() + "/display/power/state",
+				"payload_on":    "ON",
+				"payload_off":   "OFF",
+				"icon":          "mdi:monitor-shimmer",
+				"device":        device,
+			},
+		},
 		{
 			Topic: s.discoveryTopic("light", "display"),
 			Data: map[string]any{
@@ -1082,8 +1125,11 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 	entries := append([][2]string{}, legacyDiscoveryEntries()...)
 	entries = append(entries,
 		[2]string{"binary_sensor", "browser"},
+		[2]string{"switch", "browser"},
+		[2]string{"switch", "display_power"},
 		[2]string{"button", "start"},
 		[2]string{"button", "stop"},
+		[2]string{"button", "restart"},
 		[2]string{"button", "previous"},
 		[2]string{"button", "next"},
 		[2]string{"button", "reset_session"},

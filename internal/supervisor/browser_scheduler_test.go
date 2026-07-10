@@ -224,6 +224,9 @@ func TestKioskForceDarkThemeForcesChromiumDarkMode(t *testing.T) {
 	if contains(args, "--force-dark-mode") {
 		t.Fatalf("native dark theme should not force Chromium dark mode: %#v", args)
 	}
+	if !contains(args, "--force-prefers-color-scheme=dark") {
+		t.Fatalf("native dark theme should request dark color scheme: %#v", args)
+	}
 }
 
 func TestCPUOnlyWatchdogUsesMinimumGrace(t *testing.T) {

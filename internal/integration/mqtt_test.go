@@ -79,12 +79,14 @@ func TestMQTTCommandsControlBrowserPages(t *testing.T) {
 	if browser.active != 1 {
 		t.Fatalf("page_name command active index = %d, want 1", browser.active)
 	}
+	service.handleCommand(context.Background(), service.root()+"/browser/set", "ON")
+	service.handleCommand(context.Background(), service.root()+"/browser/set", "OFF")
 	service.handleCommand(context.Background(), service.root()+"/next/execute", "")
 	service.handleCommand(context.Background(), service.root()+"/previous/execute", "")
 	service.handleCommand(context.Background(), service.root()+"/reset_session/execute", "")
 
-	if browser.nexts != 1 || browser.previous != 1 || browser.resetSession != 1 {
-		t.Fatalf("browser command counts = next %d previous %d reset %d", browser.nexts, browser.previous, browser.resetSession)
+	if browser.starts != 1 || browser.stops != 1 || browser.nexts != 1 || browser.previous != 1 || browser.resetSession != 1 {
+		t.Fatalf("browser command counts = start %d stop %d next %d previous %d reset %d", browser.starts, browser.stops, browser.nexts, browser.previous, browser.resetSession)
 	}
 }
 
@@ -108,6 +110,25 @@ func TestMQTTPageEntitiesUseStableUniqueSlugs(t *testing.T) {
 	if len(entities) != 3 || entities[1].ID != "calendar" || entities[2].ID != "calendar_2" {
 		t.Fatalf("page entity ids = %#v", entities)
 	}
+}
+
+func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	items := service.discoveryResetEntries()
+
+	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") {
+		t.Fatalf("discovery entries missing browser/display controls: %#v", items)
+	}
+}
+
+func hasDiscoveryEntry(items [][2]string, component string, object string) bool {
+	for _, item := range items {
+		if item[0] == component && item[1] == object {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMQTTCommandsUpdateConfigControls(t *testing.T) {

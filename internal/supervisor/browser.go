@@ -667,7 +667,10 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
 	}
-	if strings.EqualFold(cfg.Kiosk.Theme, "force-dark") {
+	switch strings.ToLower(strings.TrimSpace(cfg.Kiosk.Theme)) {
+	case "dark":
+		args = append(args, "--force-prefers-color-scheme=dark", "--enable-features=WebUIDarkMode")
+	case "force-dark":
 		args = append(args, "--force-dark-mode", "--enable-features=WebContentsForceDark")
 	}
 	args = append(args, performanceArgs(cfg.Performance.Profile)...)
