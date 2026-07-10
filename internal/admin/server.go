@@ -1027,11 +1027,59 @@ func (s *Server) browserAction(action string) http.HandlerFunc {
 			err = s.browser.ResetSession(ctx)
 		}
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error":       err.Error(),
+				"success":     false,
+				"action":      action,
+				"browser":     s.browser.Status(),
+				"browser_log": labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 80),
+				"core_log":    labeledTail("core", config.LogFilePath(s.cfg.Path), 40),
+			})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "action": action})
+		if shouldVerifyBrowserRunning(action) {
+			status := waitForBrowserState(s.browser, true, 1500*time.Millisecond)
+			if !status.Running {
+				message := status.LastError
+				if message == "" {
+					message = "browser did not stay running after " + action
+				}
+				writeJSON(w, http.StatusInternalServerError, map[string]any{
+					"error":       message,
+					"success":     false,
+					"action":      action,
+					"browser":     status,
+					"browser_log": labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 80),
+					"core_log":    labeledTail("core", config.LogFilePath(s.cfg.Path), 40),
+				})
+				return
+			}
+		}
+		status := s.browser.Status()
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "action": action, "browser": status})
 	}
+}
+
+func shouldVerifyBrowserRunning(action string) bool {
+	switch action {
+	case "start", "restart", "reload", "next", "previous", "reset-session":
+		return true
+	default:
+		return false
+	}
+}
+
+func waitForBrowserState(browser Browser, running bool, timeout time.Duration) supervisor.Status {
+	deadline := time.Now().Add(timeout)
+	status := browser.Status()
+	for time.Now().Before(deadline) {
+		status = browser.Status()
+		if status.Running == running {
+			return status
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return browser.Status()
 }
 
 func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {

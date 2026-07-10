@@ -111,12 +111,16 @@ func (b *Browser) Start(ctx context.Context) error {
 		writer := io.MultiWriter(os.Stdout, logFile)
 		cmd.Stdout = writer
 		cmd.Stderr = writer
+		writeBrowserLaunchLog(logFile, command, args)
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
 	cmd.SysProcAttr = processGroupAttr()
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			_, _ = fmt.Fprintf(logFile, "start error: %v\n", err)
+		}
 		if logFile != nil {
 			_ = logFile.Close()
 		}
@@ -130,10 +134,24 @@ func (b *Browser) Start(ctx context.Context) error {
 	b.hotSince = time.Time{}
 	b.lastError = ""
 	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command, "args", args)
+	if logFile != nil {
+		_, _ = fmt.Fprintf(logFile, "started pid: %d\n", cmd.Process.Pid)
+	}
 
 	go b.wait(cmd, logFile)
 	go b.watch(ctx, cmd.Process.Pid)
 	return nil
+}
+
+func writeBrowserLaunchLog(file *os.File, command string, args []string) {
+	_, _ = fmt.Fprintf(file, "command: %s\n", command)
+	_, _ = fmt.Fprintf(file, "args: %s\n", strings.Join(args, " "))
+	_, _ = fmt.Fprintf(file, "env DISPLAY=%s WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s XDG_SESSION_TYPE=%s\n",
+		os.Getenv("DISPLAY"),
+		os.Getenv("WAYLAND_DISPLAY"),
+		os.Getenv("XDG_RUNTIME_DIR"),
+		os.Getenv("XDG_SESSION_TYPE"),
+	)
 }
 
 func (b *Browser) openBrowserLog() *os.File {
@@ -313,6 +331,16 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	}
 	lastError := b.lastError
 	b.mu.Unlock()
+	if logFile != nil {
+		if err != nil {
+			_, _ = fmt.Fprintf(logFile, "exit: %v runtime=%s\n", err, runtime)
+		} else {
+			_, _ = fmt.Fprintf(logFile, "exit: ok runtime=%s\n", runtime)
+		}
+		if !expected && lastError != "" {
+			_, _ = fmt.Fprintf(logFile, "last error: %s\n", lastError)
+		}
+	}
 	if err != nil && !expected && !errors.Is(err, os.ErrProcessDone) {
 		b.logger.Warn("browser exited", "error", err, "runtime", runtime)
 		return

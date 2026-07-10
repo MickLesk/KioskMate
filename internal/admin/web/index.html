@@ -1053,6 +1053,9 @@
           sessionHealth: "Session health",
           liveView: "Live view",
           liveViewHint: "This embeds the active dashboard if Home Assistant allows framing. If it stays blank, use Open in new tab or Render check.",
+          liveViewStopped: "The display browser is stopped. Start the display first; the preview is only a helper and can still be blocked by Home Assistant.",
+          actionFailedDetails: "Action failed details",
+          browserStatus: "Browser status",
           "browser-startHint": "Starts the kiosk browser on the display.",
           "browser-stopHint": "Stops the kiosk browser process without stopping KioskMate.",
           "browser-restartHint": "Stops and starts the kiosk browser. Use this after browser setting changes or a stuck session.",
@@ -1352,6 +1355,9 @@
           sessionHealth: "Session-Zustand",
           liveView: "Liveansicht",
           liveViewHint: "Diese Ansicht bettet das aktive Dashboard ein, wenn Home Assistant Frames erlaubt. Wenn sie leer bleibt: In neuem Tab öffnen oder Render prüfen nutzen.",
+          liveViewStopped: "Der Anzeige-Browser ist gestoppt. Starte zuerst die Anzeige; die Vorschau ist nur eine Hilfe und kann trotzdem von Home Assistant blockiert werden.",
+          actionFailedDetails: "Fehlerdetails",
+          browserStatus: "Browser-Status",
           "browser-startHint": "Startet den Kiosk-Browser auf dem Display.",
           "browser-stopHint": "Stoppt nur den Kiosk-Browser, nicht KioskMate.",
           "browser-restartHint": "Stoppt und startet den Kiosk-Browser. Sinnvoll nach Browser-Settings oder bei hängender Session.",
@@ -1849,7 +1855,11 @@
             data = { error: text };
           }
         }
-        if (!response.ok) throw new Error(data.error || response.statusText || "HTTP " + response.status);
+        if (!response.ok) {
+          const error = new Error(data.error || response.statusText || "HTTP " + response.status);
+          error.data = data;
+          throw error;
+        }
         return data;
       }
 
@@ -1867,6 +1877,7 @@
           return result;
         } catch (err) {
           toast(t("failed"), err.message, "error");
+          if (err.data?.browser_log || err.data?.core_log) showActionFailureDetails(err);
           recordAction(t("failed"), `${name}: ${err.message}`, "error");
           throw err;
         } finally {
@@ -1877,6 +1888,28 @@
       function recordAction(title, detail = "", type = "ok") {
         state.actionLog.unshift({ title, detail, type, at: new Date().toISOString() });
         state.actionLog = state.actionLog.slice(0, 8);
+      }
+
+      function showActionFailureDetails(err) {
+        const browserLog = Array.isArray(err.data?.browser_log) ? err.data.browser_log.join("\n") : "";
+        const coreLog = Array.isArray(err.data?.core_log) ? err.data.core_log.join("\n") : "";
+        const browser = err.data?.browser ? JSON.stringify(err.data.browser, null, 2) : "";
+        openModal(`
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="failure-title">
+            <div class="modal-head">
+              <div>
+                <h3 id="failure-title">${esc(t("actionFailedDetails"))}</h3>
+                <div class="hint">${esc(err.message || t("failed"))}</div>
+              </div>
+              <button data-modal-close>${esc(t("close"))}</button>
+            </div>
+            <div class="modal-body grid">
+              ${browser ? `<div><label>${esc(t("browserStatus"))}</label><pre class="logbox">${esc(browser)}</pre></div>` : ""}
+              ${browserLog ? `<div><label>${esc(t("logBrowser"))}</label><pre class="logbox">${esc(browserLog)}</pre></div>` : ""}
+              ${coreLog ? `<div><label>${esc(t("logCore"))}</label><pre class="logbox">${esc(coreLog)}</pre></div>` : ""}
+            </div>
+            <div class="modal-foot"><button data-modal-close>${esc(t("close"))}</button></div>
+          </div>`);
       }
 
       async function boot() {
@@ -2193,7 +2226,7 @@
                   </div>
                 </div>
                 <div class="preview-shell">
-                  ${browser.url ? `<iframe class="live-frame" src="${esc(browser.url)}" referrerpolicy="no-referrer"></iframe>` : `<div class="empty">${esc(t("noData"))}</div>`}
+                  ${browser.running && browser.url ? `<iframe class="live-frame" src="${esc(browser.url)}" referrerpolicy="no-referrer"></iframe>` : `<div class="empty">${esc(t("liveViewStopped"))}</div>`}
                 </div>
                 <div class="body">
                   <p class="hint">${esc(t("liveViewHint"))}</p>
@@ -2811,7 +2844,24 @@
       async function loadBrowserDiagnostics() {
         await runAction("browser-diagnostics", async () => {
           state.diagnostics = await getJSON("/api/browser/diagnostics");
-          renderApp();
+          if (state.view === "dashboard") {
+            openModal(`
+              <div class="modal" role="dialog" aria-modal="true" aria-labelledby="diag-title">
+                <div class="modal-head">
+                  <div>
+                    <h3 id="diag-title">${esc(t("browserDiagnostics"))}</h3>
+                    <div class="hint">${esc(state.diagnostics?.command || "")}</div>
+                  </div>
+                  <button data-modal-close>${esc(t("close"))}</button>
+                </div>
+                <div class="modal-body">
+                  <pre class="logbox">${esc(JSON.stringify(state.diagnostics, null, 2))}</pre>
+                </div>
+                <div class="modal-foot"><button data-modal-close>${esc(t("close"))}</button></div>
+              </div>`);
+          } else {
+            renderApp();
+          }
         }, t("testBrowser"));
       }
 

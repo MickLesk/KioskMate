@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.6
+
+- Made browser start actions fail loudly when Chromium exits immediately instead of returning a misleading success.
+- Added browser/core log tails to failed browser action responses and the Admin UI failure dialog.
+- Wrote browser command, arguments, display environment and process exit details directly to the browser log for every launch attempt.
+- Changed the Dashboard live view to show a clear stopped-browser message instead of a broken iframe when the display browser is not running.
+- Added a Dashboard browser diagnostics dialog.
+
 ## v0.1.5
 
 - Reworked the Admin Dashboard into a central control center with grouped display, page, recovery and hardware/audio actions.
