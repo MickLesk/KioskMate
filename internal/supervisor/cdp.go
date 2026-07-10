@@ -152,7 +152,7 @@ func (b *Browser) navigateDevTools(ctx context.Context, target string) error {
 	return nil
 }
 
-func (b *Browser) monitorDevTools(profile string, done <-chan struct{}) {
+func (b *Browser) monitorDevTools(profile string, theme string, done <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -168,6 +168,11 @@ func (b *Browser) monitorDevTools(profile string, done <-chan struct{}) {
 		return
 	}
 	defer session.close()
+	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
+		b.logger.Warn("Home Assistant theme synchronization failed", "theme", theme, "error", err)
+	} else if _, ok := homeAssistantThemeScript(theme); ok {
+		b.logger.Info("Home Assistant theme synchronization enabled", "theme", theme)
+	}
 	if err := session.command(ctx, "Network.enable", map[string]any{}, nil); err != nil {
 		b.logger.Warn("Chromium DevTools network monitor failed", "error", err)
 		return
@@ -210,6 +215,83 @@ func (b *Browser) monitorDevTools(profile string, done <-chan struct{}) {
 			}
 		}
 	}
+}
+
+func configureHomeAssistantTheme(ctx context.Context, session *cdpSession, theme string) error {
+	script, ok := homeAssistantThemeScript(theme)
+	if !ok {
+		return nil
+	}
+	if err := session.command(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
+		"source": script,
+	}, nil); err != nil {
+		return err
+	}
+	var result struct {
+		ExceptionDetails *struct {
+			Text string `json:"text"`
+		} `json:"exceptionDetails"`
+	}
+	if err := session.command(ctx, "Runtime.evaluate", map[string]any{
+		"expression":    script,
+		"awaitPromise":  false,
+		"returnByValue": false,
+	}, &result); err != nil {
+		return err
+	}
+	if result.ExceptionDetails != nil {
+		return fmt.Errorf("Home Assistant theme script failed: %s", result.ExceptionDetails.Text)
+	}
+	return nil
+}
+
+// Home Assistant stores theme mode per user and can override Chromium's media preference.
+// Use its frontend event so native theme variables are applied without force-dark rendering.
+func homeAssistantThemeScript(theme string) (string, bool) {
+	var desiredDark bool
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "dark", "force-dark":
+		desiredDark = true
+	case "light":
+		desiredDark = false
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(`(() => {
+  const desiredDark = %t;
+  const timerKey = "__kioskmateThemeTimer";
+  if (globalThis[timerKey]) clearInterval(globalThis[timerKey]);
+  let attempts = 0;
+  let stableChecks = 0;
+  const apply = () => {
+    attempts += 1;
+    const root = document.querySelector("home-assistant");
+    const selected = root && root.hass && root.hass.selectedTheme;
+    const applied = root && root.hass && root.hass.themes && root.hass.themes.darkMode;
+    if (selected && selected.dark === desiredDark && applied === desiredDark) {
+      stableChecks += 1;
+      if (stableChecks >= 12) {
+        clearInterval(globalThis[timerKey]);
+        globalThis[timerKey] = 0;
+      }
+      return;
+    }
+    stableChecks = 0;
+    if (root && root.hass) {
+      root.dispatchEvent(new CustomEvent("settheme", {
+        detail: { dark: desiredDark },
+        bubbles: true,
+        composed: true
+      }));
+    }
+    if (attempts >= 120) {
+      clearInterval(globalThis[timerKey]);
+      globalThis[timerKey] = 0;
+    }
+  };
+  globalThis[timerKey] = setInterval(apply, 250);
+  apply();
+})();`, desiredDark), true
 }
 
 func authRelevantResourceType(kind string) bool {

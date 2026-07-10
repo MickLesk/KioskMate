@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -290,6 +291,31 @@ func TestKioskForceDarkThemeForcesChromiumDarkMode(t *testing.T) {
 	}
 	if !contains(args, "--force-prefers-color-scheme=dark") {
 		t.Fatalf("native dark theme should request dark color scheme: %#v", args)
+	}
+}
+
+func TestHomeAssistantThemeScriptUsesNativeThemeEvent(t *testing.T) {
+	for _, test := range []struct {
+		theme string
+		dark  bool
+	}{
+		{theme: "dark", dark: true},
+		{theme: "force-dark", dark: true},
+		{theme: "light", dark: false},
+	} {
+		script, ok := homeAssistantThemeScript(test.theme)
+		if !ok {
+			t.Fatalf("theme %q did not produce a Home Assistant script", test.theme)
+		}
+		if !strings.Contains(script, fmt.Sprintf("const desiredDark = %t", test.dark)) {
+			t.Fatalf("theme %q script has wrong mode: %s", test.theme, script)
+		}
+		if !strings.Contains(script, `new CustomEvent("settheme"`) {
+			t.Fatalf("theme %q script does not use Home Assistant's native theme event", test.theme)
+		}
+	}
+	if script, ok := homeAssistantThemeScript("invalid"); ok || script != "" {
+		t.Fatalf("invalid theme produced script %q", script)
 	}
 }
 

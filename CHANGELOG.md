@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.9
+
+- Fixed Home Assistant dashboards remaining light while the KioskMate kiosk theme was set to dark.
+- Added native Home Assistant theme synchronization through the existing local Chromium DevTools connection, avoiding the CPU/GPU cost of forced page color transformation.
+- Clarified that Home Assistant theme changes apply to the signed-in kiosk user after saving and restarting the display browser.
+
 ## v0.1.8
 
 - Detached the Chromium process lifetime from short-lived Admin, MQTT and scheduler request contexts.

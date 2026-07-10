@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.1.8` is the final reliability-focused release before the planned `0.2.0` Admin UI redesign.
+KioskMate `0.1.9` is the final reliability-focused release before the planned `0.2.0` Admin UI redesign.
 
 ## Requirements
 
@@ -68,8 +68,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.8/kioskmate_0.1.8_arm64.deb
-sudo apt install ./kioskmate_0.1.8_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.9/kioskmate_0.1.9_arm64.deb
+sudo apt install ./kioskmate_0.1.9_arm64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now kioskmate.service
 ```
@@ -171,7 +171,7 @@ If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snaps
 
 Regular Home Assistant health checks use the unauthenticated `/manifest.json` endpoint and exponential error backoff. They do not submit or reuse Home Assistant credentials.
 
-If Home Assistant renders in a light theme while KioskMate is configured for dark mode, set the Home Assistant user/profile theme to dark first. KioskMate **Kiosk theme** `dark` no longer forces Chromium's page-wide dark renderer because it can be very CPU/GPU heavy on Raspberry Pi dashboards. Use `force-dark` only as a last resort and restart the display afterward.
+For Home Assistant pages, KioskMate **Kiosk theme** `dark` and `light` synchronize Home Assistant's native theme setting for the signed-in kiosk user through the local Chromium DevTools connection. Save the browser settings and restart the display after changing the mode. This avoids Chromium's expensive page-wide color transformation. Use `force-dark` only for pages that ignore their native dark mode; it consumes more CPU/GPU.
 
 For multi-dashboard setups, enable **Settings -> Browser and performance -> Separate browser profile per page** when one broken Home Assistant session should not affect every page.
 
@@ -185,14 +185,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.1.8 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.1.8 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.1.9 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.1.9 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.1.8 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.1.9 --arch arm64 --arch amd64
 ```
 
 The package installs:
