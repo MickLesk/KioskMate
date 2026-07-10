@@ -111,3 +111,17 @@ func TestBrowserDoctorReportsStoppedBrowser(t *testing.T) {
 		t.Fatalf("checks missing: %#v", body)
 	}
 }
+
+func TestPublicConfigRedactsSecrets(t *testing.T) {
+	cfg := &config.Config{
+		Admin: config.AdminConfig{Token: "admin-token", PasswordHash: "hash"},
+		MQTT:  config.MQTTConfig{Password: "mqtt-password"},
+	}
+	public := publicConfig(cfg)
+	if public.Admin.Token != "" || public.Admin.PasswordHash != "" || public.MQTT.Password != "" {
+		t.Fatalf("public config leaked secrets: %#v", public)
+	}
+	if cfg.Admin.Token == "" || cfg.MQTT.Password == "" {
+		t.Fatal("redaction modified the live config")
+	}
+}

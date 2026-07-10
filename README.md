@@ -14,6 +14,8 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.
+- Persistent local Chromium DevTools control for reloads, navigation and authenticated screenshots without avoidable restarts.
+- Home Assistant authentication guard that stops reconnect loops after invalid tokens or IP-ban responses.
 - HTTP and render checks for kiosk pages, including Home Assistant 403/auth hints.
 - Optional separate browser profiles per kiosk page to isolate Home Assistant sessions.
 - Hardware controls for display power, brightness, audio, microphone and keyboard where supported by the OS.
@@ -26,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.1.0` is the first public release. Alpha builds remain available for testing, but regular installs should use the newest stable release unless a specific alpha fix is needed.
+KioskMate `0.1.8` is the final reliability-focused release before the planned `0.2.0` Admin UI redesign.
 
 ## Requirements
 
@@ -66,8 +68,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.0/kioskmate_0.1.0_arm64.deb
-sudo apt install ./kioskmate_0.1.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.8/kioskmate_0.1.8_arm64.deb
+sudo apt install ./kioskmate_0.1.8_arm64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now kioskmate.service
 ```
@@ -157,13 +159,17 @@ KioskMate also publishes per-page Home Assistant entities for:
 - last page-health error
 - last page-health check time
 
+Diagnostic entities also expose the Home Assistant authentication guard, its reason and timestamp, and whether Chromium DevTools control is connected.
+
 If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
 
 ## Home Assistant 403 / White Page Troubleshooting
 
-If Home Assistant returns `403 Forbidden`, check `ip_bans.yaml` on the Home Assistant host and remove the kiosk IP if it was banned. Then use **Kiosk -> HA session repair** in KioskMate to clear the browser session and reload the active dashboard.
+If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication guard and stops Chromium to prevent a reconnect loop. Remove the kiosk IP from `ip_bans.yaml`, restart Home Assistant, then use **Dashboard -> Reset HA session**. The reset waits for all Chromium processes, backs up the old session under `~/.config/kioskmate/Browser/SessionBackups`, clears current Chromium authentication storage and starts a clean session.
 
-If HTTP checks are OK but the display is white, use **Kiosk -> Render check**. It starts a short-lived headless browser, captures a screenshot and reports whether the page looks blank. This checks rendering separately from plain HTTP reachability.
+If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snapshot** or **Kiosk -> Render check**. For the active Chromium display this captures the real signed-in browser session through the local DevTools connection. Snapshots are only captured on demand and cached briefly.
+
+Regular Home Assistant health checks use the unauthenticated `/manifest.json` endpoint and exponential error backoff. They do not submit or reuse Home Assistant credentials.
 
 If Home Assistant renders in a light theme while KioskMate is configured for dark mode, set the Home Assistant user/profile theme to dark first. KioskMate **Kiosk theme** `dark` no longer forces Chromium's page-wide dark renderer because it can be very CPU/GPU heavy on Raspberry Pi dashboards. Use `force-dark` only as a last resort and restart the display afterward.
 
@@ -179,14 +185,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.1.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.1.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.1.8 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.1.8 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.1.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.1.8 --arch arm64 --arch amd64
 ```
 
 The package installs:
@@ -210,4 +216,4 @@ The script writes a CSV with load average, memory usage and the hottest KioskMat
 
 ## Security
 
-The Admin API requires an authenticated session, bearer token or `X-KioskMate-Token` header for privileged endpoints. Keep the Admin UI inside a trusted LAN and avoid exposing it directly to the internet.
+The Admin API requires an authenticated session, bearer token or `X-KioskMate-Token` header for privileged endpoints. Browser sessions use strict same-site cookies and state-changing session requests must have the same origin. Config API responses and exports redact Admin and MQTT secrets. Optional built-in TLS can be configured with `admin.tls_cert` and `admin.tls_key`. Keep the Admin UI inside a trusted LAN and avoid exposing it directly to the internet.

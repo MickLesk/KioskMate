@@ -10,6 +10,9 @@ Environment=XDG_RUNTIME_DIR=%t
 ExecStart=/usr/bin/kioskmate
 Restart=on-failure
 RestartSec=3s
+KillMode=control-group
+TimeoutStopSec=20s
+UMask=0077
 
 [Install]
 WantedBy=default.target

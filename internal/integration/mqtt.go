@@ -79,32 +79,35 @@ func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, u
 }
 
 func (s *MQTTService) PublishNow() error {
-	if !s.cfg.MQTT.Enabled {
+	if !s.cfg.Snapshot().MQTT.Enabled {
 		return errors.New("mqtt is disabled")
 	}
-	if s.cfg.MQTT.URL == "" {
+	if s.cfg.Snapshot().MQTT.URL == "" {
 		return errors.New("mqtt url is empty")
 	}
 	return s.publishAll()
 }
 
 func (s *MQTTService) ResetDiscovery() (int, error) {
-	if !s.cfg.MQTT.Enabled {
+	if !s.cfg.Snapshot().MQTT.Enabled {
 		return 0, errors.New("mqtt is disabled")
 	}
-	if s.cfg.MQTT.URL == "" {
+	if s.cfg.Snapshot().MQTT.URL == "" {
 		return 0, errors.New("mqtt url is empty")
 	}
+	s.mu.Lock()
 	client := s.mqtt()
 	count := 0
 	for _, entry := range s.discoveryResetEntries() {
-		topic := strings.Trim(s.cfg.MQTT.Discovery, "/") + "/" + entry[0] + "/" + s.cfg.MQTT.Node + "/" + entry[1] + "/config"
+		topic := strings.Trim(s.cfg.Snapshot().MQTT.Discovery, "/") + "/" + entry[0] + "/" + s.cfg.Snapshot().MQTT.Node + "/" + entry[1] + "/config"
 		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
+			s.mu.Unlock()
 			return count, err
 		}
 		count++
 	}
 	s.cleaned = false
+	s.mu.Unlock()
 	if err := s.publishAll(); err != nil {
 		return count, err
 	}
@@ -146,24 +149,24 @@ func (s *MQTTService) Run(ctx context.Context) {
 			commandCtx, cancel := context.WithCancel(ctx)
 			commandCancel = cancel
 			activeKey = key
+			s.mu.Lock()
 			s.cache = map[string]string{}
+			s.mu.Unlock()
 			go s.commands(commandCtx)
-			s.logger.Info("mqtt connection configured", "root", s.root(), "discovery", s.cfg.MQTT.Discovery, "version", s.cfg.MQTT.Version)
+			s.logger.Info("mqtt connection configured", "root", s.root(), "discovery", s.cfg.Snapshot().MQTT.Discovery, "version", s.cfg.Snapshot().MQTT.Version)
 		}
 		if err := s.publishAll(); err != nil {
 			s.logger.Warn("mqtt publish failed", "error", err)
+			s.mu.Lock()
 			if s.client != nil {
 				_ = s.client.Close()
 				s.client = nil
 			}
-			s.mu.Lock()
 			s.cache = map[string]string{}
 			s.mu.Unlock()
 		}
-		if !sleepContext(ctx, mqttInterval(s.cfg.MQTT.Interval)) {
-			if s.client != nil {
-				_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
-			}
+		if !sleepContext(ctx, mqttInterval(s.cfg.Snapshot().MQTT.Interval)) {
+			s.publishOffline()
 			return
 		}
 	}
@@ -207,6 +210,8 @@ func (s *MQTTService) connectionKey() string {
 }
 
 func (s *MQTTService) closeClients() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.client != nil {
 		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
 		_ = s.client.Close()
@@ -228,7 +233,16 @@ func (s *MQTTService) commands(ctx context.Context) {
 		Version:   cfg.MQTT.Version,
 		KeepAlive: cfg.MQTT.KeepAlive,
 	}
+	s.mu.Lock()
 	s.command = client
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.command == client {
+			s.command = nil
+		}
+		s.mu.Unlock()
+	}()
 	topics := []string{
 		s.root() + "/command",
 		s.root() + "/browser/set",
@@ -490,6 +504,14 @@ func (s *MQTTService) publishAll() error {
 	}
 	_ = s.publishState(client, "browser_command", status.Command, true)
 	_ = s.publishState(client, "browser_last_error", firstString(status.LastError, "none"), false)
+	_ = s.publishState(client, "browser_devtools", boolState(status.DevTools), false)
+	_ = s.publishState(client, "auth_guard", boolState(status.AuthGuard.Tripped), true)
+	_ = s.publishState(client, "auth_guard_reason", firstString(status.AuthGuard.Reason, "none"), true)
+	if status.AuthGuard.At != nil {
+		_ = s.publishState(client, "auth_guard_at", status.AuthGuard.At.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "auth_guard_at", "none", true)
+	}
 	_ = s.publishState(client, "page_count", fmt.Sprintf("%d", cfg.Kiosk.PageCount()), true)
 	_ = s.publishState(client, "page_number", fmt.Sprintf("%d", status.Active+1), true)
 	_ = s.publishState(client, "page_name", status.PageName, true)
@@ -548,7 +570,7 @@ func (s *MQTTService) publishAll() error {
 
 func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardware.Status) error {
 	device := map[string]any{
-		"identifiers":   []string{"kioskmate", s.cfg.MQTT.Node},
+		"identifiers":   []string{"kioskmate", s.cfg.Snapshot().MQTT.Node},
 		"name":          "KioskMate",
 		"manufacturer":  "MickLesk",
 		"model":         firstString(status.Device["model"], "KioskMate Supervisor"),
@@ -561,7 +583,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "browser"),
 			Data: map[string]any{
 				"name":          "Display Browser",
-				"unique_id":     s.cfg.MQTT.Node + "_display_browser",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_display_browser",
 				"command_topic": s.root() + "/browser/set",
 				"state_topic":   s.root() + "/browser/state",
 				"payload_on":    "ON",
@@ -574,7 +596,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("binary_sensor", "browser"),
 			Data: map[string]any{
 				"name":        "Browser Running",
-				"unique_id":   s.cfg.MQTT.Node + "_browser_running",
+				"unique_id":   s.cfg.Snapshot().MQTT.Node + "_browser_running",
 				"state_topic": s.root() + "/browser/state",
 				"payload_on":  "ON",
 				"payload_off": "OFF",
@@ -585,7 +607,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "start"),
 			Data: map[string]any{
 				"name":          "Start Browser",
-				"unique_id":     s.cfg.MQTT.Node + "_start_browser",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_start_browser",
 				"command_topic": s.root() + "/start/execute",
 				"icon":          "mdi:play",
 				"device":        device,
@@ -595,7 +617,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "stop"),
 			Data: map[string]any{
 				"name":          "Stop Browser",
-				"unique_id":     s.cfg.MQTT.Node + "_stop_browser",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_stop_browser",
 				"command_topic": s.root() + "/stop/execute",
 				"icon":          "mdi:stop",
 				"device":        device,
@@ -605,7 +627,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "restart"),
 			Data: map[string]any{
 				"name":          "Restart Browser",
-				"unique_id":     s.cfg.MQTT.Node + "_restart_browser",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_restart_browser",
 				"command_topic": s.root() + "/restart/execute",
 				"icon":          "mdi:restart",
 				"device":        device,
@@ -615,7 +637,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "refresh"),
 			Data: map[string]any{
 				"name":          "Refresh",
-				"unique_id":     s.cfg.MQTT.Node + "_refresh",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_refresh",
 				"command_topic": s.root() + "/refresh/execute",
 				"icon":          "mdi:web-refresh",
 				"device":        device,
@@ -625,7 +647,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "previous"),
 			Data: map[string]any{
 				"name":          "Previous Page",
-				"unique_id":     s.cfg.MQTT.Node + "_previous_page",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_previous_page",
 				"command_topic": s.root() + "/previous/execute",
 				"icon":          "mdi:arrow-left",
 				"device":        device,
@@ -635,7 +657,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "next"),
 			Data: map[string]any{
 				"name":          "Next Page",
-				"unique_id":     s.cfg.MQTT.Node + "_next_page",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_next_page",
 				"command_topic": s.root() + "/next/execute",
 				"icon":          "mdi:arrow-right",
 				"device":        device,
@@ -645,7 +667,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "reset_session"),
 			Data: map[string]any{
 				"name":          "Reset HA Session",
-				"unique_id":     s.cfg.MQTT.Node + "_reset_ha_session",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_reset_ha_session",
 				"command_topic": s.root() + "/reset_session/execute",
 				"icon":          "mdi:cookie-refresh",
 				"device":        device,
@@ -655,7 +677,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "reboot"),
 			Data: map[string]any{
 				"name":          "Reboot",
-				"unique_id":     s.cfg.MQTT.Node + "_reboot",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_reboot",
 				"command_topic": s.root() + "/reboot/execute",
 				"icon":          "mdi:restart",
 				"device":        device,
@@ -665,7 +687,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "shutdown"),
 			Data: map[string]any{
 				"name":          "Shutdown",
-				"unique_id":     s.cfg.MQTT.Node + "_shutdown",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_shutdown",
 				"command_topic": s.root() + "/shutdown/execute",
 				"icon":          "mdi:power",
 				"device":        device,
@@ -675,7 +697,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "restart_service"),
 			Data: map[string]any{
 				"name":            "Restart Service",
-				"unique_id":       s.cfg.MQTT.Node + "_restart_service",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_restart_service",
 				"command_topic":   s.root() + "/restart_service/execute",
 				"icon":            "mdi:restart-alert",
 				"entity_category": "config",
@@ -686,7 +708,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("update", "app"),
 			Data: map[string]any{
 				"name":                    "KioskMate Update",
-				"unique_id":               s.cfg.MQTT.Node + "_app_update",
+				"unique_id":               s.cfg.Snapshot().MQTT.Node + "_app_update",
 				"title":                   "KioskMate",
 				"installed_version_topic": s.root() + "/update/installed_version/state",
 				"latest_version_topic":    s.root() + "/update/latest_version/state",
@@ -701,7 +723,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "apt_update"),
 			Data: map[string]any{
 				"name":            "Apt Update",
-				"unique_id":       s.cfg.MQTT.Node + "_apt_update",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_apt_update",
 				"command_topic":   s.root() + "/apt_update/execute",
 				"icon":            "mdi:package-variant",
 				"entity_category": "config",
@@ -712,7 +734,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("button", "apt_upgrade"),
 			Data: map[string]any{
 				"name":            "Apt Upgrade",
-				"unique_id":       s.cfg.MQTT.Node + "_apt_upgrade",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_apt_upgrade",
 				"command_topic":   s.root() + "/apt_upgrade/execute",
 				"icon":            "mdi:package-up",
 				"entity_category": "config",
@@ -723,7 +745,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("sensor", "cpu"),
 			Data: map[string]any{
 				"name":                "Browser CPU",
-				"unique_id":           s.cfg.MQTT.Node + "_browser_cpu",
+				"unique_id":           s.cfg.Snapshot().MQTT.Node + "_browser_cpu",
 				"state_topic":         s.root() + "/cpu/state",
 				"unit_of_measurement": "%",
 				"state_class":         "measurement",
@@ -776,7 +798,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "display_power"),
 			Data: map[string]any{
 				"name":          "Display Power",
-				"unique_id":     s.cfg.MQTT.Node + "_display_power",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_display_power",
 				"command_topic": s.root() + "/display/power/set",
 				"state_topic":   s.root() + "/display/power/state",
 				"payload_on":    "ON",
@@ -789,7 +811,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("light", "display"),
 			Data: map[string]any{
 				"name":                     "Display",
-				"unique_id":                s.cfg.MQTT.Node + "_display",
+				"unique_id":                s.cfg.Snapshot().MQTT.Node + "_display",
 				"command_topic":            s.root() + "/display/power/set",
 				"state_topic":              s.root() + "/display/power/state",
 				"brightness_command_topic": s.root() + "/display/brightness/set",
@@ -805,7 +827,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("number", "volume"),
 			Data: map[string]any{
 				"name":          "Volume",
-				"unique_id":     s.cfg.MQTT.Node + "_volume",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_volume",
 				"command_topic": s.root() + "/volume/set",
 				"state_topic":   s.root() + "/volume/state",
 				"min":           0,
@@ -819,7 +841,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("number", "microphone"),
 			Data: map[string]any{
 				"name":          "Microphone",
-				"unique_id":     s.cfg.MQTT.Node + "_microphone",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_microphone",
 				"command_topic": s.root() + "/microphone/set",
 				"state_topic":   s.root() + "/microphone/state",
 				"min":           0,
@@ -833,7 +855,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "keyboard"),
 			Data: map[string]any{
 				"name":          "Keyboard",
-				"unique_id":     s.cfg.MQTT.Node + "_keyboard",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_keyboard",
 				"command_topic": s.root() + "/keyboard/set",
 				"state_topic":   s.root() + "/keyboard/state",
 				"payload_on":    "ON",
@@ -846,11 +868,11 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("number", "page_number"),
 			Data: map[string]any{
 				"name":          "Page Number",
-				"unique_id":     s.cfg.MQTT.Node + "_page_number",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_page_number",
 				"command_topic": s.root() + "/page_number/set",
 				"state_topic":   s.root() + "/page_number/state",
 				"min":           1,
-				"max":           max(1, s.cfg.Kiosk.PageCount()),
+				"max":           max(1, s.cfg.Snapshot().Kiosk.PageCount()),
 				"step":          1,
 				"icon":          "mdi:book-open-page-variant",
 				"device":        device,
@@ -860,7 +882,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("select", "page_name"),
 			Data: map[string]any{
 				"name":          "Page Name",
-				"unique_id":     s.cfg.MQTT.Node + "_page_name_select",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_page_name_select",
 				"command_topic": s.root() + "/page_name/set",
 				"state_topic":   s.root() + "/page_name/state",
 				"options":       s.pageNames(),
@@ -872,7 +894,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("text", "page_url"),
 			Data: map[string]any{
 				"name":          "Page Url",
-				"unique_id":     s.cfg.MQTT.Node + "_page_url",
+				"unique_id":     s.cfg.Snapshot().MQTT.Node + "_page_url",
 				"command_topic": s.root() + "/page_url/set",
 				"state_topic":   s.root() + "/page_url/state",
 				"pattern":       "https?://.*",
@@ -884,7 +906,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "reduce_motion"),
 			Data: map[string]any{
 				"name":            "Reduce Motion",
-				"unique_id":       s.cfg.MQTT.Node + "_reduce_motion",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_reduce_motion",
 				"command_topic":   s.root() + "/reduce_motion/set",
 				"state_topic":     s.root() + "/reduce_motion/state",
 				"payload_on":      "ON",
@@ -898,7 +920,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "isolate_page_sessions"),
 			Data: map[string]any{
 				"name":            "Separate Page Sessions",
-				"unique_id":       s.cfg.MQTT.Node + "_isolate_page_sessions",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_isolate_page_sessions",
 				"command_topic":   s.root() + "/isolate_page_sessions/set",
 				"state_topic":     s.root() + "/isolate_page_sessions/state",
 				"payload_on":      "ON",
@@ -912,7 +934,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "watchdog_enabled"),
 			Data: map[string]any{
 				"name":            "Browser Watchdog",
-				"unique_id":       s.cfg.MQTT.Node + "_watchdog_enabled",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_watchdog_enabled",
 				"command_topic":   s.root() + "/watchdog_enabled/set",
 				"state_topic":     s.root() + "/watchdog_enabled/state",
 				"payload_on":      "ON",
@@ -926,7 +948,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("switch", "scheduler_enabled"),
 			Data: map[string]any{
 				"name":            "Kiosk Scheduler",
-				"unique_id":       s.cfg.MQTT.Node + "_scheduler_enabled",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_scheduler_enabled",
 				"command_topic":   s.root() + "/scheduler_enabled/set",
 				"state_topic":     s.root() + "/scheduler_enabled/state",
 				"payload_on":      "ON",
@@ -940,7 +962,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("select", "scheduler_mode"),
 			Data: map[string]any{
 				"name":            "Scheduler Mode",
-				"unique_id":       s.cfg.MQTT.Node + "_scheduler_mode_select",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_scheduler_mode_select",
 				"command_topic":   s.root() + "/scheduler_mode/set",
 				"state_topic":     s.root() + "/scheduler_mode/state",
 				"options":         []string{"rotation", "time", "hybrid"},
@@ -953,7 +975,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("number", "scheduler_tick"),
 			Data: map[string]any{
 				"name":                "Scheduler Tick",
-				"unique_id":           s.cfg.MQTT.Node + "_scheduler_tick_number",
+				"unique_id":           s.cfg.Snapshot().MQTT.Node + "_scheduler_tick_number",
 				"command_topic":       s.root() + "/scheduler_tick/set",
 				"state_topic":         s.root() + "/scheduler_tick/state",
 				"min":                 5,
@@ -969,7 +991,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("select", "kiosk_theme"),
 			Data: map[string]any{
 				"name":            "Kiosk Theme",
-				"unique_id":       s.cfg.MQTT.Node + "_kiosk_theme_select",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_kiosk_theme_select",
 				"command_topic":   s.root() + "/kiosk_theme/set",
 				"state_topic":     s.root() + "/kiosk_theme/state",
 				"options":         []string{"dark", "light", "force-dark"},
@@ -982,7 +1004,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("select", "performance_profile"),
 			Data: map[string]any{
 				"name":            "Performance Profile",
-				"unique_id":       s.cfg.MQTT.Node + "_performance_profile_select",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_performance_profile_select",
 				"command_topic":   s.root() + "/performance_profile/set",
 				"state_topic":     s.root() + "/performance_profile/state",
 				"options":         []string{"low-power", "raspberry", "minimal", "balanced", "quality", "conservative"},
@@ -995,7 +1017,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("select", "gpu_mode"),
 			Data: map[string]any{
 				"name":            "GPU Mode",
-				"unique_id":       s.cfg.MQTT.Node + "_gpu_mode_select",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_gpu_mode_select",
 				"command_topic":   s.root() + "/gpu_mode/set",
 				"state_topic":     s.root() + "/gpu_mode/state",
 				"options":         []string{"auto", "software"},
@@ -1008,7 +1030,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("sensor", "rss"),
 			Data: map[string]any{
 				"name":                "Browser RSS",
-				"unique_id":           s.cfg.MQTT.Node + "_browser_rss",
+				"unique_id":           s.cfg.Snapshot().MQTT.Node + "_browser_rss",
 				"state_topic":         s.root() + "/rss/state",
 				"unit_of_measurement": "MB",
 				"state_class":         "measurement",
@@ -1019,7 +1041,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			Topic: s.discoveryTopic("sensor", "version"),
 			Data: map[string]any{
 				"name":        "Version",
-				"unique_id":   s.cfg.MQTT.Node + "_version",
+				"unique_id":   s.cfg.Snapshot().MQTT.Node + "_version",
 				"state_topic": s.root() + "/version/state",
 				"icon":        "mdi:tag",
 				"device":      device,
@@ -1027,6 +1049,36 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		},
 	}
 	items = append(items, s.pageDiscoveryItems(device)...)
+	items = append(items,
+		discoveryItem{
+			Topic: s.discoveryTopic("binary_sensor", "browser_devtools"),
+			Data: map[string]any{
+				"name":            "Browser Control Connected",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_browser_devtools",
+				"state_topic":     s.root() + "/browser_devtools/state",
+				"payload_on":      "ON",
+				"payload_off":     "OFF",
+				"entity_category": "diagnostic",
+				"icon":            "mdi:connection",
+				"device":          device,
+			},
+		},
+		discoveryItem{
+			Topic: s.discoveryTopic("binary_sensor", "auth_guard"),
+			Data: map[string]any{
+				"name":            "HA Authentication Guard",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_auth_guard",
+				"state_topic":     s.root() + "/auth_guard/state",
+				"payload_on":      "ON",
+				"payload_off":     "OFF",
+				"device_class":    "problem",
+				"entity_category": "diagnostic",
+				"device":          device,
+			},
+		},
+		s.diagnosticSensor(device, "auth_guard_reason", "HA Authentication Guard Reason", "mdi:shield-alert", ""),
+		s.diagnosticSensor(device, "auth_guard_at", "HA Authentication Guard Time", "mdi:clock-alert", ""),
+	)
 	if !s.cleaned {
 		_ = s.cleanupLegacyDiscovery(client, items)
 		s.cleaned = true
@@ -1044,7 +1096,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 func (s *MQTTService) sensor(device map[string]any, id string, name string, icon string, unit string) discoveryItem {
 	data := map[string]any{
 		"name":        name,
-		"unique_id":   s.cfg.MQTT.Node + "_" + id,
+		"unique_id":   s.cfg.Snapshot().MQTT.Node + "_" + id,
 		"state_topic": s.root() + "/" + id + "/state",
 		"icon":        icon,
 		"device":      device,
@@ -1080,11 +1132,11 @@ func (s *MQTTService) cleanupLegacyDiscovery(client *mqttclient.Client, current 
 	}
 	seen := map[string]bool{}
 	for _, node := range nodes {
-		if node == "" || node == s.cfg.MQTT.Node {
+		if node == "" || node == s.cfg.Snapshot().MQTT.Node {
 			continue
 		}
 		for _, entry := range entries {
-			topic := strings.Trim(s.cfg.MQTT.Discovery, "/") + "/" + entry[0] + "/" + node + "/" + entry[1] + "/config"
+			topic := strings.Trim(s.cfg.Snapshot().MQTT.Discovery, "/") + "/" + entry[0] + "/" + node + "/" + entry[1] + "/config"
 			if seen[topic] {
 				continue
 			}
@@ -1140,6 +1192,10 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 	entries := append([][2]string{}, legacyDiscoveryEntries()...)
 	entries = append(entries,
 		[2]string{"binary_sensor", "browser"},
+		[2]string{"binary_sensor", "browser_devtools"},
+		[2]string{"binary_sensor", "auth_guard"},
+		[2]string{"sensor", "auth_guard_reason"},
+		[2]string{"sensor", "auth_guard_at"},
 		[2]string{"switch", "browser"},
 		[2]string{"switch", "display_power"},
 		[2]string{"button", "start"},
@@ -1310,6 +1366,8 @@ func trimFloat(value float64) string {
 }
 
 func (s *MQTTService) publishCommandResult(topic string, command string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	client := s.mqtt()
 	status := "ok"
 	errText := ""
@@ -1329,6 +1387,14 @@ func (s *MQTTService) publishCommandResult(topic string, command string, err err
 	_ = s.publishState(client, "last_command_status", status, false)
 	_ = s.publishState(client, "last_command_error", firstString(errText, "none"), false)
 	_ = s.publishState(client, "last_command", strings.TrimSpace(command), false)
+}
+
+func (s *MQTTService) publishOffline() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client != nil {
+		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
+	}
 }
 
 func (s *MQTTService) publishState(client *mqttclient.Client, path string, value string, retained bool) error {
@@ -1379,9 +1445,9 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *MQTTService) pageNames() []string {
-	names := make([]string, 0, s.cfg.Kiosk.PageCount())
-	for index, url := range s.cfg.Kiosk.PageURLs() {
-		name := s.cfg.Kiosk.PageName(index)
+	names := make([]string, 0, s.cfg.Snapshot().Kiosk.PageCount())
+	for index, url := range s.cfg.Snapshot().Kiosk.PageURLs() {
+		name := s.cfg.Snapshot().Kiosk.PageName(index)
 		if name == "" {
 			name = url
 		}
@@ -1422,11 +1488,11 @@ func (s *MQTTService) setPageByEntityTopic(ctx context.Context, topic string) er
 }
 
 func (s *MQTTService) pageEntities() []pageEntity {
-	urls := s.cfg.Kiosk.PageURLs()
+	urls := s.cfg.Snapshot().Kiosk.PageURLs()
 	entities := make([]pageEntity, 0, len(urls))
 	seen := map[string]int{}
 	for index, url := range urls {
-		name := s.cfg.Kiosk.PageName(index)
+		name := s.cfg.Snapshot().Kiosk.PageName(index)
 		if name == "" {
 			name = url
 		}
@@ -1453,7 +1519,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("button", object),
 				Data: map[string]any{
 					"name":          "Page " + page.Name,
-					"unique_id":     s.cfg.MQTT.Node + "_" + object + "_activate",
+					"unique_id":     s.cfg.Snapshot().MQTT.Node + "_" + object + "_activate",
 					"command_topic": s.root() + "/pages/" + page.ID + "/activate",
 					"payload_press": "PRESS",
 					"icon":          "mdi:monitor-dashboard",
@@ -1464,7 +1530,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("binary_sensor", object+"_active"),
 				Data: map[string]any{
 					"name":        "Page " + page.Name + " Active",
-					"unique_id":   s.cfg.MQTT.Node + "_" + object + "_active",
+					"unique_id":   s.cfg.Snapshot().MQTT.Node + "_" + object + "_active",
 					"state_topic": s.root() + "/pages/" + page.ID + "/active/state",
 					"payload_on":  "ON",
 					"payload_off": "OFF",
@@ -1476,7 +1542,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("binary_sensor", object+"_reachable"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Reachable",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_reachable",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_reachable",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/reachable/state",
 					"payload_on":      "ON",
 					"payload_off":     "OFF",
@@ -1489,7 +1555,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("sensor", object+"_status_code"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Status Code",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_status_code",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_status_code",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/status_code/state",
 					"icon":            "mdi:numeric",
 					"entity_category": "diagnostic",
@@ -1500,7 +1566,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("sensor", object+"_last_error"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Last Error",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_last_error",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_last_error",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/last_error/state",
 					"icon":            "mdi:alert",
 					"entity_category": "diagnostic",
@@ -1511,7 +1577,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("sensor", object+"_last_checked"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Last Checked",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_last_checked",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_last_checked",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/last_checked/state",
 					"icon":            "mdi:clock-check",
 					"entity_category": "diagnostic",
@@ -1522,7 +1588,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("sensor", object+"_index"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Index",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_index",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_index",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/index/state",
 					"icon":            "mdi:numeric",
 					"entity_category": "diagnostic",
@@ -1533,7 +1599,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("sensor", object+"_name"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " Name",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_name",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_name",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/name/state",
 					"icon":            "mdi:card-text",
 					"entity_category": "diagnostic",
@@ -1544,7 +1610,7 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 				Topic: s.discoveryTopic("sensor", object+"_url"),
 				Data: map[string]any{
 					"name":            "Page " + page.Name + " URL",
-					"unique_id":       s.cfg.MQTT.Node + "_" + object + "_url",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_url",
 					"state_topic":     s.root() + "/pages/" + page.ID + "/url/state",
 					"icon":            "mdi:web",
 					"entity_category": "diagnostic",
@@ -1619,7 +1685,7 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 	s.health[page.ID] = health
 	if health.OK {
 		s.healthFailures[page.ID] = 0
-		s.healthNext[page.ID] = now.Add(maxDuration(30*time.Second, mqttInterval(s.cfg.MQTT.Interval)*time.Duration(len(pages))))
+		s.healthNext[page.ID] = now.Add(maxDuration(30*time.Second, mqttInterval(s.cfg.Snapshot().MQTT.Interval)*time.Duration(len(pages))))
 	} else {
 		failures := min(6, s.healthFailures[page.ID]+1)
 		s.healthFailures[page.ID] = failures
@@ -1665,7 +1731,7 @@ func minDuration(left, right time.Duration) time.Duration {
 }
 
 func (s *MQTTService) discoveryTopic(component, object string) string {
-	return strings.Trim(s.cfg.MQTT.Discovery, "/") + "/" + component + "/" + s.cfg.MQTT.Node + "/" + object + "/config"
+	return strings.Trim(s.cfg.Snapshot().MQTT.Discovery, "/") + "/" + component + "/" + s.cfg.Snapshot().MQTT.Node + "/" + object + "/config"
 }
 
 func boolState(value bool) string {

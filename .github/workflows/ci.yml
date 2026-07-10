@@ -2,43 +2,37 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  go:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: .go-version
-          cache-dependency-path: go.mod
-
-      - name: Show Go version
-        run: go version
-
-      - name: Check formatting
+          cache-dependency-path: go.sum
+      - name: Verify formatting
         run: test -z "$(gofmt -l .)"
-
-      - name: Test
-        run: go test ./...
-
-      - name: Build linux arm64
-        run: GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-linux-arm64 ./cmd/kioskmate
-
-      - name: Build linux amd64
-        run: GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-linux-amd64 ./cmd/kioskmate
-
-      - name: Build deb arm64
-        run: VERSION=0.0.0-ci ARCH=arm64 bash scripts/package-deb.sh
-
-      - name: Build deb amd64
-        run: VERSION=0.0.0-ci ARCH=amd64 bash scripts/package-deb.sh
+      - name: Vet
+        run: go vet ./...
+      - name: Race tests
+        run: go test -race ./...
+      - name: Frontend syntax
+        run: |
+          node --check internal/admin/web/assets/theme.js
+          node --check internal/admin/web/assets/i18n.js
+          node --check internal/admin/web/assets/app.js
+      - name: Build Linux binaries
+        run: |
+          GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-linux-arm64 ./cmd/kioskmate
+          GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-linux-amd64 ./cmd/kioskmate
+      - name: Build Debian packages
+        run: |
+          VERSION=0.0.0-ci ARCH=arm64 bash scripts/package-deb.sh
+          VERSION=0.0.0-ci ARCH=amd64 bash scripts/package-deb.sh

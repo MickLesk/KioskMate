@@ -152,7 +152,7 @@ func (b *Browser) navigateDevTools(ctx context.Context, target string) error {
 	return nil
 }
 
-func (b *Browser) monitorDevTools(cmd any, profile string, done <-chan struct{}) {
+func (b *Browser) monitorDevTools(profile string, done <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -204,11 +204,20 @@ func (b *Browser) monitorDevTools(cmd any, profile string, done <-chan struct{})
 					URL    string  `json:"url"`
 				} `json:"response"`
 			}
-			if json.Unmarshal(event.Params, &params) == nil && int(params.Response.Status) == http.StatusForbidden && likelyHomeAssistantURL(params.Response.URL) {
+			if json.Unmarshal(event.Params, &params) == nil && int(params.Response.Status) == http.StatusForbidden && authRelevantResourceType(params.Type) && likelyHomeAssistantURL(params.Response.URL) {
 				b.tripAuthGuard("Home Assistant returned HTTP 403 for " + params.Type)
 				return
 			}
 		}
+	}
+}
+
+func authRelevantResourceType(kind string) bool {
+	switch kind {
+	case "Document", "XHR", "Fetch", "WebSocket":
+		return true
+	default:
+		return false
 	}
 }
 

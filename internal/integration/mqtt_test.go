@@ -123,7 +123,7 @@ func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
 	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	items := service.discoveryResetEntries()
 
-	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") {
+	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") || !hasDiscoveryEntry(items, "binary_sensor", "auth_guard") || !hasDiscoveryEntry(items, "binary_sensor", "browser_devtools") {
 		t.Fatalf("discovery entries missing browser/display controls: %#v", items)
 	}
 }
@@ -184,6 +184,13 @@ func TestCheckPageHealth(t *testing.T) {
 	health = checkPageHealth("ftp://example.invalid")
 	if health.OK || health.Error == "" {
 		t.Fatalf("unsupported health = %#v", health)
+	}
+}
+
+func TestHomeAssistantHealthCheckUsesPublicManifest(t *testing.T) {
+	got := safeHealthCheckURL("http://homeassistant.local:8123/dashboard-kiosk/main?kiosk")
+	if got != "http://homeassistant.local:8123/manifest.json" {
+		t.Fatalf("safe health URL = %q", got)
 	}
 }
 

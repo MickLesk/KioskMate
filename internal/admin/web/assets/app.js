@@ -597,6 +597,8 @@
                       [t("watchdogPressure"), watchdog.pressure || "normal"],
                       [t("watchdogAction"), watchdog.last_action || "-"],
                       [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
+                      [t("devTools"), browser.devtools ? t("connected") : t("notConnected")],
+                      [t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready")],
                     ])}
                     ${renderRecoveryHints(browser)}
                     ${renderActionLog()}
@@ -1058,9 +1060,16 @@
       async function browserAction(action, key) {
         await runAction(key, async () => {
           await postJSON("/api/browser/" + action);
+          clearSnapshot();
           await refreshCore();
           renderApp();
         });
+      }
+
+      function clearSnapshot() {
+        if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
+        state.snapshotURL = "";
+        state.snapshotTime = "";
       }
 
       async function repairHASession() {

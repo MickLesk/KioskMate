@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.8
+
+- Detached the Chromium process lifetime from short-lived Admin, MQTT and scheduler request contexts.
+- Reworked browser stop, restart and session reset to wait for the complete Chromium process group before touching profile data.
+- Added automatic backups for browser session data and support for current Chromium cookie and WebStorage paths.
+- Added a persistent Home Assistant authentication circuit breaker that detects WebSocket `auth_invalid` responses and relevant HTTP 403 responses before repeated reconnects can trigger more login failures.
+- Added local Chromium DevTools control for page reloads, navigation and screenshots without restarting the browser.
+- Replaced automatic temporary-profile screenshots with explicit, cached screenshots of the real signed-in kiosk session.
+- Changed Home Assistant health probes to use the public manifest endpoint with redirect limits and exponential error backoff.
+- Added Home Assistant MQTT diagnostic entities for the authentication guard and DevTools connection.
+- Made config updates synchronized and config writes atomic while preserving backups across package upgrades.
+- Redacted Admin tokens, password hashes and MQTT passwords from the Admin config API and exported config files.
+- Added Argon2id password hashing with automatic migration from existing KioskMate password hashes.
+- Added same-origin request validation, stricter browser security headers, server timeouts and optional built-in TLS certificate settings.
+- Added log rotation, crash diagnostic retention, bounded Admin sessions/jobs and 15-minute in-memory privilege credential expiry.
+- Fixed MQTT state caching so failed publishes are retried and serialized publisher/client state to avoid concurrent access.
+- Required SHA-256 digests and size validation before built-in updater package installation.
+- Expanded CI with race tests, frontend syntax checks, cross-architecture builds and Debian package builds.
+
 ## v0.1.7
 
 - Split the embedded Admin UI into separate `index.html`, `app.css`, `theme.js`, `i18n.js` and `app.js` files.

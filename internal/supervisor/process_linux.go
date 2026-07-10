@@ -3,8 +3,7 @@
 package supervisor
 
 import (
-	"os/exec"
-	"strconv"
+	"errors"
 	"syscall"
 	"time"
 )
@@ -18,14 +17,15 @@ func terminateProcessTree(pid int) error {
 		return nil
 	}
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	done := make(chan error, 1)
-	go func() {
-		done <- exec.Command("sh", "-c", "while kill -0 "+strconv.Itoa(pid)+" 2>/dev/null; do sleep 0.1; done").Run()
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-time.After(3 * time.Second):
-		return syscall.Kill(-pid, syscall.SIGKILL)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(-pid, 0); errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }

@@ -30,11 +30,11 @@ KioskMate detects available tools and exposes only what the system can actually 
 For heavy Home Assistant dashboards on Raspberry hardware, start with:
 
 - Performance profile: `raspberry`
-- GPU mode: `software`
+- GPU mode: `auto`
 - Reduce motion: enabled
 - Watchdog: enabled
-- Browser RSS limit: 700-900 MB
-- Browser CPU grace: 45 seconds or higher
+- Browser RSS limit: 900-1200 MB
+- Browser CPU grace: 10 minutes
 
 Use the benchmark helper before and after changes:
 

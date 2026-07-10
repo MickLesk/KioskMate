@@ -152,12 +152,13 @@ func (s *Service) install(ctx context.Context, job *Job) {
 		return
 	}
 	_ = run(ctx, job, "systemctl", "--user", "daemon-reload")
-	_ = run(ctx, job, "systemctl", "--user", "restart", s.cfg.Update.Service)
+	_ = run(ctx, job, "systemctl", "--user", "restart", s.cfg.Snapshot().Update.Service)
 	job.setExit(0)
 }
 
 func (s *Service) latest(ctx context.Context) (githubRelease, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+s.cfg.Update.Repository+"/releases", nil)
+	cfg := s.cfg.Snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+cfg.Update.Repository+"/releases", nil)
 	if err != nil {
 		return githubRelease{}, err
 	}
@@ -175,7 +176,7 @@ func (s *Service) latest(ctx context.Context) (githubRelease, error) {
 		return githubRelease{}, err
 	}
 	for _, release := range releases {
-		if !release.Draft && (!release.Prerelease || s.cfg.Update.Prerelease) {
+		if !release.Draft && (!release.Prerelease || cfg.Update.Prerelease) {
 			return release, nil
 		}
 	}

@@ -160,7 +160,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/jobs/", s.auth(s.job))
 
 	server := &http.Server{
-		Addr:              s.cfg.Admin.Addr(),
+		Addr:              s.cfg.Snapshot().Admin.Addr(),
 		Handler:           securityHeaders(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -179,8 +179,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		errc <- server.Shutdown(shutdownCtx)
 	}()
 	go func() {
-		if s.cfg.Admin.TLSCert != "" && s.cfg.Admin.TLSKey != "" {
-			errc <- server.ServeTLS(listener, s.cfg.Admin.TLSCert, s.cfg.Admin.TLSKey)
+		if s.cfg.Snapshot().Admin.TLSCert != "" && s.cfg.Snapshot().Admin.TLSKey != "" {
+			errc <- server.ServeTLS(listener, s.cfg.Snapshot().Admin.TLSCert, s.cfg.Snapshot().Admin.TLSKey)
 			return
 		}
 		errc <- server.Serve(listener)
@@ -337,8 +337,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated": s.authenticated(r),
-		"setupRequired": s.cfg.Admin.PasswordHash == "",
-		"tokenRequired": s.cfg.Admin.PasswordHash == "",
+		"setupRequired": s.cfg.Snapshot().Admin.PasswordHash == "",
+		"tokenRequired": s.cfg.Snapshot().Admin.PasswordHash == "",
 		"configPath":    s.cfg.Path,
 		"version":       s.version,
 	})
@@ -349,7 +349,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.cfg.Admin.PasswordHash != "" {
+	if s.cfg.Snapshot().Admin.PasswordHash != "" {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "setup already completed"})
 		return
 	}
@@ -365,7 +365,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Admin.Token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Snapshot().Admin.Token)) != 1 {
 		s.recordFailedAttempt(r)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid setup token"})
 		return
@@ -409,17 +409,17 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok := false
-	if s.cfg.Admin.PasswordHash != "" {
-		ok = VerifyPassword(body.Password, s.cfg.Admin.PasswordHash)
+	if s.cfg.Snapshot().Admin.PasswordHash != "" {
+		ok = VerifyPassword(body.Password, s.cfg.Snapshot().Admin.PasswordHash)
 	} else if body.Token != "" {
-		ok = subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Admin.Token)) == 1
+		ok = subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Snapshot().Admin.Token)) == 1
 	}
 	if !ok {
 		s.recordFailedAttempt(r)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	if strings.HasPrefix(s.cfg.Admin.PasswordHash, "sha256iter$") {
+	if strings.HasPrefix(s.cfg.Snapshot().Admin.PasswordHash, "sha256iter$") {
 		if hash, err := HashPassword(body.Password); err == nil {
 			_ = s.cfg.Mutate(func(next *config.Config) error {
 				next.Admin.PasswordHash = hash
@@ -485,7 +485,7 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if s.cfg.Admin.PasswordHash != "" && !VerifyPassword(body.Current, s.cfg.Admin.PasswordHash) {
+	if s.cfg.Snapshot().Admin.PasswordHash != "" && !VerifyPassword(body.Current, s.cfg.Snapshot().Admin.PasswordHash) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid current password"})
 		return
 	}
@@ -516,20 +516,20 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"hardware": s.hardware.Status(ctx),
 		"config": map[string]any{
 			"path":        s.cfg.Path,
-			"profile":     s.cfg.Performance.Profile,
-			"gpu_mode":    s.cfg.Performance.GPUMode,
-			"theme":       s.cfg.Kiosk.Theme,
-			"zoom":        s.cfg.Kiosk.ZoomPercent,
-			"widget":      s.cfg.Kiosk.Widget,
-			"watchdog":    s.cfg.Watchdog.Enabled,
-			"admin_addr":  s.cfg.Admin.Addr(),
-			"kiosk_urls":  s.cfg.Kiosk.URLs,
-			"kiosk_pages": s.cfg.Kiosk.Pages,
-			"scheduler":   s.cfg.Kiosk.Scheduler,
-			"rotation":    s.cfg.Kiosk.Rotation,
-			"time_rules":  s.cfg.Kiosk.TimeRules,
-			"browser_cmd": s.cfg.Kiosk.BrowserCommand,
-			"mqtt":        s.cfg.MQTT.Enabled,
+			"profile":     s.cfg.Snapshot().Performance.Profile,
+			"gpu_mode":    s.cfg.Snapshot().Performance.GPUMode,
+			"theme":       s.cfg.Snapshot().Kiosk.Theme,
+			"zoom":        s.cfg.Snapshot().Kiosk.ZoomPercent,
+			"widget":      s.cfg.Snapshot().Kiosk.Widget,
+			"watchdog":    s.cfg.Snapshot().Watchdog.Enabled,
+			"admin_addr":  s.cfg.Snapshot().Admin.Addr(),
+			"kiosk_urls":  s.cfg.Snapshot().Kiosk.URLs,
+			"kiosk_pages": s.cfg.Snapshot().Kiosk.Pages,
+			"scheduler":   s.cfg.Snapshot().Kiosk.Scheduler,
+			"rotation":    s.cfg.Snapshot().Kiosk.Rotation,
+			"time_rules":  s.cfg.Snapshot().Kiosk.TimeRules,
+			"browser_cmd": s.cfg.Snapshot().Kiosk.BrowserCommand,
+			"mqtt":        s.cfg.Snapshot().MQTT.Enabled,
 		},
 	})
 }
@@ -660,7 +660,7 @@ func (s *Server) journalLines(ctx context.Context, limit int) ([]string, string)
 	if _, err := exec.LookPath("journalctl"); err != nil {
 		return nil, "journalctl not found"
 	}
-	out, err := exec.CommandContext(ctx, "journalctl", "--user", "-u", s.cfg.Update.Service, "-n", strconv.Itoa(max(1, limit)), "--no-pager").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "journalctl", "--user", "-u", s.cfg.Snapshot().Update.Service, "-n", strconv.Itoa(max(1, limit)), "--no-pager").CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if err != nil {
 		return splitLines(text), "journalctl failed: " + err.Error()
@@ -673,8 +673,8 @@ func (s *Server) journalLines(ctx context.Context, limit int) ([]string, string)
 
 func (s *Server) statusLines(ctx context.Context) []string {
 	lines := sectionHeader("service status")
-	if out, err := exec.CommandContext(ctx, "systemctl", "--user", "status", s.cfg.Update.Service, "--no-pager", "--full").CombinedOutput(); len(out) > 0 || err != nil {
-		lines = append(lines, "$ systemctl --user status "+s.cfg.Update.Service+" --no-pager --full")
+	if out, err := exec.CommandContext(ctx, "systemctl", "--user", "status", s.cfg.Snapshot().Update.Service, "--no-pager", "--full").CombinedOutput(); len(out) > 0 || err != nil {
+		lines = append(lines, "$ systemctl --user status "+s.cfg.Snapshot().Update.Service+" --no-pager --full")
 		lines = append(lines, splitLines(strings.TrimSpace(string(out)))...)
 		if err != nil {
 			lines = append(lines, "error: "+err.Error())
@@ -995,13 +995,13 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 	}
 	next.Path = s.cfg.Path
 	if next.Admin.Token == "" {
-		next.Admin.Token = s.cfg.Admin.Token
+		next.Admin.Token = s.cfg.Snapshot().Admin.Token
 	}
 	if next.Admin.PasswordHash == "" {
-		next.Admin.PasswordHash = s.cfg.Admin.PasswordHash
+		next.Admin.PasswordHash = s.cfg.Snapshot().Admin.PasswordHash
 	}
 	if next.MQTT.Password == "" {
-		next.MQTT.Password = s.cfg.MQTT.Password
+		next.MQTT.Password = s.cfg.Snapshot().MQTT.Password
 	}
 	return &next, nil
 }
@@ -1193,12 +1193,12 @@ func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"active_page":      status.Active,
 		"page_name":        status.PageName,
 		"url":              status.URL,
-		"page_count":       s.cfg.Kiosk.PageCount(),
-		"isolated_pages":   s.cfg.Kiosk.IsolateSessions,
-		"profile":          s.cfg.Performance.Profile,
-		"gpu_mode":         s.cfg.Performance.GPUMode,
-		"reduce_motion":    s.cfg.Performance.ReduceMotion,
-		"watchdog":         s.cfg.Watchdog.Enabled,
+		"page_count":       s.cfg.Snapshot().Kiosk.PageCount(),
+		"isolated_pages":   s.cfg.Snapshot().Kiosk.IsolateSessions,
+		"profile":          s.cfg.Snapshot().Performance.Profile,
+		"gpu_mode":         s.cfg.Snapshot().Performance.GPUMode,
+		"reduce_motion":    s.cfg.Snapshot().Performance.ReduceMotion,
+		"watchdog":         s.cfg.Snapshot().Watchdog.Enabled,
 		"watchdog_status":  status.Watchdog,
 		"browser_log":      config.BrowserLogFilePath(s.cfg.Path),
 		"core_log":         config.LogFilePath(s.cfg.Path),
@@ -1247,7 +1247,7 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	} else {
 		add("runtime_dir", "error", "Runtime directory is not accessible.", env["XDG_RUNTIME_DIR"])
 	}
-	profile := s.cfg.Kiosk.UserDataDir
+	profile := s.cfg.Snapshot().Kiosk.UserDataDir
 	if profile == "" {
 		add("browser_profile", "error", "Browser profile path is empty.", "")
 	} else if err := os.MkdirAll(profile, 0o700); err != nil {
@@ -1441,12 +1441,12 @@ func (s *Server) mqttDiscovery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	pageCount := s.cfg.Kiosk.PageCount()
+	pageCount := s.cfg.Snapshot().Kiosk.PageCount()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
-		"discovery_prefix": strings.Trim(s.cfg.MQTT.Discovery, "/"),
-		"root_topic":       strings.Trim(s.cfg.MQTT.BaseTopic, "/") + "/" + strings.Trim(s.cfg.MQTT.Node, "/"),
-		"node":             s.cfg.MQTT.Node,
+		"discovery_prefix": strings.Trim(s.cfg.Snapshot().MQTT.Discovery, "/"),
+		"root_topic":       strings.Trim(s.cfg.Snapshot().MQTT.BaseTopic, "/") + "/" + strings.Trim(s.cfg.Snapshot().MQTT.Node, "/"),
+		"node":             s.cfg.Snapshot().MQTT.Node,
 		"page_count":       pageCount,
 		"page_entities":    pageCount * 9,
 	})
@@ -1610,7 +1610,7 @@ func (s *Server) browserCheckPage(w http.ResponseWriter, r *http.Request) {
 	}
 	target := strings.TrimSpace(body.URL)
 	if target == "" {
-		urls := s.cfg.Kiosk.PageURLs()
+		urls := s.cfg.Snapshot().Kiosk.PageURLs()
 		if body.Index < 0 || body.Index >= len(urls) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "page index out of range"})
 			return
@@ -1736,7 +1736,7 @@ func (s *Server) browserRenderCheck(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	target := strings.TrimSpace(body.URL)
 	if target == "" {
-		urls := s.cfg.Kiosk.PageURLs()
+		urls := s.cfg.Snapshot().Kiosk.PageURLs()
 		if body.Index < 0 || body.Index >= len(urls) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "page index out of range"})
 			return
@@ -1989,10 +1989,10 @@ func (s *Server) validToken(r *http.Request) bool {
 	if token == "" {
 		token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	}
-	if token == "" || s.cfg.Admin.Token == "" {
+	if token == "" || s.cfg.Snapshot().Admin.Token == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Admin.Token)) == 1
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Snapshot().Admin.Token)) == 1
 }
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {

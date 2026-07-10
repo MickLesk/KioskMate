@@ -157,7 +157,7 @@ func (s *Service) command(name string) (string, []string, bool) {
 	case "apt-upgrade":
 		return "sudo", []string{"-n", "apt-get", "upgrade", "-y", "-qq"}, true
 	case "restart-service":
-		return "systemctl", []string{"--user", "restart", s.cfg.Update.Service}, true
+		return "systemctl", []string{"--user", "restart", s.cfg.Snapshot().Update.Service}, true
 	case "reboot":
 		return "sudo", []string{"-n", "reboot"}, true
 	case "shutdown":

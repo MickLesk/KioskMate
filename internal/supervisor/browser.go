@@ -167,7 +167,7 @@ func (b *Browser) Start(ctx context.Context) error {
 	go b.watch(cmd.Process.Pid, b.done)
 	cfg := b.cfg.Snapshot()
 	if supportsCDP(browserPreset(cfg.Kiosk.BrowserPreset)) {
-		go b.monitorDevTools(cmd, browserUserDataDir(cfg, b.active), b.done)
+		go b.monitorDevTools(browserUserDataDir(cfg, b.active), b.done)
 	}
 	return nil
 }

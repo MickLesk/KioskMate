@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -18,6 +20,15 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 	}
 	if !strings.HasPrefix(hash, "argon2id$") {
 		t.Fatalf("hash = %q, want Argon2id", hash)
+	}
+}
+
+func TestLegacyPasswordHashStillVerifies(t *testing.T) {
+	salt := []byte("0123456789abcdef")
+	hash := passwordDigest([]byte("legacy-password"), salt, 120000)
+	encoded := fmt.Sprintf("sha256iter$120000$%s$%s", base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash))
+	if !VerifyPassword("legacy-password", encoded) {
+		t.Fatal("legacy password hash must remain valid for migration")
 	}
 }
 
