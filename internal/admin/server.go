@@ -35,7 +35,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
-//go:embed web/index.html
+//go:embed web/index.html web/assets/*
 var content embed.FS
 
 const sessionCookieName = "kioskmate_session"
@@ -99,6 +99,7 @@ func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher,
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
+	mux.HandleFunc("/assets/", s.asset)
 	mux.HandleFunc("/api/auth/status", s.authStatus)
 	mux.HandleFunc("/api/auth/setup", s.authSetup)
 	mux.HandleFunc("/api/auth/login", s.authLogin)
@@ -277,6 +278,37 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/assets/")
+	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `\/`) {
+		http.NotFound(w, r)
+		return
+	}
+	path := "web/assets/" + name
+	data, err := content.ReadFile(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch filepath.Ext(name) {
+	case ".css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case ".js":
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Method == http.MethodHead {
+		return
+	}
 	_, _ = w.Write(data)
 }
 

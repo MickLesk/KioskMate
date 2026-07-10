@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Split the embedded Admin UI into separate `index.html`, `app.css`, `theme.js`, `i18n.js` and `app.js` files.
+- Added an embedded asset handler for `/assets/*` with explicit content types.
+- Added test coverage for embedded Admin UI asset delivery.
+
 ## v0.1.6
 
 - Made browser start actions fail loudly when Chromium exits immediately instead of returning a misleading success.
