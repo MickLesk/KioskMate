@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.1.7
 
 - Split the embedded Admin UI into separate `index.html`, `app.css`, `theme.js`, `i18n.js` and `app.js` files.
 - Added an embedded asset handler for `/assets/*` with explicit content types.
 - Added test coverage for embedded Admin UI asset delivery.
+- Added Browser Doctor checks for browser binary, display environment, runtime directory, profile permissions, active page reachability and log tails.
+- Replaced the Dashboard iframe preview with a backend-rendered snapshot endpoint.
+- Added a browser recovery workflow endpoint and Dashboard action for stuck Home Assistant sessions.
+- Added automatic browser crash diagnostic text files under the KioskMate config diagnostics directory.
 
 ## v0.1.6
 

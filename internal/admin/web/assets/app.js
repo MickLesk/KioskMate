@@ -561,6 +561,8 @@
                       <div class="control-grid">
                         ${button("repairHA", "browser-repair-ha", "primary")}
                         ${button("resetSession", "browser-reset-session")}
+                        ${button("recoveryWorkflow", "browser-recover")}
+                        ${button("browserDoctor", "browser-doctor")}
                         ${button("openPreview", "dashboard-preview-open")}
                         ${button("diagnostics", "dashboard-diagnostics")}
                       </div>
@@ -604,11 +606,12 @@
                   <h3>${esc(t("liveView"))}</h3>
                   <div class="actions">
                     <span class="chip">${esc(browser.page_name || activePage.name || "-")}</span>
+                    ${button("refreshSnapshot", "dashboard-snapshot-refresh")}
                     ${button("openPreview", "dashboard-preview-open")}
                   </div>
                 </div>
                 <div class="preview-shell">
-                  ${browser.running && browser.url ? `<iframe class="live-frame" src="${esc(browser.url)}" referrerpolicy="no-referrer"></iframe>` : `<div class="empty">${esc(t("liveViewStopped"))}</div>`}
+                  ${browser.url ? `<img id="snapshot-image" class="snapshot-image" src="/api/browser/snapshot?ts=${Date.now()}" alt="${esc(t("liveView"))}" />` : `<div class="empty">${esc(t("liveViewStopped"))}</div>`}
                 </div>
                 <div class="body">
                   <p class="hint">${esc(t("liveViewHint"))}</p>
@@ -1025,6 +1028,9 @@
         document.querySelector('[data-action="dashboard-render-check"]')?.addEventListener("click", renderCheckDashboardPage);
         document.querySelector('[data-action="dashboard-preview-open"]')?.addEventListener("click", openDashboardPreview);
         document.querySelector('[data-action="dashboard-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
+        document.querySelector('[data-action="dashboard-snapshot-refresh"]')?.addEventListener("click", refreshDashboardSnapshot);
+        document.querySelector('[data-action="browser-doctor"]')?.addEventListener("click", loadBrowserDoctor);
+        document.querySelector('[data-action="browser-recover"]')?.addEventListener("click", recoverBrowser);
         document.querySelector('[data-action="hardware-refresh"]')?.addEventListener("click", async () => {
           state.hardware = await getJSON("/api/hardware");
           renderApp();
@@ -1102,6 +1108,63 @@
         window.open(url, "_blank", "noopener");
         const out = document.getElementById("page-check-output");
         if (out) out.textContent = url;
+      }
+
+      function refreshDashboardSnapshot() {
+        const img = document.getElementById("snapshot-image");
+        if (img) img.src = "/api/browser/snapshot?ts=" + Date.now();
+        recordAction(t("refreshSnapshot"), state.status?.browser?.url || "", "ok");
+      }
+
+      async function loadBrowserDoctor() {
+        await runAction("browser-doctor", async () => {
+          const report = await getJSON("/api/browser/doctor");
+          const checks = (report.checks || []).map((check) => `
+            <div class="recovery-step">
+              <strong>${esc(check.level || "-")} · ${esc(check.message || check.id || "-")}</strong>
+              <span class="hint">${esc(typeof check.detail === "string" ? check.detail : JSON.stringify(check.detail || ""))}</span>
+            </div>`).join("");
+          openModal(`
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
+              <div class="modal-head">
+                <div>
+                  <h3 id="doctor-title">${esc(t("browserDoctor"))}</h3>
+                  <div class="hint">${esc(t("doctorHint"))}</div>
+                </div>
+                <button data-modal-close>${esc(t("close"))}</button>
+              </div>
+              <div class="modal-body grid">
+                <div class="recovery-list">${checks}</div>
+                <div><label>${esc(t("diagnostics"))}</label><pre class="logbox">${esc(JSON.stringify(report.advice || [], null, 2))}</pre></div>
+              </div>
+              <div class="modal-foot"><button data-modal-close>${esc(t("close"))}</button></div>
+            </div>`);
+        }, t("browserDoctor"));
+      }
+
+      async function recoverBrowser() {
+        await runAction("browser-recover", async () => {
+          const report = await postJSON("/api/browser/recover", {});
+          await refreshCore();
+          const steps = (report.steps || []).map((step) => `
+            <div class="recovery-step">
+              <strong>${esc(step.level || "-")} · ${esc(step.name || "-")}</strong>
+              <span class="hint">${esc(typeof step.detail === "string" ? step.detail : JSON.stringify(step.detail || ""))}</span>
+            </div>`).join("");
+          openModal(`
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recover-title">
+              <div class="modal-head">
+                <div>
+                  <h3 id="recover-title">${esc(t("recoveryWorkflow"))}</h3>
+                  <div class="hint">${esc(t("recoveryWorkflowHint"))}</div>
+                </div>
+                <button data-modal-close>${esc(t("close"))}</button>
+              </div>
+              <div class="modal-body"><div class="recovery-list">${steps}</div></div>
+              <div class="modal-foot"><button data-modal-close>${esc(t("close"))}</button></div>
+            </div>`);
+          renderApp();
+        }, t("recoveryWorkflow"));
       }
 
       function bindKiosk() {

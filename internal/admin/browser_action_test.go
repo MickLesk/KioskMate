@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 )
 
@@ -76,5 +77,31 @@ func TestBrowserActionReportsFailedStartupWithDiagnostics(t *testing.T) {
 	}
 	if _, ok := body["browser_log"].([]any); !ok {
 		t.Fatalf("browser_log missing in %#v", body)
+	}
+}
+
+func TestBrowserDoctorReportsStoppedBrowser(t *testing.T) {
+	cfg := &config.Config{
+		Path: filepath.Join(t.TempDir(), "config.json"),
+		Kiosk: config.KioskConfig{
+			UserDataDir: filepath.Join(t.TempDir(), "Browser"),
+		},
+	}
+	browser := &fakeActionBrowser{status: supervisor.Status{Command: "go", URL: ""}}
+	server := NewServer(cfg, browser, nil, nil, nil, hardware.New(), "test", slog.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/browser/doctor", nil)
+	rec := httptest.NewRecorder()
+	server.browserDoctor(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["checks"].([]any); !ok {
+		t.Fatalf("checks missing: %#v", body)
 	}
 }

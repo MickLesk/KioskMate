@@ -341,6 +341,9 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 			_, _ = fmt.Fprintf(logFile, "last error: %s\n", lastError)
 		}
 	}
+	if !expected && lastError != "" {
+		b.writeCrashDiagnostic(cmd, runtime, lastError)
+	}
 	if err != nil && !expected && !errors.Is(err, os.ErrProcessDone) {
 		b.logger.Warn("browser exited", "error", err, "runtime", runtime)
 		return
@@ -350,6 +353,40 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		return
 	}
 	b.logger.Info("browser exited", "runtime", runtime)
+}
+
+func (b *Browser) writeCrashDiagnostic(cmd *exec.Cmd, runtime time.Duration, lastError string) {
+	dir := filepath.Join(config.ConfigDir(b.cfg.Path), "diagnostics", "browser-crashes")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		b.logger.Warn("browser crash diagnostic directory failed", "error", err)
+		return
+	}
+	path := filepath.Join(dir, time.Now().Format("20060102-150405")+".txt")
+	var out strings.Builder
+	out.WriteString("KioskMate browser crash diagnostic\n")
+	out.WriteString("time: " + time.Now().Format(time.RFC3339) + "\n")
+	out.WriteString("runtime: " + runtime.String() + "\n")
+	out.WriteString("last_error: " + lastError + "\n")
+	if cmd != nil {
+		out.WriteString("path: " + cmd.Path + "\n")
+		out.WriteString("args: " + strings.Join(cmd.Args, " ") + "\n")
+	}
+	out.WriteString("active_page: " + b.cfg.Kiosk.PageName(b.active) + "\n")
+	out.WriteString("active_url: " + b.activeURL() + "\n")
+	out.WriteString("profile: " + browserUserDataDir(b.cfg, b.active) + "\n")
+	out.WriteString("performance_profile: " + b.cfg.Performance.Profile + "\n")
+	out.WriteString("gpu_mode: " + b.cfg.Performance.GPUMode + "\n")
+	out.WriteString("DISPLAY: " + os.Getenv("DISPLAY") + "\n")
+	out.WriteString("WAYLAND_DISPLAY: " + os.Getenv("WAYLAND_DISPLAY") + "\n")
+	out.WriteString("XDG_RUNTIME_DIR: " + os.Getenv("XDG_RUNTIME_DIR") + "\n")
+	out.WriteString("XDG_SESSION_TYPE: " + os.Getenv("XDG_SESSION_TYPE") + "\n")
+	out.WriteString("browser_log: " + config.BrowserLogFilePath(b.cfg.Path) + "\n")
+	out.WriteString("core_log: " + config.LogFilePath(b.cfg.Path) + "\n")
+	if err := os.WriteFile(path, []byte(out.String()), 0o600); err != nil {
+		b.logger.Warn("browser crash diagnostic write failed", "error", err)
+		return
+	}
+	b.logger.Warn("browser crash diagnostic written", "path", path)
 }
 
 func (b *Browser) watch(ctx context.Context, pid int) {

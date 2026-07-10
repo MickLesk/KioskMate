@@ -132,6 +132,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/page", s.auth(s.browserPage))
 	mux.HandleFunc("/api/browser/check-page", s.auth(s.browserCheckPage))
 	mux.HandleFunc("/api/browser/render-check", s.auth(s.browserRenderCheck))
+	mux.HandleFunc("/api/browser/snapshot", s.auth(s.browserSnapshot))
+	mux.HandleFunc("/api/browser/doctor", s.auth(s.browserDoctor))
+	mux.HandleFunc("/api/browser/recover", s.auth(s.browserRecover))
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
@@ -1164,6 +1167,144 @@ func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	status := s.browser.Status()
+	checks := []map[string]any{}
+	add := func(id string, level string, message string, detail any) {
+		checks = append(checks, map[string]any{"id": id, "level": level, "message": message, "detail": detail})
+	}
+	command := status.Command
+	if command == "" {
+		add("browser_command", "error", "Browser command is empty.", "")
+	} else if resolved, err := exec.LookPath(command); err == nil {
+		add("browser_command", "ok", "Browser command resolved.", resolved)
+	} else if filepath.IsAbs(command) && fileExists(command) {
+		add("browser_command", "ok", "Browser command exists.", command)
+	} else {
+		add("browser_command", "error", "Browser command was not found.", err.Error())
+	}
+	env := map[string]string{
+		"DISPLAY":          os.Getenv("DISPLAY"),
+		"WAYLAND_DISPLAY":  os.Getenv("WAYLAND_DISPLAY"),
+		"XDG_RUNTIME_DIR":  os.Getenv("XDG_RUNTIME_DIR"),
+		"XDG_SESSION_TYPE": os.Getenv("XDG_SESSION_TYPE"),
+	}
+	if env["DISPLAY"] == "" && env["WAYLAND_DISPLAY"] == "" {
+		add("display_env", "error", "No DISPLAY or WAYLAND_DISPLAY is set for the kiosk service.", env)
+	} else {
+		add("display_env", "ok", "Display environment is present.", env)
+	}
+	if env["XDG_RUNTIME_DIR"] == "" {
+		add("runtime_dir", "warn", "XDG_RUNTIME_DIR is empty. User services may not reach the graphical session.", env)
+	} else if info, err := os.Stat(env["XDG_RUNTIME_DIR"]); err == nil && info.IsDir() {
+		add("runtime_dir", "ok", "Runtime directory exists.", env["XDG_RUNTIME_DIR"])
+	} else {
+		add("runtime_dir", "error", "Runtime directory is not accessible.", env["XDG_RUNTIME_DIR"])
+	}
+	profile := s.cfg.Kiosk.UserDataDir
+	if profile == "" {
+		add("browser_profile", "error", "Browser profile path is empty.", "")
+	} else if err := os.MkdirAll(profile, 0o700); err != nil {
+		add("browser_profile", "error", "Browser profile directory cannot be created.", err.Error())
+	} else if err := os.WriteFile(filepath.Join(profile, ".kioskmate-write-test"), []byte(time.Now().String()), 0o600); err != nil {
+		add("browser_profile", "error", "Browser profile directory is not writable.", err.Error())
+	} else {
+		_ = os.Remove(filepath.Join(profile, ".kioskmate-write-test"))
+		add("browser_profile", "ok", "Browser profile directory is writable.", profile)
+	}
+	if status.Running {
+		add("browser_running", "ok", "Browser is running.", status.PID)
+	} else if status.LastError != "" {
+		add("browser_running", "error", "Browser is stopped with a last error.", status.LastError)
+	} else {
+		add("browser_running", "warn", "Browser is currently stopped.", "")
+	}
+	if status.URL == "" {
+		add("active_page", "warn", "No active kiosk URL is available.", "")
+	} else if pageResult := checkHTTPPage(ctx, status.URL, s.version); pageResult["ok"] == true {
+		add("active_page", "ok", "Active page is reachable from the kiosk host.", pageResult)
+	} else {
+		add("active_page", "error", "Active page is not reachable from the kiosk host.", pageResult)
+	}
+	add("logs", "ok", "Log files checked.", map[string]any{
+		"core":    config.LogFilePath(s.cfg.Path),
+		"browser": config.BrowserLogFilePath(s.cfg.Path),
+		"tail":    append(labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 30), labeledTail("core", config.LogFilePath(s.cfg.Path), 20)...),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      !hasDoctorLevel(checks, "error"),
+		"checks":  checks,
+		"browser": status,
+		"advice":  doctorAdvice(checks),
+	})
+}
+
+func (s *Server) browserRecover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	steps := []map[string]any{}
+	step := func(name string, level string, detail any) {
+		steps = append(steps, map[string]any{"name": name, "level": level, "detail": detail, "time": time.Now().Format(time.RFC3339)})
+	}
+	step("stop", "running", "stopping browser")
+	if err := s.browser.Stop(ctx); err != nil {
+		step("stop", "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "steps": steps, "error": err.Error()})
+		return
+	}
+	step("stop", "ok", "browser stopped")
+	step("reset_session", "running", "resetting Home Assistant browser session")
+	if err := s.browser.ResetSession(ctx); err != nil {
+		step("reset_session", "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "steps": steps, "error": err.Error(), "browser": s.browser.Status()})
+		return
+	}
+	status := waitForBrowserState(s.browser, true, 2*time.Second)
+	if !status.Running {
+		errText := firstNonEmpty(status.LastError, "browser did not stay running after session reset")
+		step("start", "error", errText)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"ok":          false,
+			"steps":       steps,
+			"error":       errText,
+			"browser":     status,
+			"browser_log": labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 80),
+			"core_log":    labeledTail("core", config.LogFilePath(s.cfg.Path), 40),
+		})
+		return
+	}
+	step("start", "ok", map[string]any{"pid": status.PID, "url": status.URL})
+	if status.URL != "" {
+		page := checkHTTPPage(ctx, status.URL, s.version)
+		level := "error"
+		if page["ok"] == true {
+			level = "ok"
+		}
+		step("page_check", level, page)
+		if status.Command != "" {
+			snapshot, err := renderPageSnapshot(ctx, status.Command, status.URL, 1024, 768)
+			if err != nil {
+				step("render_check", "warn", map[string]any{"error": err.Error(), "output_tail": snapshot.OutputTail, "analysis": snapshot.Analysis})
+			} else if snapshot.Analysis["visible"] == true {
+				step("render_check", "ok", snapshot.Analysis)
+			} else {
+				step("render_check", "warn", snapshot.Analysis)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "steps": steps, "browser": s.browser.Status()})
+}
+
 func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1454,6 +1595,78 @@ func (s *Server) browserCheckPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func checkHTTPPage(ctx context.Context, target string, version string) map[string]any {
+	result := map[string]any{"ok": false, "url": target}
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		result["error"] = "only http and https URLs can be checked"
+		result["category"] = "invalid_url"
+		return result
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		result["error"] = err.Error()
+		result["category"] = "invalid_url"
+		return result
+	}
+	req.Header.Set("User-Agent", "KioskMate/"+version)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		result["error"] = err.Error()
+		result["category"] = "network"
+		result["hint"] = "The kiosk host could not reach this page. Check DNS, network, firewall and the Home Assistant URL."
+		return result
+	}
+	defer resp.Body.Close()
+	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 400
+	category, hint := pageCheckHint(target, resp)
+	result["ok"] = ok
+	result["final_url"] = resp.Request.URL.String()
+	result["status"] = resp.Status
+	result["statusCode"] = resp.StatusCode
+	result["category"] = category
+	result["hint"] = hint
+	return result
+}
+
+func hasDoctorLevel(checks []map[string]any, level string) bool {
+	for _, check := range checks {
+		if check["level"] == level {
+			return true
+		}
+	}
+	return false
+}
+
+func doctorAdvice(checks []map[string]any) []string {
+	var advice []string
+	for _, check := range checks {
+		id, _ := check["id"].(string)
+		level, _ := check["level"].(string)
+		if level != "error" && level != "warn" {
+			continue
+		}
+		switch id {
+		case "display_env":
+			advice = append(advice, "Start KioskMate inside the graphical user session or fix the user service DISPLAY/WAYLAND_DISPLAY environment.")
+		case "runtime_dir":
+			advice = append(advice, "Run the service as the logged-in kiosk user and verify XDG_RUNTIME_DIR points to /run/user/<uid>.")
+		case "browser_command":
+			advice = append(advice, "Install Chromium or choose a valid custom browser command in Settings.")
+		case "browser_profile":
+			advice = append(advice, "Repair or reset the browser profile directory permissions.")
+		case "active_page":
+			advice = append(advice, "Check the Home Assistant URL, network route and ip_bans.yaml on the HA host.")
+		case "browser_running":
+			advice = append(advice, "Use the browser log tail in this report; if it exits immediately, try Safe Mode or a fresh browser profile.")
+		}
+	}
+	if len(advice) == 0 {
+		advice = append(advice, "No blocking issue found. If the display is still blank, run Render Check and inspect Home Assistant theme/session settings.")
+	}
+	return advice
+}
+
 func (s *Server) browserRenderCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1483,23 +1696,79 @@ func (s *Server) browserRenderCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "browser command is empty"})
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	result, err := renderPageSnapshot(ctx, command, target, 1024, 768)
+	if err != nil {
+		result.Error = err.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          err == nil && result.Analysis["visible"].(bool),
+		"url":         target,
+		"command":     command,
+		"latency_ms":  result.LatencyMS,
+		"screenshot":  "render.png",
+		"analysis":    result.Analysis,
+		"output_tail": result.OutputTail,
+		"error":       result.Error,
+	})
+}
+
+func (s *Server) browserSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status := s.browser.Status()
+	target := strings.TrimSpace(r.URL.Query().Get("url"))
+	if target == "" {
+		target = status.URL
+	}
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only http and https URLs can be rendered"})
+		return
+	}
+	command := status.Command
+	if command == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "browser command is empty"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	result, err := renderPageSnapshot(ctx, command, target, 1280, 800)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "output_tail": result.OutputTail, "analysis": result.Analysis})
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(result.PNG)
+}
+
+type renderSnapshotResult struct {
+	PNG        []byte
+	Analysis   map[string]any
+	OutputTail string
+	Error      string
+	LatencyMS  int64
+}
+
+func renderPageSnapshot(ctx context.Context, command string, target string, width int, height int) (renderSnapshotResult, error) {
 	tmp, err := os.MkdirTemp("", "kioskmate-render-*")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return renderSnapshotResult{}, err
 	}
 	defer os.RemoveAll(tmp)
 	screenshot := filepath.Join(tmp, "render.png")
 	profile := filepath.Join(tmp, "profile")
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-	defer cancel()
 	args := []string{
 		"--headless=new",
 		"--disable-gpu",
 		"--disable-dev-shm-usage",
 		"--hide-scrollbars",
 		"--no-first-run",
-		"--window-size=1024,768",
+		fmt.Sprintf("--window-size=%d,%d", width, height),
 		"--user-data-dir=" + profile,
 		"--screenshot=" + screenshot,
 		target,
@@ -1507,19 +1776,20 @@ func (s *Server) browserRenderCheck(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	out, err := exec.CommandContext(ctx, command, args...).CombinedOutput()
 	analysis := analyzeScreenshot(screenshot)
-	result := map[string]any{
-		"ok":          err == nil && analysis["visible"].(bool),
-		"url":         target,
-		"command":     command,
-		"latency_ms":  time.Since(start).Milliseconds(),
-		"screenshot":  filepath.Base(screenshot),
-		"analysis":    analysis,
-		"output_tail": tailText(string(out), 2000),
+	pngData, readErr := os.ReadFile(screenshot)
+	result := renderSnapshotResult{
+		PNG:        pngData,
+		Analysis:   analysis,
+		OutputTail: tailText(string(out), 2000),
+		LatencyMS:  time.Since(start).Milliseconds(),
 	}
 	if err != nil {
-		result["error"] = err.Error()
+		return result, err
 	}
-	writeJSON(w, http.StatusOK, result)
+	if readErr != nil {
+		return result, readErr
+	}
+	return result, nil
 }
 
 func analyzeScreenshot(path string) map[string]any {
