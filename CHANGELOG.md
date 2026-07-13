@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1
+
+- Fixed built-in Debian updates when passwordless sudo is unavailable by supporting validated sudo and root credentials.
+- Added a clear privilege preflight before package download, with optional credentials retained in process memory for 15 minutes and never written to disk.
+- Added automatic update checks at startup and every six hours, cached release state and Dashboard/header notifications for available releases.
+- Added named update jobs with live stages, streamed package-manager output, download progress, target version and actionable error details.
+- Prevented concurrent update installations and preserved the last successful release result during temporary GitHub or network failures.
+- Delayed the service restart until the successful job result reaches the Admin UI, then reconnects the page automatically after installation.
+- Removed downloaded Debian packages after every completed or failed update attempt.
+- Added responsive English and German update guidance plus regression coverage for privilege handling and updater lifecycle state.
+
 ## v0.3.0
 
 - Consolidated kiosk pages, rotation and time rules into one Pages and workflow workspace with a single save path.

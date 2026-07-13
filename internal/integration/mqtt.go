@@ -408,7 +408,7 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			err = fmt.Errorf("updater unavailable")
 			break
 		}
-		s.updater.Install(context.Background())
+		_, err = s.updater.Install(context.Background(), "", "")
 	case strings.HasSuffix(topic, "/display/power/set"):
 		err = s.hardware.SetDisplay(actionCtx, command)
 	case strings.HasSuffix(topic, "/display/brightness/set"):

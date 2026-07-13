@@ -62,8 +62,8 @@ func main() {
 	defer stop()
 
 	browser := supervisor.NewBrowser(cfg, logger.With("component", "browser"))
-	updateService := updater.New(cfg, version)
 	actionService := actions.New(cfg)
+	updateService := updater.New(cfg, version, actionService)
 	hardwareService := hardware.New()
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"))
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"))
@@ -78,6 +78,7 @@ func main() {
 	}()
 	go browser.RunScheduler(ctx)
 	go mqttService.Run(ctx)
+	go updateService.Run(ctx)
 
 	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
 	logger.Info("log file", "path", logFile)

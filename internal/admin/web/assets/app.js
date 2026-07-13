@@ -78,6 +78,7 @@
         ssh: null,
         terminal: "",
         jobs: [],
+        updateJobs: [],
         loaded: {},
         busy: new Set(),
         dirtyViews: new Set(),
@@ -448,6 +449,7 @@
           }
           await refreshCore();
           renderApp();
+          startUpdateStatusPolling();
         } catch (err) {
           root.innerHTML = `<div class="login"><div class="login-card"><div class="body"><h2>${esc(t("failed"))}</h2><p class="muted">${esc(err.message)}</p></div></div></div>`;
         }
@@ -465,6 +467,7 @@
         state.config = cfg;
         state.persistedConfig = JSON.parse(JSON.stringify(cfg));
         state.status = status;
+        state.update = status.update || state.update;
         state.hardware = status.hardware || {};
         state.privilege = privilege;
         state.time = timeInfo;
@@ -478,6 +481,36 @@
           await refreshCore();
           renderApp();
         }, t("refresh"));
+      }
+
+      let updateStatusTimer = null;
+      let updateStatusPolling = false;
+
+      function startUpdateStatusPolling() {
+        if (updateStatusTimer) clearInterval(updateStatusTimer);
+        pollStartupUpdateStatus().catch(() => {});
+        updateStatusTimer = setInterval(() => refreshCachedUpdateStatus().catch(() => {}), 15 * 60 * 1000);
+      }
+
+      async function pollStartupUpdateStatus() {
+        if (updateStatusPolling) return;
+        updateStatusPolling = true;
+        try {
+          for (let attempt = 0; attempt < 12; attempt++) {
+            await sleep(attempt === 0 ? 1500 : 2500);
+            await refreshCachedUpdateStatus();
+            if (state.update?.checked_at && !state.update?.checking) return;
+          }
+        } finally {
+          updateStatusPolling = false;
+        }
+      }
+
+      async function refreshCachedUpdateStatus() {
+        const update = await getJSON("/api/update?cached=1");
+        const changed = JSON.stringify(update) !== JSON.stringify(state.update);
+        state.update = update;
+        if (changed && state.auth?.authenticated) renderApp();
       }
 
       function renderLogin() {
@@ -551,6 +584,7 @@
                   <p>${esc(t(activeNavItem().hint || "overview"))}</p>
                 </div>
                 <div class="chips">
+                  ${state.update?.update_available ? `<button class="chip update-chip" data-view="settings-updates" title="${esc(t("openUpdateHint"))}">${esc(t("updateAvailable"))}: ${esc(state.update.latest_version || "")}</button>` : ""}
                   <span class="chip ${browser.running ? "ok" : "bad"}" title="${esc(t("displayStatus"))}">${esc(browser.running ? t("running") : t("stopped"))}</span>
                   <span class="chip ${mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : ""}" title="${esc(mqtt.last_error || t("mqttService"))}">MQTT: ${esc(formatMQTTState(mqtt.state))}</span>
                   <span class="chip ${timeInfo.synchronized ? "ok" : "warn"}" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></span>
@@ -701,6 +735,7 @@
         const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         return `
           <div class="page-stack">
+            ${renderUpdateNotice()}
             <section class="status-strip" aria-label="${esc(t("status"))}">
               ${statusTile(t("displayStatus"), browser.running ? t("running") : t("stopped"), browser.running ? "ok" : "bad", browser.pid ? `PID ${browser.pid}` : t("noProcess"))}
               ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
@@ -771,6 +806,15 @@
               </div>
             </div>
           </div>`;
+      }
+
+      function renderUpdateNotice() {
+        const update = state.update || {};
+        if (!update.update_available) return "";
+        return `<section class="update-notice" role="status">
+          <div><strong>${esc(t("updateAvailable"))}: ${esc(update.latest_version || "")}</strong><span>${esc(t("dashboardUpdateHint"))}</span></div>
+          <button class="primary" data-view="settings-updates">${esc(t("openUpdate"))}</button>
+        </section>`;
       }
 
       function renderKiosk() {
@@ -1177,24 +1221,41 @@
       }
 
       function renderSettingsMaintenance() {
+        const update = state.update || {};
+        const privilege = state.privilege || {};
+        const passwordless = !!state.hardware?.support?.sudo_rights;
+        const hasPrivilege = privilege.configured || passwordless;
+        const checked = update.checked_at ? formatDate(update.checked_at) : t("notChecked");
         return `
           <div class="page-stack">
             <section class="status-strip">
-              ${statusTile(t("installed"), state.update?.current_version || state.update?.current || state.auth?.version || "-", "ok", t("currentVersion"))}
-              ${statusTile(t("latest"), state.update?.latest_version || state.update?.latest || t("notChecked"), state.update?.update_available ? "warn" : "", state.update?.update_available ? t("updateAvailable") : t("upToDate"))}
+              ${statusTile(t("installed"), update.current_version || update.current || state.auth?.version || "-", "ok", t("currentVersion"))}
+              ${statusTile(t("latest"), update.latest_version || update.latest || t("notChecked"), update.update_available ? "warn" : "", update.update_available ? t("updateAvailable") : t("upToDate"))}
+              ${statusTile(t("lastUpdateCheck"), checked, update.error ? "bad" : "", update.checking ? t("checkingUpdate") : update.error || t("automaticUpdateCheck"))}
+              ${statusTile(t("administratorRights"), hasPrivilege ? t("ready") : t("required"), hasPrivilege ? "ok" : "warn", passwordless ? t("passwordlessSudo") : privilege.configured ? t("temporaryPrivilegeActive") : t("enterPasswordBelow"))}
             </section>
             <div class="card">
-              <div class="head"><div><h3>${esc(t("update"))}</h3><span class="section-kicker">${esc(t("releaseChannel"))}: ${esc(state.update?.channel || "stable")}</span></div><div class="actions">${button("checkUpdate", "update-check")}${button("installUpdate", "update-install", "primary")}</div></div>
+              <div class="head"><div><h3>${esc(t("update"))}</h3><span class="section-kicker">${esc(t("releaseChannel"))}: ${esc(update.channel || "stable")}</span></div><div class="actions">${button("checkUpdate", "update-check")}</div></div>
               <div class="body update-layout">
                 <div>
                   <label>${esc(t("changelog"))}</label>
-                  <pre class="jsonbox">${esc(state.update?.changelog || "")}</pre>
+                  <pre class="jsonbox">${esc(update.changelog || t("noChangelog"))}</pre>
                 </div>
-                <div>
-                  <label>${esc(t("jobOutput"))}</label>
-                  <pre class="terminal">${esc(renderJobs())}</pre>
+                <div class="update-control">
+                  <div class="notice ${hasPrivilege ? "" : "warn"}"><strong>${esc(hasPrivilege ? t("updateReadyToInstall") : t("updateNeedsPrivilege"))}</strong><span>${esc(hasPrivilege ? t("updateReadyHint") : t("updatePrivilegeHint"))}</span></div>
+                  <div class="form-grid one">
+                    ${selectHtml("update-priv-mode", t("privilegeMode"), privilege.mode || "sudo", [["sudo", "sudo"], ["su", "su / root"]])}
+                    ${field("update-priv-password", t("administratorPassword"), "password", "current-password", "")}
+                    ${switchHtml("update-priv-remember", t("rememberFor15Minutes"), false)}
+                  </div>
+                  <p class="hint">${esc(t("passwordMemoryOnlyHint"))}</p>
+                  <button class="primary update-install-command" data-busy="update-install" data-action="update-install" ${update.installing || !update.update_available ? "disabled" : ""}>${esc(update.installing ? t("updateInstalling") : t("installUpdate"))}</button>
                 </div>
               </div>
+            </div>
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("updateProgress"))}</h3><span class="section-kicker">${esc(t("updateProgressHint"))}</span></div></div>
+              <div class="body job-list" id="update-job-output">${renderUpdateJobsHTML()}</div>
             </div>
           </div>`;
       }
@@ -2154,24 +2215,54 @@
 
       async function installUpdate() {
         if (!confirm(t("confirmUpdate"))) return;
-        await runAction("update-install", async () => {
-          const job = await postJSON("/api/update/install");
-          state.jobs.unshift(job);
+        const job = await runAction("update-install", async () => {
+          const result = await postJSON("/api/update/install", {
+            mode: val("update-priv-mode") || "sudo",
+            password: val("update-priv-password"),
+            remember: checked("update-priv-remember"),
+          });
+          state.updateJobs.unshift(result);
+          state.update = { ...(state.update || {}), installing: true };
+          return result;
+        }, t("actionStarted"));
+        if (job) {
           toast(t("actionStarted"), job.id || "", "ok");
           pollUpdateJob(job.id);
           renderApp();
-        }, t("actionStarted"));
+        }
       }
 
       async function pollUpdateJob(id) {
         if (!id) return;
+        let lastJob = state.updateJobs.find((item) => item.id === id);
         for (let i = 0; i < 180; i++) {
-          const job = await getJSON("/api/update/jobs/" + encodeURIComponent(id));
-          const index = state.jobs.findIndex((item) => item.id === id);
-          if (index >= 0) state.jobs[index] = job;
-          else state.jobs.unshift(job);
-          if (state.view === "settings-updates") renderApp();
-          if (job.finished || job.exit_code >= 0) return;
+          try {
+            const job = await getJSON("/api/update/jobs/" + encodeURIComponent(id));
+            lastJob = job;
+            const index = state.updateJobs.findIndex((item) => item.id === id);
+            if (index >= 0) state.updateJobs[index] = job;
+            else state.updateJobs.unshift(job);
+            if (state.view === "settings-updates") renderApp();
+            if (job.finished || job.exit_code >= 0) {
+              state.update = { ...(state.update || {}), installing: false };
+              if (job.exit_code === 0) {
+                toast(t("updateInstalled"), t("serviceRestarting"), "ok");
+                setTimeout(() => window.location.reload(), 3500);
+              } else {
+                toast(t("updateFailed"), job.error || t("failed"), "error");
+                if (state.view === "settings-updates") renderApp();
+              }
+              return;
+            }
+          } catch (err) {
+            if (lastJob?.stage === "restarting" || lastJob?.exit_code === 0) {
+              toast(t("serviceRestarting"), t("reconnecting"), "warn");
+              setTimeout(() => window.location.reload(), 4000);
+              return;
+            }
+            toast(t("updateFailed"), err.message, "error");
+            return;
+          }
           await sleep(1000);
         }
       }
@@ -2329,12 +2420,21 @@
       }
 
       function renderJobsHTML() {
-        if (!state.jobs.length) return `<div class="empty">${esc(t("noData"))}</div>`;
-        return state.jobs.map((job) => {
+        return renderJobList(state.jobs);
+      }
+
+      function renderUpdateJobsHTML() {
+        if (!state.updateJobs.length) return `<div class="empty">${esc(t("noUpdateJobs"))}</div>`;
+        return renderJobList(state.updateJobs, true);
+      }
+
+      function renderJobList(jobs, updateJob = false) {
+        if (!jobs.length) return `<div class="empty">${esc(t("noData"))}</div>`;
+        return jobs.map((job) => {
           const running = !job.finished;
           const duration = Math.max(0, Math.round(((job.finished ? new Date(job.finished) : new Date()) - new Date(job.started)) / 1000));
           return `<article class="job-item">
-            <div class="job-head"><div><strong>${esc(job.name || "-")}</strong><span>${esc(formatDate(job.started))} · ${esc(formatDuration(duration))}</span></div><span class="chip ${running ? "warn" : job.exit_code === 0 ? "ok" : "bad"}">${esc(running ? t("jobRunning") : job.exit_code === 0 ? t("success") : t("failed"))}</span></div>
+            <div class="job-head"><div><strong>${esc(updateJob ? t("installUpdate") : job.name || "-")}</strong><span>${esc(updateJob && job.stage ? t("updateStage_" + job.stage) : formatDate(job.started))} · ${esc(formatDuration(duration))}</span></div><span class="chip ${running ? "warn" : job.exit_code === 0 ? "ok" : "bad"}">${esc(running ? t("jobRunning") : job.exit_code === 0 ? t("success") : t("failed"))}</span></div>
             <pre class="logbox compact-log">${esc((job.output || []).join("\n") || t("waitingForOutput"))}</pre>
           </article>`;
         }).join("");

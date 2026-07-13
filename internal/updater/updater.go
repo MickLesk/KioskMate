@@ -21,17 +21,34 @@ import (
 )
 
 type Service struct {
-	cfg     *config.Config
-	version string
-	client  *http.Client
+	cfg       *config.Config
+	version   string
+	client    *http.Client
+	privilege PrivilegeProvider
 
-	mu   sync.Mutex
-	jobs map[string]*Job
+	mu         sync.Mutex
+	checkMu    sync.Mutex
+	jobs       map[string]*Job
+	status     ReleaseInfo
+	installing bool
 }
+
+type PrivilegeProvider interface {
+	ResolvePrivilege(mode string, password string) (string, string, bool)
+}
+
+var (
+	ErrPrivilegeRequired = errors.New("administrator privileges are required to install updates")
+	ErrUpdateInProgress  = errors.New("an update installation is already running")
+)
 
 type Job struct {
 	mu       sync.Mutex `json:"-"`
 	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Stage    string     `json:"stage"`
+	Target   string     `json:"target_version,omitempty"`
+	Error    string     `json:"error,omitempty"`
 	Started  time.Time  `json:"started"`
 	Finished *time.Time `json:"finished,omitempty"`
 	ExitCode int        `json:"exit_code"`
@@ -39,13 +56,17 @@ type Job struct {
 }
 
 type ReleaseInfo struct {
-	CurrentVersion  string `json:"current_version"`
-	LatestVersion   string `json:"latest_version"`
-	UpdateAvailable bool   `json:"update_available"`
-	URL             string `json:"url"`
-	Changelog       string `json:"changelog"`
-	Asset           Asset  `json:"asset"`
-	Supported       bool   `json:"supported"`
+	CurrentVersion  string     `json:"current_version"`
+	LatestVersion   string     `json:"latest_version"`
+	UpdateAvailable bool       `json:"update_available"`
+	URL             string     `json:"url"`
+	Changelog       string     `json:"changelog"`
+	Asset           Asset      `json:"asset"`
+	Supported       bool       `json:"supported"`
+	Checking        bool       `json:"checking"`
+	Installing      bool       `json:"installing"`
+	CheckedAt       *time.Time `json:"checked_at,omitempty"`
+	Error           string     `json:"error,omitempty"`
 }
 
 type Asset struct {
@@ -72,23 +93,30 @@ type githubAsset struct {
 	Size               int64  `json:"size"`
 }
 
-func New(cfg *config.Config, version string) *Service {
+func New(cfg *config.Config, version string, privilege ...PrivilegeProvider) *Service {
+	var provider PrivilegeProvider
+	if len(privilege) > 0 {
+		provider = privilege[0]
+	}
 	return &Service{
-		cfg:     cfg,
-		version: version,
-		client:  &http.Client{Timeout: 45 * time.Second},
-		jobs:    map[string]*Job{},
+		cfg: cfg, version: version, privilege: provider,
+		client: &http.Client{Timeout: 45 * time.Second},
+		jobs:   map[string]*Job{}, status: ReleaseInfo{CurrentVersion: version},
 	}
 }
 
 func (s *Service) Check(ctx context.Context) (ReleaseInfo, error) {
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	s.setChecking(true)
 	release, err := s.latest(ctx)
 	if err != nil {
+		s.storeCheck(ReleaseInfo{CurrentVersion: s.version, Error: err.Error()}, err)
 		return ReleaseInfo{}, err
 	}
 	asset := selectAsset(release.Assets)
 	latest := strings.TrimPrefix(release.TagName, "v")
-	return ReleaseInfo{
+	info := ReleaseInfo{
 		CurrentVersion:  s.version,
 		LatestVersion:   latest,
 		UpdateAvailable: compareVersion(latest, s.version) > 0,
@@ -96,17 +124,92 @@ func (s *Service) Check(ctx context.Context) (ReleaseInfo, error) {
 		Changelog:       release.Body,
 		Asset:           asset,
 		Supported:       runtime.GOOS == "linux" && asset.URL != "",
-	}, nil
+	}
+	s.storeCheck(info, nil)
+	return s.Status(), nil
 }
 
-func (s *Service) Install(ctx context.Context) *Job {
-	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Started: time.Now(), ExitCode: -1}
+func (s *Service) Status() ReleaseInfo {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := s.status
+	status.Installing = s.installing
+	return status
+}
+
+func (s *Service) setChecking(checking bool) {
+	s.mu.Lock()
+	s.status.CurrentVersion = s.version
+	s.status.Checking = checking
+	s.mu.Unlock()
+}
+
+func (s *Service) storeCheck(info ReleaseInfo, checkErr error) {
+	now := time.Now()
+	info.CurrentVersion = s.version
+	info.Checking = false
+	info.CheckedAt = &now
+	s.mu.Lock()
+	if checkErr != nil {
+		info.LatestVersion = s.status.LatestVersion
+		info.UpdateAvailable = s.status.UpdateAvailable
+		info.URL = s.status.URL
+		info.Changelog = s.status.Changelog
+		info.Asset = s.status.Asset
+		info.Supported = s.status.Supported
+		info.Error = checkErr.Error()
+	}
+	info.Installing = s.installing
+	s.status = info
+	s.mu.Unlock()
+}
+
+func (s *Service) Run(ctx context.Context) {
+	check := func() {
+		checkCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		_, _ = s.Check(checkCtx)
+	}
+	check()
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
+}
+
+func (s *Service) Install(ctx context.Context, mode string, password string) (*Job, error) {
+	s.mu.Lock()
+	if s.installing {
+		s.mu.Unlock()
+		return nil, ErrUpdateInProgress
+	}
+	s.mu.Unlock()
+	privilege, err := s.preparePrivilege(ctx, mode, password)
+	if err != nil {
+		return nil, err
+	}
+	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: "update-install", Stage: "preparing", Started: time.Now(), ExitCode: -1}
+	s.mu.Lock()
+	if s.installing {
+		s.mu.Unlock()
+		return nil, ErrUpdateInProgress
+	}
+	s.installing = true
 	s.jobs[job.ID] = job
 	s.pruneJobsLocked(50)
 	s.mu.Unlock()
-	go s.install(ctx, job)
-	return job
+	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Minute)
+	go func() {
+		defer cancel()
+		s.install(jobCtx, job, privilege)
+	}()
+	return job, nil
 }
 
 func (s *Service) Job(id string) (*Job, bool) {
@@ -119,10 +222,59 @@ func (s *Service) Job(id string) (*Job, bool) {
 	return job.snapshot(), true
 }
 
-func (s *Service) install(ctx context.Context, job *Job) {
+type privilegeCommand struct {
+	Mode     string
+	Password string
+}
+
+func (s *Service) preparePrivilege(ctx context.Context, mode string, password string) (privilegeCommand, error) {
+	configured := false
+	if s.privilege != nil {
+		mode, password, configured = s.privilege.ResolvePrivilege(mode, password)
+	} else if password != "" {
+		configured = mode == "sudo" || mode == "su"
+	}
+	if mode == "" {
+		mode = "sudo"
+	}
+	if !configured && mode != "sudo" {
+		return privilegeCommand{}, ErrPrivilegeRequired
+	}
+	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var command *exec.Cmd
+	if password == "" {
+		command = exec.CommandContext(testCtx, "sudo", "-n", "true")
+	} else if mode == "sudo" {
+		command = exec.CommandContext(testCtx, "sudo", "-S", "-p", "", "-v")
+		command.Stdin = strings.NewReader(password + "\n")
+	} else if mode == "su" {
+		command = exec.CommandContext(testCtx, "su", "-", "root", "-c", "true")
+		command.Stdin = strings.NewReader(password + "\n")
+	} else {
+		return privilegeCommand{}, fmt.Errorf("privilege mode must be sudo or su")
+	}
+	if output, err := command.CombinedOutput(); err != nil {
+		if password == "" {
+			return privilegeCommand{}, ErrPrivilegeRequired
+		}
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return privilegeCommand{}, fmt.Errorf("administrator authentication failed: %s", detail)
+	}
+	return privilegeCommand{Mode: mode, Password: password}, nil
+}
+
+func (s *Service) install(ctx context.Context, job *Job, privilege privilegeCommand) {
 	defer func() {
 		job.finishDefault(1)
+		s.mu.Lock()
+		s.installing = false
+		s.mu.Unlock()
 	}()
+	job.setStage("checking")
 	s.log(job, "checking latest release")
 	info, err := s.Check(ctx)
 	if err != nil {
@@ -134,11 +286,14 @@ func (s *Service) install(ctx context.Context, job *Job) {
 		job.setExit(0)
 		return
 	}
+	job.setTarget(info.LatestVersion)
 	if !info.Supported {
 		s.fail(job, errors.New("no supported .deb asset for this platform"))
 		return
 	}
 	file := filepath.Join(os.TempDir(), info.Asset.Name)
+	defer os.Remove(file)
+	job.setStage("downloading")
 	if err := s.download(ctx, info.Asset.URL, file, info.Asset.Size, job); err != nil {
 		s.fail(job, err)
 		return
@@ -147,13 +302,21 @@ func (s *Service) install(ctx context.Context, job *Job) {
 		s.fail(job, err)
 		return
 	}
-	if err := run(ctx, job, "sudo", "-n", "apt-get", "install", "-y", file); err != nil {
+	job.setStage("installing")
+	if err := runPrivileged(ctx, job, privilege, "apt-get", "install", "-y", file); err != nil {
 		s.fail(job, err)
 		return
 	}
-	_ = run(ctx, job, "systemctl", "--user", "daemon-reload")
-	_ = run(ctx, job, "systemctl", "--user", "restart", s.cfg.Snapshot().Update.Service)
+	job.setStage("restarting")
+	s.log(job, "installation complete; KioskMate will restart in 2 seconds")
 	job.setExit(0)
+	go s.restartServiceAfterUpdate()
+}
+
+func (s *Service) restartServiceAfterUpdate() {
+	time.Sleep(2 * time.Second)
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "--user", "restart", s.cfg.Snapshot().Update.Service).Run()
 }
 
 func (s *Service) latest(ctx context.Context) (githubRelease, error) {
@@ -206,7 +369,12 @@ func (s *Service) download(ctx context.Context, url, file string, expectedSize i
 		return err
 	}
 	defer out.Close()
-	written, err := io.Copy(out, io.LimitReader(resp.Body, maxPackageSize+1))
+	total := expectedSize
+	if total <= 0 {
+		total = resp.ContentLength
+	}
+	reader := &progressReader{reader: resp.Body, total: total, job: job}
+	written, err := io.Copy(out, io.LimitReader(reader, maxPackageSize+1))
 	if err != nil {
 		return err
 	}
@@ -216,7 +384,32 @@ func (s *Service) download(ctx context.Context, url, file string, expectedSize i
 	if expectedSize > 0 && written != expectedSize {
 		return fmt.Errorf("release package size mismatch: got %d, want %d", written, expectedSize)
 	}
+	s.log(job, fmt.Sprintf("download complete: %.1f MiB", float64(written)/(1<<20)))
 	return nil
+}
+
+type progressReader struct {
+	reader io.Reader
+	total  int64
+	read   int64
+	last   int
+	job    *Job
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	if r.total > 0 {
+		percent := int(r.read * 100 / r.total)
+		if percent >= r.last+10 || percent == 100 {
+			r.last = percent - percent%10
+			if percent >= 100 {
+				r.last = 100
+			}
+			r.job.append(fmt.Sprintf("download progress: %d%%", min(percent, 100)))
+		}
+	}
+	return n, err
 }
 
 func selectAsset(assets []githubAsset) Asset {
@@ -263,14 +456,77 @@ func (s *Service) pruneJobsLocked(keep int) {
 	}
 }
 
-func run(ctx context.Context, job *Job, command string, args ...string) error {
-	job.append(command + " " + strings.Join(args, " "))
-	cmd := exec.CommandContext(ctx, command, args...)
-	output, err := cmd.CombinedOutput()
-	if len(output) > 0 {
-		job.append(strings.TrimSpace(string(output)))
+func runPrivileged(ctx context.Context, job *Job, privilege privilegeCommand, command string, args ...string) error {
+	executable, commandArgs, input, err := buildPrivilegedCommand(privilege, command, args...)
+	if err != nil {
+		return err
 	}
+	job.append("running privileged command: " + command + " " + strings.Join(args, " "))
+	cmd := exec.CommandContext(ctx, executable, commandArgs...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
+	writer := &jobWriter{job: job}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	err = cmd.Run()
+	writer.flush()
 	return err
+}
+
+func buildPrivilegedCommand(privilege privilegeCommand, command string, args ...string) (string, []string, string, error) {
+	switch privilege.Mode {
+	case "sudo":
+		sudoArgs := []string{"-n"}
+		input := ""
+		if privilege.Password != "" {
+			sudoArgs = []string{"-S", "-p", ""}
+			input = privilege.Password + "\n"
+		}
+		return "sudo", append(sudoArgs, append([]string{command}, args...)...), input, nil
+	case "su":
+		parts := append([]string{command}, args...)
+		quoted := make([]string, len(parts))
+		for i, part := range parts {
+			quoted[i] = "'" + strings.ReplaceAll(part, "'", "'\"'\"'") + "'"
+		}
+		return "su", []string{"-", "root", "-c", strings.Join(quoted, " ")}, privilege.Password + "\n", nil
+	default:
+		return "", nil, "", fmt.Errorf("unsupported privilege mode: %s", privilege.Mode)
+	}
+}
+
+type jobWriter struct {
+	mu      sync.Mutex
+	job     *Job
+	pending string
+}
+
+func (w *jobWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pending += string(p)
+	for {
+		index := strings.IndexByte(w.pending, '\n')
+		if index < 0 {
+			break
+		}
+		line := strings.TrimSpace(w.pending[:index])
+		w.pending = w.pending[index+1:]
+		if line != "" {
+			w.job.append(line)
+		}
+	}
+	return len(p), nil
+}
+
+func (w *jobWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if line := strings.TrimSpace(w.pending); line != "" {
+		w.job.append(line)
+	}
+	w.pending = ""
 }
 
 func (s *Service) log(job *Job, line string) {
@@ -279,6 +535,7 @@ func (s *Service) log(job *Job, line string) {
 
 func (s *Service) fail(job *Job, err error) {
 	s.log(job, "error: "+err.Error())
+	job.setError(err.Error())
 	job.setExit(1)
 }
 
@@ -292,6 +549,24 @@ func (j *Job) setExit(code int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.ExitCode = code
+}
+
+func (j *Job) setStage(stage string) {
+	j.mu.Lock()
+	j.Stage = stage
+	j.mu.Unlock()
+}
+
+func (j *Job) setTarget(target string) {
+	j.mu.Lock()
+	j.Target = target
+	j.mu.Unlock()
+}
+
+func (j *Job) setError(message string) {
+	j.mu.Lock()
+	j.Error = message
+	j.mu.Unlock()
 }
 
 func (j *Job) finishDefault(code int) {
@@ -308,11 +583,9 @@ func (j *Job) snapshot() *Job {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return &Job{
-		ID:       j.ID,
-		Started:  j.Started,
-		Finished: j.Finished,
-		ExitCode: j.ExitCode,
-		Output:   append([]string(nil), j.Output...),
+		ID: j.ID, Name: j.Name, Stage: j.Stage, Target: j.Target, Error: j.Error,
+		Started: j.Started, Finished: j.Finished, ExitCode: j.ExitCode,
+		Output: append([]string(nil), j.Output...),
 	}
 }
 

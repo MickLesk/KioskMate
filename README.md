@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.3.0` consolidates the main kiosk workflow, adds real MQTT and NTP runtime status, capability-driven hardware controls and persistent maintenance feedback while preserving the existing config format, browser profiles and Home Assistant sessions.
+KioskMate `0.3.1` adds a reliable built-in updater with automatic release checks, explicit sudo/root authentication, live installation progress and automatic Admin UI reconnection while preserving the existing config format, browser profiles and Home Assistant sessions.
 
 The Admin UI is organized by task:
 
@@ -77,12 +77,14 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.3.0/kioskmate_0.3.0_arm64.deb
-sudo apt install ./kioskmate_0.3.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.3.1/kioskmate_0.3.1_arm64.deb
+sudo apt install ./kioskmate_0.3.1_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
 For amd64, use the `_amd64.deb` asset.
+
+KioskMate checks for updates when the service starts and every six hours. Available releases appear in the Admin header and Dashboard. Installing a Debian update requires passwordless sudo, a sudo password or the root password. Credentials can optionally remain in process memory for 15 minutes; they are never stored in the config file or on disk.
 
 ## Config
 
@@ -193,14 +195,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.3.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.3.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.3.1 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.3.1 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.3.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.3.1 --arch arm64 --arch amd64
 ```
 
 The package installs:

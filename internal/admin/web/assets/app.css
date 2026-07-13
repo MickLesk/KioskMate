@@ -757,6 +757,45 @@ p {
   color: var(--amber);
 }
 
+.update-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid color-mix(in srgb, var(--amber) 48%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--amber) 8%, var(--panel));
+  padding: 12px 14px;
+}
+
+.update-notice > div,
+.update-control,
+.update-control .notice {
+  display: grid;
+  gap: 5px;
+}
+
+.update-notice span,
+.update-control .notice span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.update-chip {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+  color: var(--amber);
+}
+
+.update-control {
+  align-content: start;
+  gap: 12px;
+}
+
+.update-install-command {
+  width: 100%;
+  min-height: 42px;
+}
+
 .data-section-body {
   display: grid;
   gap: 12px;
@@ -1430,6 +1469,13 @@ tr:last-child td {
   .grid.three,
   .form-grid.four-fields {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .update-notice {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

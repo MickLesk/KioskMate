@@ -26,3 +26,22 @@ func TestJobsReturnsNewestFirst(t *testing.T) {
 		t.Fatalf("jobs = %#v", jobs)
 	}
 }
+
+func TestResolvePrivilegeUsesTemporaryCredential(t *testing.T) {
+	service := &Service{}
+	if err := service.RememberPrivilege("sudo", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	mode, password, configured := service.ResolvePrivilege("", "")
+	if mode != "sudo" || password != "secret" || !configured {
+		t.Fatalf("mode = %q, password = %q, configured = %v", mode, password, configured)
+	}
+}
+
+func TestResolvePrivilegeDefaultsToPasswordlessSudo(t *testing.T) {
+	service := &Service{}
+	mode, password, configured := service.ResolvePrivilege("", "")
+	if mode != "sudo" || password != "" || !configured {
+		t.Fatalf("mode = %q, password = %q, configured = %v", mode, password, configured)
+	}
+}

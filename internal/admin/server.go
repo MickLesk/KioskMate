@@ -537,6 +537,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"browser":  s.browser.Status(),
 		"hardware": s.hardware.Status(ctx),
 		"mqtt":     mqttStatus,
+		"update":   s.updater.Status(),
 		"config": map[string]any{
 			"path":                     s.cfg.Path,
 			"profile":                  s.cfg.Snapshot().Performance.Profile,
@@ -1118,6 +1119,10 @@ func (s *Server) update(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if r.URL.Query().Get("cached") == "1" {
+		writeJSON(w, http.StatusOK, s.updater.Status())
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	info, err := s.updater.Check(ctx)
@@ -1133,8 +1138,36 @@ func (s *Server) updateInstall(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	job := s.updater.Install(context.Background())
-	writeJSON(w, http.StatusOK, job)
+	var body struct {
+		Mode     string `json:"mode"`
+		Password string `json:"password"`
+		Remember bool   `json:"remember"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	job, err := s.updater.Install(context.Background(), body.Mode, body.Password)
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "update_failed"
+		if errors.Is(err, updater.ErrPrivilegeRequired) {
+			status = http.StatusConflict
+			code = "privilege_required"
+		} else if errors.Is(err, updater.ErrUpdateInProgress) {
+			status = http.StatusConflict
+			code = "update_in_progress"
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error(), "code": code})
+		return
+	}
+	if body.Remember && body.Password != "" {
+		if err := s.actions.RememberPrivilege(body.Mode, body.Password); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 func (s *Server) updateJob(w http.ResponseWriter, r *http.Request) {

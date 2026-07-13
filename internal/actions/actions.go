@@ -175,6 +175,23 @@ func (s *Service) privilegeCredential() (string, string, bool) {
 	return s.credential.Mode, s.credential.password, true
 }
 
+func (s *Service) ResolvePrivilege(mode string, password string) (string, string, bool) {
+	mode = strings.TrimSpace(mode)
+	if password != "" {
+		if mode != "sudo" && mode != "su" {
+			return mode, password, false
+		}
+		return mode, password, true
+	}
+	if storedMode, storedPassword, ok := s.privilegeCredential(); ok {
+		return storedMode, storedPassword, true
+	}
+	if mode == "" {
+		mode = "sudo"
+	}
+	return mode, "", mode == "sudo"
+}
+
 func actionTimeout(name string) time.Duration {
 	switch name {
 	case "apt-update", "apt-upgrade":
