@@ -331,7 +331,9 @@ func (s *MQTTService) commands(ctx context.Context) {
 		s.root() + "/restart_service/execute",
 		s.root() + "/apt_update/execute",
 		s.root() + "/apt_upgrade/execute",
+		s.root() + "/update/check",
 		s.root() + "/update/install",
+		s.root() + "/update/rollback",
 		s.root() + "/display/power/set",
 		s.root() + "/display/brightness/set",
 		s.root() + "/volume/set",
@@ -409,6 +411,18 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			break
 		}
 		_, err = s.updater.Install(context.Background(), "", "")
+	case strings.HasSuffix(topic, "/update/check"):
+		if s.updater == nil {
+			err = fmt.Errorf("updater unavailable")
+			break
+		}
+		_, err = s.updater.Check(actionCtx)
+	case strings.HasSuffix(topic, "/update/rollback"):
+		if s.updater == nil {
+			err = fmt.Errorf("updater unavailable")
+			break
+		}
+		_, err = s.updater.Rollback(context.Background(), "", "")
 	case strings.HasSuffix(topic, "/display/power/set"):
 		err = s.hardware.SetDisplay(actionCtx, command)
 	case strings.HasSuffix(topic, "/display/brightness/set"):
@@ -563,10 +577,27 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "rss", fmt.Sprintf("%d", status.Stats.RSSMB), false)
 	_ = s.publishState(client, "cpu", fmt.Sprintf("%.1f", status.Stats.CPUPercent), false)
 	_ = s.publishState(client, "version", s.version, true)
-	_ = s.publishState(client, "update/installed_version", s.version, true)
-	_ = s.publishState(client, "update/latest_version", s.version, true)
-	_ = s.publishState(client, "update/title", "KioskMate "+s.version, true)
-	_ = s.publishState(client, "update/release_url", "", true)
+	updateStatus := updater.ReleaseInfo{CurrentVersion: s.version, LatestVersion: s.version}
+	updateHistory := updater.HistoryInfo{}
+	if s.updater != nil {
+		updateStatus = s.updater.Status()
+		updateHistory = s.updater.History()
+	}
+	_ = s.publishState(client, "update/installed_version", firstNonEmpty(updateStatus.CurrentVersion, s.version), true)
+	_ = s.publishState(client, "update/latest_version", firstNonEmpty(updateStatus.LatestVersion, s.version), true)
+	_ = s.publishState(client, "update/title", "KioskMate "+firstNonEmpty(updateStatus.LatestVersion, s.version), true)
+	_ = s.publishState(client, "update/release_url", updateStatus.URL, true)
+	_ = s.publishState(client, "update/available", boolState(updateStatus.UpdateAvailable), true)
+	_ = s.publishState(client, "update/checking", boolState(updateStatus.Checking), false)
+	_ = s.publishState(client, "update/installing", boolState(updateStatus.Installing), false)
+	_ = s.publishState(client, "update/error", firstString(updateStatus.Error, "none"), false)
+	_ = s.publishState(client, "update/rollback_available", boolState(updateHistory.RollbackAvailable), true)
+	_ = s.publishState(client, "update/rollback_target", firstString(updateHistory.RollbackTarget, "none"), true)
+	if updateStatus.CheckedAt != nil {
+		_ = s.publishState(client, "update/checked_at", updateStatus.CheckedAt.Format(time.RFC3339), false)
+	} else {
+		_ = s.publishState(client, "update/checked_at", "none", false)
+	}
 	_ = s.publishState(client, "mqtt_version", cfg.MQTT.Version, true)
 	_ = s.publishState(client, "mqtt_connection", "connected", false)
 	_ = s.publishState(client, "mqtt_last_published", time.Now().UTC().Format(time.RFC3339), false)
@@ -796,6 +827,65 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 				"payload_install":         "INSTALL",
 				"entity_category":         "config",
 				"device":                  device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("button", "update_check"),
+			Data: map[string]any{
+				"name": "Check for Updates", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_check",
+				"command_topic": s.root() + "/update/check", "icon": "mdi:update", "entity_category": "config", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("button", "update_rollback"),
+			Data: map[string]any{
+				"name": "Rollback KioskMate", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_rollback",
+				"command_topic": s.root() + "/update/rollback", "icon": "mdi:backup-restore", "entity_category": "config", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("binary_sensor", "update_available"),
+			Data: map[string]any{
+				"name": "Update Available", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_available",
+				"state_topic": s.root() + "/update/available/state", "payload_on": "ON", "payload_off": "OFF",
+				"device_class": "update", "entity_category": "diagnostic", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("binary_sensor", "update_installing"),
+			Data: map[string]any{
+				"name": "Update Installing", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_installing",
+				"state_topic": s.root() + "/update/installing/state", "payload_on": "ON", "payload_off": "OFF",
+				"entity_category": "diagnostic", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("binary_sensor", "update_rollback_available"),
+			Data: map[string]any{
+				"name": "Update Rollback Available", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_rollback_available",
+				"state_topic": s.root() + "/update/rollback_available/state", "payload_on": "ON", "payload_off": "OFF",
+				"entity_category": "diagnostic", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("sensor", "update_checked_at"),
+			Data: map[string]any{
+				"name": "Update Last Checked", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_checked_at",
+				"state_topic": s.root() + "/update/checked_at/state", "icon": "mdi:clock-check", "entity_category": "diagnostic", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("sensor", "update_error"),
+			Data: map[string]any{
+				"name": "Update Error", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_error",
+				"state_topic": s.root() + "/update/error/state", "icon": "mdi:alert-circle", "entity_category": "diagnostic", "device": device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("sensor", "update_rollback_target"),
+			Data: map[string]any{
+				"name": "Update Rollback Target", "unique_id": s.cfg.Snapshot().MQTT.Node + "_update_rollback_target",
+				"state_topic": s.root() + "/update/rollback_target/state", "icon": "mdi:backup-restore", "entity_category": "diagnostic", "device": device,
 			},
 		},
 		{
@@ -1296,6 +1386,14 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"button", "next"},
 		[2]string{"button", "reset_session"},
 		[2]string{"button", "restart_service"},
+		[2]string{"button", "update_check"},
+		[2]string{"button", "update_rollback"},
+		[2]string{"binary_sensor", "update_available"},
+		[2]string{"binary_sensor", "update_installing"},
+		[2]string{"binary_sensor", "update_rollback_available"},
+		[2]string{"sensor", "update_checked_at"},
+		[2]string{"sensor", "update_error"},
+		[2]string{"sensor", "update_rollback_target"},
 		[2]string{"switch", "reduce_motion"},
 		[2]string{"switch", "watchdog_enabled"},
 		[2]string{"switch", "scheduler_enabled"},

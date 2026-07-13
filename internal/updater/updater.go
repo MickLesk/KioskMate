@@ -31,6 +31,7 @@ type Service struct {
 	jobs       map[string]*Job
 	status     ReleaseInfo
 	installing bool
+	history    []HistoryEntry
 }
 
 type PrivilegeProvider interface {
@@ -98,11 +99,12 @@ func New(cfg *config.Config, version string, privilege ...PrivilegeProvider) *Se
 	if len(privilege) > 0 {
 		provider = privilege[0]
 	}
-	return &Service{
+	service := &Service{
 		cfg: cfg, version: version, privilege: provider,
 		client: &http.Client{Timeout: 45 * time.Second},
 		jobs:   map[string]*Job{}, status: ReleaseInfo{CurrentVersion: version},
 	}
+	return service.loadHistory()
 }
 
 func (s *Service) Check(ctx context.Context) (ReleaseInfo, error) {
@@ -184,6 +186,18 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) Install(ctx context.Context, mode string, password string) (*Job, error) {
+	return s.startInstall(ctx, "update-install", "", mode, password, false)
+}
+
+func (s *Service) Rollback(ctx context.Context, mode string, password string) (*Job, error) {
+	target := s.History().RollbackTarget
+	if target == "" {
+		return nil, errors.New("no previously installed version is available for rollback")
+	}
+	return s.startInstall(ctx, "update-rollback", target, mode, password, true)
+}
+
+func (s *Service) startInstall(ctx context.Context, name, target, mode, password string, rollback bool) (*Job, error) {
 	s.mu.Lock()
 	if s.installing {
 		s.mu.Unlock()
@@ -194,7 +208,7 @@ func (s *Service) Install(ctx context.Context, mode string, password string) (*J
 	if err != nil {
 		return nil, err
 	}
-	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: "update-install", Stage: "preparing", Started: time.Now(), ExitCode: -1}
+	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: name, Stage: "preparing", Target: target, Started: time.Now(), ExitCode: -1}
 	s.mu.Lock()
 	if s.installing {
 		s.mu.Unlock()
@@ -204,10 +218,15 @@ func (s *Service) Install(ctx context.Context, mode string, password string) (*J
 	s.jobs[job.ID] = job
 	s.pruneJobsLocked(50)
 	s.mu.Unlock()
+	s.beginHistory(job, strings.TrimPrefix(name, "update-"), target)
 	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Minute)
 	go func() {
 		defer cancel()
-		s.install(jobCtx, job, privilege)
+		if rollback {
+			s.rollback(jobCtx, job, privilege, target)
+		} else {
+			s.install(jobCtx, job, privilege)
+		}
 	}()
 	return job, nil
 }
@@ -268,13 +287,8 @@ func (s *Service) preparePrivilege(ctx context.Context, mode string, password st
 }
 
 func (s *Service) install(ctx context.Context, job *Job, privilege privilegeCommand) {
-	defer func() {
-		job.finishDefault(1)
-		s.mu.Lock()
-		s.installing = false
-		s.mu.Unlock()
-	}()
-	job.setStage("checking")
+	defer s.finishInstallJob(job)
+	s.setJobStage(job, "checking")
 	s.log(job, "checking latest release")
 	info, err := s.Check(ctx)
 	if err != nil {
@@ -283,17 +297,43 @@ func (s *Service) install(ctx context.Context, job *Job, privilege privilegeComm
 	}
 	if !info.UpdateAvailable {
 		s.log(job, "already up to date")
+		job.setTarget(s.version)
+		s.setJobStage(job, "completed")
 		job.setExit(0)
+		s.updateHistory(job, "installed")
 		return
 	}
+	s.applyRelease(ctx, job, privilege, info, false)
+}
+
+func (s *Service) rollback(ctx context.Context, job *Job, privilege privilegeCommand, target string) {
+	defer s.finishInstallJob(job)
+	s.setJobStage(job, "checking")
+	s.log(job, "checking rollback release "+target)
+	release, err := s.releaseVersion(ctx, target)
+	if err != nil {
+		s.fail(job, err)
+		return
+	}
+	info := s.releaseInfo(release)
+	info.UpdateAvailable = true
+	s.applyRelease(ctx, job, privilege, info, true)
+}
+
+func (s *Service) applyRelease(ctx context.Context, job *Job, privilege privilegeCommand, info ReleaseInfo, allowDowngrade bool) {
 	job.setTarget(info.LatestVersion)
+	s.updateHistory(job, "running")
 	if !info.Supported {
 		s.fail(job, errors.New("no supported .deb asset for this platform"))
 		return
 	}
+	if err := s.validateEnvironment(info.Asset); err != nil {
+		s.fail(job, err)
+		return
+	}
 	file := filepath.Join(os.TempDir(), info.Asset.Name)
 	defer os.Remove(file)
-	job.setStage("downloading")
+	s.setJobStage(job, "downloading")
 	if err := s.download(ctx, info.Asset.URL, file, info.Asset.Size, job); err != nil {
 		s.fail(job, err)
 		return
@@ -302,21 +342,54 @@ func (s *Service) install(ctx context.Context, job *Job, privilege privilegeComm
 		s.fail(job, err)
 		return
 	}
-	job.setStage("installing")
-	if err := runPrivileged(ctx, job, privilege, "apt-get", "install", "-y", file); err != nil {
+	if err := validateDebPackage(ctx, file); err != nil {
 		s.fail(job, err)
 		return
 	}
-	job.setStage("restarting")
+	backup, err := s.backupConfig(job)
+	if err != nil {
+		s.fail(job, fmt.Errorf("backup current configuration: %w", err))
+		return
+	}
+	s.log(job, "configuration backup: "+backup)
+	s.setJobStage(job, "installing")
+	args := []string{"install", "-y"}
+	if allowDowngrade {
+		args = append(args, "--allow-downgrades")
+	}
+	args = append(args, file)
+	if err := runPrivileged(ctx, job, privilege, "apt-get", args...); err != nil {
+		s.fail(job, err)
+		return
+	}
+	s.setJobStage(job, "restarting")
 	s.log(job, "installation complete; KioskMate will restart in 2 seconds")
 	job.setExit(0)
-	go s.restartServiceAfterUpdate()
+	s.updateHistory(job, "restarting")
+	go s.restartServiceAfterUpdate(job)
 }
 
-func (s *Service) restartServiceAfterUpdate() {
+func (s *Service) finishInstallJob(job *Job) {
+	job.finishDefault(1)
+	if job.snapshot().Stage == "restarting" {
+		return
+	}
+	s.mu.Lock()
+	s.installing = false
+	s.mu.Unlock()
+}
+
+func (s *Service) restartServiceAfterUpdate(job *Job) {
 	time.Sleep(2 * time.Second)
-	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
-	_ = exec.Command("systemctl", "--user", "restart", s.cfg.Snapshot().Update.Service).Run()
+	if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+		s.log(job, "warning: systemd daemon-reload failed: "+err.Error())
+	}
+	if err := exec.Command("systemctl", "--user", "restart", s.cfg.Snapshot().Update.Service).Run(); err != nil {
+		s.fail(job, fmt.Errorf("restart KioskMate service: %w", err))
+		s.mu.Lock()
+		s.installing = false
+		s.mu.Unlock()
+	}
 }
 
 func (s *Service) latest(ctx context.Context) (githubRelease, error) {
@@ -344,6 +417,43 @@ func (s *Service) latest(ctx context.Context) (githubRelease, error) {
 		}
 	}
 	return githubRelease{}, errors.New("no release found")
+}
+
+func (s *Service) releaseVersion(ctx context.Context, version string) (githubRelease, error) {
+	cfg := s.cfg.Snapshot()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+cfg.Update.Repository+"/releases", nil)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return githubRelease{}, fmt.Errorf("github releases failed: %s", resp.Status)
+	}
+	var releases []githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return githubRelease{}, err
+	}
+	for _, release := range releases {
+		if !release.Draft && strings.TrimPrefix(release.TagName, "v") == strings.TrimPrefix(version, "v") {
+			return release, nil
+		}
+	}
+	return githubRelease{}, fmt.Errorf("release %s not found", version)
+}
+
+func (s *Service) releaseInfo(release githubRelease) ReleaseInfo {
+	latest := strings.TrimPrefix(release.TagName, "v")
+	asset := selectAsset(release.Assets)
+	return ReleaseInfo{
+		CurrentVersion: s.version, LatestVersion: latest, UpdateAvailable: compareVersion(latest, s.version) != 0,
+		URL: release.HTMLURL, Changelog: release.Body, Asset: asset,
+		Supported: runtime.GOOS == "linux" && asset.URL != "",
+	}
 }
 
 func (s *Service) download(ctx context.Context, url, file string, expectedSize int64, job *Job) error {
@@ -537,6 +647,12 @@ func (s *Service) fail(job *Job, err error) {
 	s.log(job, "error: "+err.Error())
 	job.setError(err.Error())
 	job.setExit(1)
+	s.updateHistory(job, "failed")
+}
+
+func (s *Service) setJobStage(job *Job, stage string) {
+	job.setStage(stage)
+	s.updateHistory(job, "running")
 }
 
 func (j *Job) append(line string) {

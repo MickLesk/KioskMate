@@ -148,6 +148,18 @@ func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
 	}
 }
 
+func TestMQTTDiscoveryIncludesUpdaterDiagnostics(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	items := service.discoveryResetEntries()
+
+	for _, entry := range [][2]string{{"update", "app"}, {"button", "update_check"}, {"button", "update_rollback"}, {"binary_sensor", "update_available"}, {"binary_sensor", "update_installing"}, {"binary_sensor", "update_rollback_available"}, {"sensor", "update_checked_at"}, {"sensor", "update_error"}, {"sensor", "update_rollback_target"}} {
+		if !hasDiscoveryEntry(items, entry[0], entry[1]) {
+			t.Fatalf("missing updater discovery entry %s/%s", entry[0], entry[1])
+		}
+	}
+}
+
 func hasDiscoveryEntry(items [][2]string, component string, object string) bool {
 	for _, item := range items {
 		if item[0] == component && item[1] == object {

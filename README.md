@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.3.1` adds a reliable built-in updater with automatic release checks, explicit sudo/root authentication, live installation progress and automatic Admin UI reconnection while preserving the existing config format, browser profiles and Home Assistant sessions.
+KioskMate `0.4.0` adds update preflight diagnostics, persistent install history, private configuration backups, post-restart verification, controlled rollback and complete Home Assistant update state while preserving the existing config format, browser profiles and Home Assistant sessions.
 
 The Admin UI is organized by task:
 
@@ -77,14 +77,16 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.3.1/kioskmate_0.3.1_arm64.deb
-sudo apt install ./kioskmate_0.3.1_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.4.0/kioskmate_0.4.0_arm64.deb
+sudo apt install ./kioskmate_0.4.0_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
 For amd64, use the `_amd64.deb` asset.
 
 KioskMate checks for updates when the service starts and every six hours. Available releases appear in the Admin header and Dashboard. Installing a Debian update requires passwordless sudo, a sudo password or the root password. Credentials can optionally remain in process memory for 15 minutes; they are never stored in the config file or on disk.
+
+The updater can run a preflight before installation, validates the downloaded package name, architecture and SHA-256 digest, creates a private configuration backup, records the result in `~/.config/kioskmate/update-history.json` and verifies the expected version after restart. When a previously working package is known, **Settings -> Updates -> Rollback** reinstalls that digest-verified GitHub release with APT's explicit downgrade option.
 
 ## Config
 
@@ -169,7 +171,7 @@ KioskMate also publishes per-page Home Assistant entities for:
 - last page-health error
 - last page-health check time
 
-Diagnostic entities also expose the Home Assistant authentication guard, Chromium DevTools control, MQTT runtime state, last MQTT publish, timezone, NTP server and synchronization state.
+Diagnostic entities also expose the Home Assistant authentication guard, Chromium DevTools control, MQTT runtime state, last MQTT publish, timezone, NTP server, synchronization state and the complete updater state. Home Assistant receives the actual latest release, update availability/installing state, last check/error and rollback target, plus actions to check updates or trigger a passwordless rollback.
 
 If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
 
@@ -195,14 +197,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.3.1 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.3.1 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.4.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.4.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.3.1 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.4.0 --arch arm64 --arch amd64
 ```
 
 The package installs:

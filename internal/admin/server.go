@@ -155,7 +155,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
+	mux.HandleFunc("/api/update/preflight", s.auth(s.updatePreflight))
+	mux.HandleFunc("/api/update/history", s.auth(s.updateHistory))
 	mux.HandleFunc("/api/update/install", s.auth(s.updateInstall))
+	mux.HandleFunc("/api/update/rollback", s.auth(s.updateRollback))
 	mux.HandleFunc("/api/update/jobs/", s.auth(s.updateJob))
 	mux.HandleFunc("/api/repair", s.auth(s.repair))
 	mux.HandleFunc("/api/system/", s.auth(s.systemAction))
@@ -1166,6 +1169,69 @@ func (s *Server) updateInstall(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+func (s *Server) updatePreflight(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Mode     string `json:"mode"`
+		Password string `json:"password"`
+		Remember bool   `json:"remember"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	report := s.updater.Preflight(ctx, body.Mode, body.Password)
+	if report.OK && body.Remember && body.Password != "" {
+		if err := s.actions.RememberPrivilege(body.Mode, body.Password); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) updateHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.updater.History())
+}
+
+func (s *Server) updateRollback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Mode     string `json:"mode"`
+		Password string `json:"password"`
+		Remember bool   `json:"remember"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	job, err := s.updater.Rollback(context.Background(), body.Mode, body.Password)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, updater.ErrPrivilegeRequired) || errors.Is(err, updater.ErrUpdateInProgress) {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	if body.Remember && body.Password != "" {
+		_ = s.actions.RememberPrivilege(body.Mode, body.Password)
 	}
 	writeJSON(w, http.StatusAccepted, job)
 }

@@ -68,6 +68,8 @@
         sessions: [],
         backups: [],
         update: null,
+        updateHistory: { entries: [], rollback_available: false, rollback_target: "" },
+        updatePreflight: null,
         diagnostics: null,
         repair: null,
         pageFilter: "",
@@ -456,13 +458,14 @@
       }
 
       async function refreshCore() {
-        const [cfg, status, privilege, timeInfo, zones, jobs] = await Promise.all([
+        const [cfg, status, privilege, timeInfo, zones, jobs, updateHistory] = await Promise.all([
           getJSON("/api/config"),
           getJSON("/api/status"),
           getJSON("/api/privilege"),
           getJSON("/api/time"),
           getJSON("/api/time/zones"),
           getJSON("/api/jobs?limit=25"),
+          getJSON("/api/update/history"),
         ]);
         state.config = cfg;
         state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -473,6 +476,7 @@
         state.time = timeInfo;
         state.timezones = zones.zones || [];
         state.jobs = jobs.jobs || [];
+        state.updateHistory = updateHistory || state.updateHistory;
         syncThemeFromConfig();
       }
 
@@ -1249,13 +1253,21 @@
                     ${switchHtml("update-priv-remember", t("rememberFor15Minutes"), false)}
                   </div>
                   <p class="hint">${esc(t("passwordMemoryOnlyHint"))}</p>
-                  <button class="primary update-install-command" data-busy="update-install" data-action="update-install" ${update.installing || !update.update_available ? "disabled" : ""}>${esc(update.installing ? t("updateInstalling") : t("installUpdate"))}</button>
+                  <div id="update-preflight-result">${renderUpdatePreflight()}</div>
+                  <div class="update-commands">
+                    <button data-busy="update-preflight" data-action="update-preflight" ${update.installing ? "disabled" : ""}>${esc(t("runUpdatePreflight"))}</button>
+                    <button class="primary" data-busy="update-install" data-action="update-install" ${update.installing || !update.update_available ? "disabled" : ""}>${esc(update.installing ? t("updateInstalling") : t("installUpdate"))}</button>
+                  </div>
                 </div>
               </div>
             </div>
             <div class="card">
               <div class="head"><div><h3>${esc(t("updateProgress"))}</h3><span class="section-kicker">${esc(t("updateProgressHint"))}</span></div></div>
               <div class="body job-list" id="update-job-output">${renderUpdateJobsHTML()}</div>
+            </div>
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("updateHistory"))}</h3><span class="section-kicker">${esc(t("updateHistoryHint"))}</span></div><div class="actions">${state.updateHistory?.rollback_available ? `<button class="danger-ghost" data-busy="update-rollback" data-action="update-rollback">${esc(t("rollbackTo"))} ${esc(state.updateHistory.rollback_target)}</button>` : ""}</div></div>
+              <div class="body">${renderUpdateHistory()}</div>
             </div>
           </div>`;
       }
@@ -2074,7 +2086,9 @@
         document.querySelector('[data-action="sessions-logout-all"]')?.addEventListener("click", logoutAllSessions);
         document.querySelector('[data-action="backups-refresh"]')?.addEventListener("click", loadBackups);
         document.querySelector('[data-action="update-check"]')?.addEventListener("click", checkUpdate);
+        document.querySelector('[data-action="update-preflight"]')?.addEventListener("click", runUpdatePreflight);
         document.querySelector('[data-action="update-install"]')?.addEventListener("click", installUpdate);
+        document.querySelector('[data-action="update-rollback"]')?.addEventListener("click", rollbackUpdate);
         document.querySelector('[data-action="repair-check"]')?.addEventListener("click", checkRepair);
         document.querySelector('[data-action="repair-run"]')?.addEventListener("click", runRepair);
         document.querySelector('[data-action="ssh-generate"]')?.addEventListener("click", async () => {
@@ -2213,13 +2227,33 @@
         }, t("checkUpdate"));
       }
 
+      function updateCredentials() {
+        return {
+          mode: val("update-priv-mode") || "sudo",
+          password: val("update-priv-password"),
+          remember: checked("update-priv-remember"),
+        };
+      }
+
+      async function runUpdatePreflight() {
+        await runAction("update-preflight", async () => {
+          state.updatePreflight = await postJSON("/api/update/preflight", updateCredentials());
+          const output = document.getElementById("update-preflight-result");
+          if (output) output.innerHTML = renderUpdatePreflight();
+          if (!state.updatePreflight.ok) throw new Error(t("updatePreflightFailed"));
+        }, t("updatePreflightPassed"));
+      }
+
+      async function loadUpdateHistory() {
+        state.updateHistory = await getJSON("/api/update/history");
+        if (state.view === "settings-updates") renderApp();
+      }
+
       async function installUpdate() {
         if (!confirm(t("confirmUpdate"))) return;
         const job = await runAction("update-install", async () => {
           const result = await postJSON("/api/update/install", {
-            mode: val("update-priv-mode") || "sudo",
-            password: val("update-priv-password"),
-            remember: checked("update-priv-remember"),
+            ...updateCredentials(),
           });
           state.updateJobs.unshift(result);
           state.update = { ...(state.update || {}), installing: true };
@@ -2227,6 +2261,21 @@
         }, t("actionStarted"));
         if (job) {
           toast(t("actionStarted"), job.id || "", "ok");
+          pollUpdateJob(job.id);
+          renderApp();
+        }
+      }
+
+      async function rollbackUpdate() {
+        const target = state.updateHistory?.rollback_target || "";
+        if (!target || !confirm(t("confirmRollback").replace("{version}", target))) return;
+        const job = await runAction("update-rollback", async () => {
+          const result = await postJSON("/api/update/rollback", updateCredentials());
+          state.updateJobs.unshift(result);
+          state.update = { ...(state.update || {}), installing: true };
+          return result;
+        }, t("actionStarted"));
+        if (job) {
           pollUpdateJob(job.id);
           renderApp();
         }
@@ -2252,6 +2301,7 @@
                 toast(t("updateFailed"), job.error || t("failed"), "error");
                 if (state.view === "settings-updates") renderApp();
               }
+              loadUpdateHistory().catch(() => {});
               return;
             }
           } catch (err) {
@@ -2428,13 +2478,51 @@
         return renderJobList(state.updateJobs, true);
       }
 
+      function renderUpdatePreflight() {
+        const report = state.updatePreflight;
+        if (!report) return "";
+        return `<div class="preflight ${report.ok ? "ok" : "bad"}">
+          <strong>${esc(report.ok ? t("updatePreflightPassed") : t("updatePreflightFailed"))}</strong>
+          <div>${(report.checks || []).map((check) => `<span class="${check.ok ? "ok" : "bad"}"><b>${check.ok ? "✓" : "×"}</b>${esc(t("preflight_" + check.id))}: ${esc(formatPreflightCheck(check, report))}</span>`).join("")}</div>
+        </div>`;
+      }
+
+      function formatPreflightCheck(check, report) {
+        const result = check.ok ? "ok" : "failed";
+        if (check.id === "release") return check.ok ? t("preflightResult_release_ok").replace("{version}", report.target_version || "-") : t("preflightResult_release_failed");
+        if (check.id === "platform") return check.ok ? t("preflightResult_platform_ok").replace("{platform}", check.message || "Linux") : t("preflightResult_platform_failed").replace("{platform}", check.message || "-");
+        if (check.id === "asset") return check.ok ? check.message || t("ready") : t("preflightResult_asset_failed");
+        if (check.id === "disk") return check.ok
+          ? t("preflightResult_disk_ok").replace("{available}", formatBytes(report.available_bytes)).replace("{required}", formatBytes(report.required_bytes))
+          : t("preflightResult_disk_failed").replace("{available}", formatBytes(report.available_bytes)).replace("{required}", formatBytes(report.required_bytes));
+        if (check.id === "privilege") return t("preflightResult_privilege_" + result);
+        if (check.id.startsWith("command_")) return t("preflightResult_command_" + result);
+        return check.message || "-";
+      }
+
+      function formatBytes(value) {
+        const bytes = Number(value || 0);
+        if (!Number.isFinite(bytes) || bytes <= 0) return "0 MiB";
+        return `${Math.ceil(bytes / (1 << 20))} MiB`;
+      }
+
+      function renderUpdateHistory() {
+        const entries = state.updateHistory?.entries || [];
+        if (!entries.length) return `<div class="empty">${esc(t("noUpdateHistory"))}</div>`;
+        return `<div class="history-list">${entries.map((entry) => `<article>
+          <div><strong>${esc(entry.action === "rollback" ? t("rollback") : t("update"))}: ${esc(entry.from_version || "-")} → ${esc(entry.target_version || "-")}</strong><span>${esc(formatDate(entry.started))}</span></div>
+          <span class="chip ${entry.status === "installed" ? "ok" : entry.status === "failed" ? "bad" : "warn"}">${esc(t("updateHistory_" + entry.status))}</span>
+          ${entry.error ? `<small>${esc(entry.error)}</small>` : ""}
+        </article>`).join("")}</div>`;
+      }
+
       function renderJobList(jobs, updateJob = false) {
         if (!jobs.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return jobs.map((job) => {
           const running = !job.finished;
           const duration = Math.max(0, Math.round(((job.finished ? new Date(job.finished) : new Date()) - new Date(job.started)) / 1000));
           return `<article class="job-item">
-            <div class="job-head"><div><strong>${esc(updateJob ? t("installUpdate") : job.name || "-")}</strong><span>${esc(updateJob && job.stage ? t("updateStage_" + job.stage) : formatDate(job.started))} · ${esc(formatDuration(duration))}</span></div><span class="chip ${running ? "warn" : job.exit_code === 0 ? "ok" : "bad"}">${esc(running ? t("jobRunning") : job.exit_code === 0 ? t("success") : t("failed"))}</span></div>
+            <div class="job-head"><div><strong>${esc(updateJob ? job.name === "update-rollback" ? t("rollback") : t("installUpdate") : job.name || "-")}</strong><span>${esc(updateJob && job.stage ? t("updateStage_" + job.stage) : formatDate(job.started))} · ${esc(formatDuration(duration))}</span></div><span class="chip ${running ? "warn" : job.exit_code === 0 ? "ok" : "bad"}">${esc(running ? t("jobRunning") : job.exit_code === 0 ? t("success") : t("failed"))}</span></div>
             <pre class="logbox compact-log">${esc((job.output || []).join("\n") || t("waitingForOutput"))}</pre>
           </article>`;
         }).join("");

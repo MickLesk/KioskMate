@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0
+
+- Added persistent update history with install/rollback versions, lifecycle stages, timestamps, results and recovery metadata across service restarts.
+- Added a complete update preflight for release availability, Linux/architecture compatibility, Debian tooling, temporary disk space and administrator authentication.
+- Added strict downloaded-package validation for the `kioskmate` package name and the running device architecture before APT is invoked.
+- Added private configuration backups under `~/.config/kioskmate/update-backups` before every package installation or rollback.
+- Added post-restart version verification so an update is only recorded as installed when the expected binary version actually starts.
+- Added a controlled rollback action that downloads, verifies and installs the previously working release with Debian downgrade protection explicitly enabled.
+- Added first-upgrade migration from Debian's package log so an upgrade from v0.3.1 can still discover its rollback target.
+- Added Admin UI preflight results, persistent update history, recovery status and rollback controls with responsive English/German guidance.
+- Fixed the Home Assistant update entity to publish the real latest release instead of mirroring the installed version.
+- Added Home Assistant update availability/installing diagnostics, last check, last error, rollback target and update check/rollback actions.
+- Kept the updater locked through the restart window and reports a failed systemd restart instead of silently accepting it.
+
 ## v0.3.1
 
 - Fixed built-in Debian updates when passwordless sudo is unavailable by supporting validated sudo and root credentials.
