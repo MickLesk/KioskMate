@@ -295,7 +295,51 @@ func TestKioskForceDarkThemeForcesChromiumDarkMode(t *testing.T) {
 	}
 }
 
-func TestHomeAssistantThemeScriptUsesNativeThemeEvent(t *testing.T) {
+type recordingCDPCommander struct {
+	calls []struct {
+		method string
+		params any
+	}
+}
+
+func (r *recordingCDPCommander) command(_ context.Context, method string, params any, _ any) error {
+	r.calls = append(r.calls, struct {
+		method string
+		params any
+	}{method: method, params: params})
+	return nil
+}
+
+func TestConfigureHomeAssistantThemeEmulatesNativeColorScheme(t *testing.T) {
+	for _, test := range []struct {
+		theme  string
+		scheme string
+	}{
+		{theme: "dark", scheme: "dark"},
+		{theme: "light", scheme: "light"},
+	} {
+		recorder := &recordingCDPCommander{}
+		if err := configureHomeAssistantTheme(context.Background(), recorder, test.theme); err != nil {
+			t.Fatalf("theme %q: %v", test.theme, err)
+		}
+		if len(recorder.calls) != 3 {
+			t.Fatalf("theme %q sent %d commands, want 3", test.theme, len(recorder.calls))
+		}
+		if recorder.calls[0].method != "Emulation.setEmulatedMedia" {
+			t.Fatalf("theme %q first command = %q", test.theme, recorder.calls[0].method)
+		}
+		encoded, err := json.Marshal(recorder.calls[0].params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"features":[{"name":"prefers-color-scheme","value":"` + test.scheme + `"}]}`
+		if string(encoded) != want {
+			t.Fatalf("theme %q media params = %s, want %s", test.theme, encoded, want)
+		}
+	}
+}
+
+func TestHomeAssistantThemeScriptVerifiesEmulatedColorScheme(t *testing.T) {
 	for _, test := range []struct {
 		theme string
 		dark  bool
@@ -311,11 +355,11 @@ func TestHomeAssistantThemeScriptUsesNativeThemeEvent(t *testing.T) {
 		if !strings.Contains(script, fmt.Sprintf("const desiredDark = %t", test.dark)) {
 			t.Fatalf("theme %q script has wrong mode: %s", test.theme, script)
 		}
-		if !strings.Contains(script, `new CustomEvent("settheme"`) {
-			t.Fatalf("theme %q script does not use Home Assistant's native theme event", test.theme)
+		if !strings.Contains(script, `matchMedia("(prefers-color-scheme: dark)").matches`) {
+			t.Fatalf("theme %q script does not verify the emulated browser color scheme", test.theme)
 		}
-		if !strings.Contains(script, `const desiredTheme = "default"`) || !strings.Contains(script, `theme: desiredTheme`) {
-			t.Fatalf("theme %q script does not select Home Assistant's default theme", test.theme)
+		if strings.Contains(script, `new CustomEvent("settheme"`) {
+			t.Fatalf("theme %q script must preserve Home Assistant's selected custom theme", test.theme)
 		}
 	}
 	if script, ok := homeAssistantThemeScript("invalid"); ok || script != "" {
@@ -327,14 +371,14 @@ func TestParseThemeConsoleEvent(t *testing.T) {
 	dark := true
 	payload, err := json.Marshal(map[string]any{
 		"args": []map[string]any{{
-			"value": themeStatusConsolePrefix + `{"ok":true,"requested_theme":"default","requested_dark":true,"selected_theme":"default","selected_dark":true,"applied_dark":true}`,
+			"value": themeStatusConsolePrefix + `{"ok":true,"requested_theme":"preserve-current","requested_dark":true,"selected_theme":"material_you","selected_dark":true,"applied_dark":true}`,
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	report, ok := parseThemeConsoleEvent(payload)
-	if !ok || !report.OK || report.RequestedTheme != "default" || report.SelectedDark == nil || *report.SelectedDark != dark || report.AppliedDark == nil || !*report.AppliedDark {
+	if !ok || !report.OK || report.RequestedTheme != "preserve-current" || report.SelectedTheme != "material_you" || report.SelectedDark == nil || *report.SelectedDark != dark || report.AppliedDark == nil || !*report.AppliedDark {
 		t.Fatalf("unexpected theme report: %#v, ok=%v", report, ok)
 	}
 }
@@ -345,14 +389,14 @@ func TestThemeReportIsExposedInBrowserStatus(t *testing.T) {
 	dark := true
 	browser.setThemeReport("dark", themeReport{
 		OK:             true,
-		RequestedTheme: "default",
+		RequestedTheme: "preserve-current",
 		RequestedDark:  true,
-		SelectedTheme:  "default",
+		SelectedTheme:  "material_you",
 		SelectedDark:   &dark,
 		AppliedDark:    &dark,
 	})
 	status := browser.Status().Theme
-	if status.State != "applied" || status.SelectedTheme != "default" || status.AppliedDark == nil || !*status.AppliedDark {
+	if status.State != "applied" || status.SelectedTheme != "material_you" || status.AppliedDark == nil || !*status.AppliedDark {
 		t.Fatalf("unexpected browser theme status: %#v", status)
 	}
 }

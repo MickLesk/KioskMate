@@ -40,6 +40,10 @@ type cdpSession struct {
 	next atomic.Int64
 }
 
+type cdpCommander interface {
+	command(context.Context, string, any, any) error
+}
+
 const themeStatusConsolePrefix = "__KIOSKMATE_THEME__"
 
 type themeReport struct {
@@ -246,10 +250,22 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 	}
 }
 
-func configureHomeAssistantTheme(ctx context.Context, session *cdpSession, theme string) error {
+func configureHomeAssistantTheme(ctx context.Context, session cdpCommander, theme string) error {
 	script, ok := homeAssistantThemeScript(theme)
 	if !ok {
 		return nil
+	}
+	desiredScheme := "light"
+	if strings.EqualFold(strings.TrimSpace(theme), "dark") || strings.EqualFold(strings.TrimSpace(theme), "force-dark") {
+		desiredScheme = "dark"
+	}
+	if err := session.command(ctx, "Emulation.setEmulatedMedia", map[string]any{
+		"features": []map[string]string{{
+			"name":  "prefers-color-scheme",
+			"value": desiredScheme,
+		}},
+	}, nil); err != nil {
+		return fmt.Errorf("emulate prefers-color-scheme %s: %w", desiredScheme, err)
 	}
 	if err := session.command(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
 		"source": script,
@@ -274,8 +290,8 @@ func configureHomeAssistantTheme(ctx context.Context, session *cdpSession, theme
 	return nil
 }
 
-// Home Assistant stores theme mode per user and can override Chromium's media preference.
-// Use its frontend event so native theme variables are applied without force-dark rendering.
+// TouchKio's Electron nativeTheme exposes dark/light as an OS color-scheme preference.
+// Chromium CDP emulates that preference; this script only verifies the page applied it.
 func homeAssistantThemeScript(theme string) (string, bool) {
 	var desiredDark bool
 	switch strings.ToLower(strings.TrimSpace(theme)) {
@@ -288,7 +304,6 @@ func homeAssistantThemeScript(theme string) (string, bool) {
 	}
 	return fmt.Sprintf(`(() => {
   const desiredDark = %t;
-  const desiredTheme = "default";
   const timerKey = "__kioskmateThemeTimer";
   const resultKey = "__kioskmateThemeResult";
   if (globalThis[timerKey]) clearInterval(globalThis[timerKey]);
@@ -298,7 +313,7 @@ func homeAssistantThemeScript(theme string) (string, bool) {
     const value = {
       ok,
       error: error || "",
-      requested_theme: desiredTheme,
+      requested_theme: "preserve-current",
       requested_dark: desiredDark,
       selected_theme: selected && selected.theme || "",
       selected_dark: selected && typeof selected.dark === "boolean" ? selected.dark : null,
@@ -312,7 +327,8 @@ func homeAssistantThemeScript(theme string) (string, bool) {
     const root = document.querySelector("home-assistant");
     const selected = root && root.hass && root.hass.selectedTheme;
     const applied = root && root.hass && root.hass.themes && root.hass.themes.darkMode;
-    if (selected && selected.theme === desiredTheme && selected.dark === desiredDark && applied === desiredDark) {
+    const mediaDark = matchMedia("(prefers-color-scheme: dark)").matches;
+    if (mediaDark === desiredDark && applied === desiredDark) {
       stableChecks += 1;
       if (stableChecks >= 12) {
         clearInterval(globalThis[timerKey]);
@@ -322,22 +338,10 @@ func homeAssistantThemeScript(theme string) (string, bool) {
       return;
     }
     stableChecks = 0;
-    if (root && root.hass) {
-      root.dispatchEvent(new CustomEvent("settheme", {
-        detail: {
-          theme: desiredTheme,
-          dark: desiredDark,
-          primaryColor: undefined,
-          accentColor: undefined
-        },
-        bubbles: true,
-        composed: true
-      }));
-    }
     if (attempts >= 120) {
       clearInterval(globalThis[timerKey]);
       globalThis[timerKey] = 0;
-      report(false, root && root.hass ? "Home Assistant did not apply the requested default theme and color mode" : "Home Assistant frontend was not detected", selected, applied);
+      report(false, root && root.hass ? "Home Assistant did not follow the emulated prefers-color-scheme value" : "Home Assistant frontend was not detected", selected, applied);
     }
   };
   globalThis[timerKey] = setInterval(apply, 250);

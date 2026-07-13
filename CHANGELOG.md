@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.11
+
+- Matched TouchKio's Electron `nativeTheme` behavior by emulating `prefers-color-scheme` directly on Chromium's active rendering target through DevTools.
+- Preserved the Home Assistant user's selected custom theme instead of replacing it with the built-in default theme.
+- Updated theme diagnostics to verify both the browser media preference and Home Assistant's actually applied dark mode.
+
 ## v0.1.10
 
 - Fixed native dark mode when the Home Assistant kiosk user had selected a custom theme without dark-mode support.

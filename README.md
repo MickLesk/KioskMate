@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.1.10` is the final reliability-focused release before the planned `0.2.0` Admin UI redesign.
+KioskMate `0.1.11` is the final reliability-focused release before the planned `0.2.0` Admin UI redesign.
 
 ## Requirements
 
@@ -68,8 +68,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.10/kioskmate_0.1.10_arm64.deb
-sudo apt install ./kioskmate_0.1.10_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.11/kioskmate_0.1.11_arm64.deb
+sudo apt install ./kioskmate_0.1.11_arm64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now kioskmate.service
 ```
@@ -171,7 +171,7 @@ If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snaps
 
 Regular Home Assistant health checks use the unauthenticated `/manifest.json` endpoint and exponential error backoff. They do not submit or reuse Home Assistant credentials.
 
-For Home Assistant pages, KioskMate **Kiosk theme** `dark` and `light` select Home Assistant's built-in `default` theme and synchronize its native color mode for the signed-in kiosk user through the local Chromium DevTools connection. Save the browser settings and restart the display after changing the mode. The Dashboard reports whether the requested theme was actually applied. This avoids Chromium's expensive page-wide color transformation. Use `force-dark` only for pages or custom cards that still ignore their native dark mode; it consumes more CPU/GPU.
+KioskMate **Kiosk theme** `dark` and `light` emulate the corresponding OS `prefers-color-scheme` value on Chromium's active rendering target. This matches TouchKio's Electron `nativeTheme` behavior and preserves the Home Assistant user's selected custom theme. Save the browser settings and restart the display after changing the mode. The Dashboard reports whether Home Assistant actually applied the requested mode. Use `force-dark` only for pages or custom cards that ignore `prefers-color-scheme`; it consumes more CPU/GPU.
 
 For multi-dashboard setups, enable **Settings -> Browser and performance -> Separate browser profile per page** when one broken Home Assistant session should not affect every page.
 
@@ -185,14 +185,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.1.10 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.1.10 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.1.11 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.1.11 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.1.10 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.1.11 --arch arm64 --arch amd64
 ```
 
 The package installs:
