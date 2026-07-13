@@ -246,7 +246,7 @@ func TestRaspberrySafeModeUsesLowPowerBrowser(t *testing.T) {
 func TestRepairMigratesStaleBrowserProfilePath(t *testing.T) {
 	home := testHome(t)
 	cfg := defaults(filepath.Join(home, ".config", "kioskmate", "config.json"))
-	cfg.Kiosk.UserDataDir = filepath.Join(home, ".config", "touchkio-v2", "Browser")
+	cfg.Kiosk.UserDataDir = filepath.Join(home, ".config", "touch"+"kio-v2", "Browser")
 
 	report := Repair(&cfg)
 

@@ -52,6 +52,15 @@
       const toasts = document.getElementById("toasts");
       const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
+      function storedList(key, fallback = []) {
+        try {
+          const value = JSON.parse(localStorage.getItem(key) || "null");
+          return Array.isArray(value) ? value : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
       const state = {
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: storedTheme === "light" ? "light" : "dark",
@@ -79,6 +88,7 @@
         actionLog: [],
         logs: [],
         logSource: localStorage.getItem("kioskmate.logSource") || "combined",
+        logFilter: localStorage.getItem("kioskmate.logFilter") || "",
         logWarning: "",
         ssh: null,
         terminal: "",
@@ -89,6 +99,8 @@
         dirtyViews: new Set(),
         snapshotURL: "",
         snapshotTime: "",
+        navExpanded: new Set(storedList("kioskmate.navExpanded", [])),
+        mobileNavOpen: false,
       };
 
       const DIRTY_PREFIXES = {
@@ -565,13 +577,16 @@
         const timeInfo = state.time || {};
         root.innerHTML = `
           <div class="layout">
-            <aside class="sidebar">
+            <aside class="sidebar ${state.mobileNavOpen ? "mobile-open" : ""}">
               <div class="brand">
-                <div class="mark">K</div>
-                <div>
-                  <h1>KioskMate</h1>
-                  <p>${esc(t("appSubtitle"))}</p>
+                <div class="brand-identity">
+                  <div class="mark">K</div>
+                  <div>
+                    <h1>KioskMate</h1>
+                    <p>${esc(t("appSubtitle"))}</p>
+                  </div>
                 </div>
+                <button class="mobile-menu-toggle icon-command" data-action="nav-mobile-toggle" aria-expanded="${state.mobileNavOpen}" title="${esc(t("navigationMenu"))}" aria-label="${esc(t("navigationMenu"))}">☰</button>
               </div>
               <nav class="nav">
                 ${renderNav()}
@@ -592,9 +607,9 @@
                 </div>
                 <div class="chips">
                   ${state.update?.update_available ? `<button class="chip update-chip" data-view="settings-updates" title="${esc(t("openUpdateHint"))}">${esc(t("updateAvailable"))}: ${esc(state.update.latest_version || "")}</button>` : ""}
-                  <span class="chip ${browser.running ? "ok" : "bad"}" title="${esc(t("displayStatus"))}">${esc(browser.running ? t("running") : t("stopped"))}</span>
-                  <span class="chip ${mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : ""}" title="${esc(mqtt.last_error || t("mqttService"))}">MQTT: ${esc(formatMQTTState(mqtt.state))}</span>
-                  <span class="chip ${timeInfo.synchronized ? "ok" : "warn"}" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></span>
+                  <button class="chip ${browser.running ? "ok" : "bad"}" data-view="dashboard" title="${esc(t("openDashboardStatusHint"))}">${esc(browser.running ? t("running") : t("stopped"))}</button>
+                  <button class="chip ${mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : ""}" data-view="mqtt" title="${esc(mqtt.last_error || t("openMQTTStatusHint"))}">MQTT: ${esc(formatMQTTState(mqtt.state))}</button>
+                  <button class="chip ${timeInfo.synchronized ? "ok" : "warn"}" data-view="system-device" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></button>
                   <span class="chip">${esc(state.auth?.version || "dev")}</span>
                   <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">↻</button>
                 </div>
@@ -612,15 +627,15 @@
         return NAV.map((item) => {
           const children = item.children || [];
           const active = isNavActive(item);
-          const target = children[0]?.id || item.id;
+          const expanded = children.length && (state.navExpanded.has(item.id) || active);
           const childHtml = children.length
-            ? `<div class="nav-children">${children.map((child) => `<button class="${state.view === child.id ? "active" : ""}" data-view="${child.id}"><span>${esc(t(child.label))}</span><small>${esc(t(child.hint))}</small></button>`).join("")}</div>`
+            ? `<div class="nav-children" ${expanded ? "" : "hidden"}>${children.map((child) => `<button class="${state.view === child.id ? "active" : ""}" data-view="${child.id}"><span>${esc(t(child.label))}</span><small>${esc(t(child.hint))}</small></button>`).join("")}</div>`
             : "";
           return `
             <div class="nav-group">
-              <button class="nav-parent ${active ? "active" : ""}" data-view="${target}">
+              <button class="nav-parent ${active ? "active" : ""}" ${children.length ? `data-nav-toggle="${esc(item.id)}" aria-expanded="${expanded}"` : `data-view="${esc(item.id)}"`}>
                 <span>${esc(t(item.label))}</span>
-                ${children.length ? `<small>${esc(t(item.hint))}</small>` : `<small>${esc(t(item.hint))}</small>`}
+                <span class="nav-meta"><small>${esc(t(item.hint))}</small>${children.length ? `<span class="nav-chevron" aria-hidden="true">${expanded ? "−" : "+"}</span>` : ""}</span>
               </button>
               ${childHtml}
             </div>`;
@@ -675,12 +690,29 @@
       }
 
       function bindShell() {
+        document.querySelector('[data-action="nav-mobile-toggle"]')?.addEventListener("click", () => {
+          state.mobileNavOpen = !state.mobileNavOpen;
+          renderApp();
+        });
+        document.querySelectorAll("[data-nav-toggle]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const id = button.dataset.navToggle;
+            if (state.navExpanded.has(id)) state.navExpanded.delete(id);
+            else state.navExpanded.add(id);
+            localStorage.setItem("kioskmate.navExpanded", JSON.stringify([...state.navExpanded]));
+            renderApp();
+          });
+        });
         document.querySelectorAll("[data-view]").forEach((button) => {
           button.addEventListener("click", () => {
             const nextView = button.dataset.view;
             if (nextView === state.view || !confirmDiscard()) return;
             state.view = nextView;
+            state.mobileNavOpen = false;
+            const parent = NAV.find((item) => (item.children || []).some((child) => child.id === nextView));
+            if (parent) state.navExpanded.add(parent.id);
             localStorage.setItem("kioskmate.view", state.view);
+            localStorage.setItem("kioskmate.navExpanded", JSON.stringify([...state.navExpanded]));
             renderApp();
           });
         });
@@ -734,20 +766,28 @@
       function renderDashboard() {
         const browser = state.status?.browser || {};
         const cfg = state.config || {};
+        const mqtt = state.status?.mqtt || {};
         const stats = browser.stats || {};
         const watchdog = browser.watchdog || {};
         const pages = normalizePages(cfg.kiosk?.pages, cfg.kiosk?.urls);
         const activeIndex = Number(browser.active || 0);
         const activePage = pages[activeIndex] || {};
         const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
+        const enabledPages = pages.filter((page) => !page.disabled && page.url);
+        const browserMessage = browser.running
+          ? `${t("displayRunningHint")} ${browser.page_name || activePage.name || ""}`.trim()
+          : (browser.last_error ? `${t("displayStoppedErrorHint")}: ${browser.last_error}` : t("displayStoppedHint"));
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
+            ${stateBanner(browser.running ? "ok" : "bad", browser.running ? t("displayReady") : t("displayNeedsAttention"), browserMessage, browser.running
+              ? `<button data-view="kiosk-pages">${esc(t("managePages"))}</button>`
+              : button("startBrowser", "browser-start", "primary"))}
             <section class="status-strip" aria-label="${esc(t("status"))}">
               ${statusTile(t("displayStatus"), browser.running ? t("running") : t("stopped"), browser.running ? "ok" : "bad", browser.pid ? `PID ${browser.pid}` : t("noProcess"))}
               ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
               ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", formatValue(stats.rss_mb, " MB RAM"))}
-              ${statusTile("MQTT", cfg.mqtt?.enabled ? t("enabled") : t("disabled"), cfg.mqtt?.enabled ? "ok" : "", cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-")}
+              ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-"))}
             </section>
             <div class="dashboard-layout">
               <div class="control-stack">
@@ -759,17 +799,18 @@
                   <div class="body command-panel">
                     <div class="command-primary">
                       ${browser.running ? button("stopBrowser", "browser-stop") : button("startBrowser", "browser-start", "primary")}
-                      ${button("reloadBrowser", "browser-reload", browser.running ? "primary" : "")}
-                      ${button("restartBrowser", "browser-restart")}
+                      ${browser.running ? button("reloadBrowser", "browser-reload", "primary") : ""}
+                      <button data-view="kiosk-pages">${esc(t("manageFlow"))}</button>
                     </div>
                     <div class="active-page-summary">
-                      <div class="active-page-copy"><strong>${esc(activePage.name || browser.page_name || t("noData"))}</strong><span>${esc(activePage.url || browser.url || "-")}</span></div>
-                      ${pages.filter((page) => !page.disabled && page.url).length > 1 ? `<div class="actions">${button("previousPage", "browser-previous")}${button("nextPage", "browser-next")}</div>` : ""}
+                      <div class="active-page-copy"><strong>${esc(activePage.name || browser.page_name || t("noData"))}</strong><span>${esc(activePage.url || browser.url || "-")}</span><small>${esc(browser.scheduler?.next_switch ? `${t("nextSwitch")}: ${formatDate(browser.scheduler.next_switch)}` : t("manualPageControl"))}</small></div>
+                      ${enabledPages.length > 1 ? `<div class="actions">${button("previousPage", "browser-previous")}${button("nextPage", "browser-next")}</div>` : ""}
                     </div>
                     <div id="page-check-output" class="action-feedback" aria-live="polite"></div>
                     <details class="disclosure">
                       <summary>${esc(t("troubleshooting"))}</summary>
                       <div class="disclosure-body action-matrix">
+                        ${button("restartBrowser", "browser-restart")}
                         ${button("checkPage", "dashboard-page-check")}
                         ${button("renderCheck", "dashboard-render-check")}
                         ${button("repairHA", "browser-repair-ha")}
@@ -790,7 +831,7 @@
                     ${healthRow(t("haThemeSync"), formatThemeStatus(browser.theme_status), browser.theme_status?.state === "applied" ? "ok" : browser.theme_status?.state === "failed" ? "bad" : "")}
                     ${healthRow(t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready"), browser.auth_guard?.tripped ? "bad" : "ok")}
                     ${healthRow(t("watchdog"), watchdog.pressure || t("normal"), watchdog.pressure && watchdog.pressure !== "normal" ? "warn" : "ok")}
-                    ${healthRow(t("lastError"), browser.last_error || t("none"), browser.last_error ? "bad" : "")}
+                    ${browser.last_error ? healthRow(t("lastError"), browser.last_error, "bad") : ""}
                     ${renderActionLog()}
                   </div>
                 </div>
@@ -986,8 +1027,15 @@
       function renderMQTT() {
         const mqtt = state.config?.mqtt || {};
         const runtime = state.status?.mqtt || {};
+        const mqttTone = runtime.connected ? "ok" : runtime.state === "auth_error" || runtime.state === "error" ? "bad" : "warn";
+        const mqttTitle = runtime.connected ? t("mqttReady") : mqtt.enabled ? t("mqttNeedsAttention") : t("mqttDisabledTitle");
+        const mqttMessage = runtime.connected
+          ? `${t("mqttConnectedHint")} ${mqtt.url || ""}`.trim()
+          : (runtime.last_error || (mqtt.enabled ? t("mqttTestPrompt") : t("mqttEnablePrompt")));
+        const passwordConfigured = !!state.status?.config?.mqtt_password_configured;
         return `
           <div class="page-stack">
+            ${stateBanner(mqttTone, mqttTitle, mqttMessage, button("testConnection", "mqtt-test", runtime.connected ? "" : "primary"))}
             <section class="status-strip">
               ${statusTile(t("mqttService"), formatMQTTState(runtime.state), runtime.connected ? "ok" : runtime.state === "error" || runtime.state === "auth_error" ? "bad" : "", runtime.last_error || (mqtt.version ? `MQTT ${mqtt.version}` : "-"))}
               ${statusTile(t("broker"), mqtt.url || t("notConfigured"), mqtt.url ? "" : "warn", mqtt.username || t("anonymous"))}
@@ -1014,6 +1062,12 @@
                 </div>
               </div>
             </div>
+            <section class="readiness-grid" aria-label="${esc(t("mqttReadiness"))}">
+              ${readinessItem(t("brokerAddress"), !!mqtt.url, mqtt.url || t("notConfigured"))}
+              ${readinessItem(t("credentials"), passwordConfigured || !mqtt.username, mqtt.username ? (passwordConfigured ? t("configured") : t("passwordMissing")) : t("anonymous"))}
+              ${readinessItem(t("protocol"), !!mqtt.version, mqtt.version ? `MQTT ${mqtt.version}` : t("notConfigured"))}
+              ${readinessItem(t("homeAssistantDiscovery"), runtime.connected && !!mqtt.discovery, runtime.connected ? `${mqtt.discovery || "homeassistant"}/…` : t("requiresConnection"))}
+            </section>
             <details class="card disclosure advanced-settings">
               <summary>${esc(t("advancedSettings"))}</summary>
               <div class="disclosure-body form-grid">
@@ -1025,7 +1079,7 @@
             </details>
             <div class="card result-panel">
               <div class="head"><h3>${esc(t("connectionProtocol"))}</h3><span class="section-kicker">${esc(t("lastTestResult"))}</span></div>
-              <pre id="mqtt-result" class="logbox compact-log"></pre>
+              <pre id="mqtt-result" class="logbox compact-log empty-log">${esc(t("mqttNoTestResult"))}</pre>
             </div>
             <div class="save-bar"><span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span><div class="actions">${button("testConnection", "mqtt-test")}${button("save", "mqtt-save", "primary")}</div></div>
           </div>`;
@@ -1075,11 +1129,13 @@
       function renderSystemActions() {
         const privilege = state.privilege || {};
         const repairIssues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
+        const activeJobs = state.jobs.filter((job) => !job.finished).length;
         return `
           <div class="page-stack">
+            ${stateBanner(privilege.configured ? "ok" : "warn", privilege.configured ? t("maintenanceReady") : t("privilegeRequired"), privilege.configured ? t("maintenanceReadyHint") : t("privilegeRequiredHint"))}
             <section class="status-strip">
               ${statusTile(t("privilege"), privilege.configured ? t("configured") : t("notConfigured"), privilege.configured ? "ok" : "warn", privilege.mode || "sudo")}
-              ${statusTile(t("jobs"), String(state.jobs.length), "", state.jobs.some((job) => !job.finished) ? t("jobRunning") : t("noActiveJobs"))}
+              ${statusTile(t("jobs"), String(activeJobs), activeJobs ? "warn" : "ok", activeJobs ? t("jobRunning") : t("noActiveJobs"))}
               ${statusTile(t("repairCenter"), repairIssues.length ? `${repairIssues.length} ${t("issues")}` : t("ready"), repairIssues.length ? "warn" : "ok", state.repair?.changed ? t("repairChanged") : t("noRepairIssues"))}
             </section>
             <div class="settings-columns">
@@ -1089,7 +1145,7 @@
                   ${selectHtml("priv-mode", t("privilegeMode"), privilege.mode || "sudo", [["sudo", "sudo"], ["su", "su / root"]])}
                   ${field("priv-password", t("password"), "password", "current-password", "")}
                   <div class="span-2">${switchHtml("priv-remember", t("rememberPassword"), false)}</div>
-                  <button data-action="priv-clear" class="span-2">${esc(t("clearPrivilege"))}</button>
+                  ${privilege.configured ? `<button data-action="priv-clear" class="span-2">${esc(t("clearPrivilege"))}</button>` : `<p class="hint span-2">${esc(t("privilegeStorageHint"))}</p>`}
                 </div>
               </div>
               <div class="card">
@@ -1097,8 +1153,11 @@
                 <div class="body action-list">
                   <div><span>${esc(t("packageMaintenance"))}</span><div class="actions">${button("aptUpdate", "sys-apt-update")}${button("aptUpgrade", "sys-apt-upgrade")}</div></div>
                   <div><span>${esc(t("service"))}</span><div class="actions">${button("restartService", "sys-restart-service", "primary")}</div></div>
-                  <div class="danger-zone"><span>${esc(t("power"))}</span><div class="actions">${button("reboot", "sys-reboot", "danger-ghost")}${button("shutdown", "sys-shutdown", "danger")}</div></div>
                 </div>
+                <details class="danger-disclosure">
+                  <summary>${esc(t("powerActions"))}</summary>
+                  <div><p>${esc(t("powerActionsHint"))}</p><div class="actions">${button("reboot", "sys-reboot", "danger-ghost")}${button("shutdown", "sys-shutdown", "danger")}</div></div>
+                </details>
               </div>
             </div>
             <div class="card">
@@ -1137,12 +1196,14 @@
           ["status", t("logStatus")],
           ["paths", t("logPaths")],
         ];
+        const visibleLogs = filteredLogs();
         return `
           <div class="page-stack">
             <section class="section-toolbar log-toolbar">
               <div class="log-filters">
                 ${selectHtml("log-source", t("logSource"), state.logSource, sources)}
                 ${field("log-lines", t("logLines"), "number", "", 300)}
+                ${field("log-filter", t("filterLogs"), "search", "", state.logFilter)}
               </div>
               <div class="actions">
                 <button class="primary" data-busy="logs-refresh" data-action="logs-refresh">${esc(t("refreshLogs"))}</button>
@@ -1152,26 +1213,32 @@
             </section>
             ${state.logWarning ? `<div class="notice warn">${esc(state.logWarning)}</div>` : ""}
             <div class="card">
-              <div class="head"><div><h3>${esc(t("logs"))}</h3><span class="section-kicker">${esc(t("logSource"))}: ${esc(t(`log${state.logSource.charAt(0).toUpperCase()}${state.logSource.slice(1)}`))}</span></div></div>
-              <pre class="logbox log-output">${esc((state.logs || []).join("\n"))}</pre>
+              <div class="head"><div><h3>${esc(t("logs"))}</h3><span id="log-result-count" class="section-kicker">${esc(t("logEntries"))}: ${visibleLogs.length}</span></div></div>
+              <pre id="log-output" class="logbox log-output ${visibleLogs.length ? "" : "empty-log"}">${esc(visibleLogs.length ? visibleLogs.join("\n") : t("noLogsAvailable"))}</pre>
             </div>
           </div>`;
       }
 
       function renderSettingsAdmin() {
         const cfg = state.config || {};
+        const endpoint = `${cfg.admin?.bind || "0.0.0.0"}:${cfg.admin?.port || 33333}`;
         return `
-          <div class="grid">
+          <div class="page-stack">
+            <section class="status-strip">
+              ${statusTile(t("adminEndpoint"), endpoint, "ok", t("adminEndpointHint"))}
+              ${statusTile(t("sessions"), String(state.sessions.length), "", t("activeAdminSessions"))}
+              ${statusTile(t("sshKey"), state.ssh?.exists ? t("configured") : t("notConfigured"), state.ssh?.exists ? "ok" : "", state.ssh?.path || "-")}
+            </section>
             <div class="grid two">
               <div class="card">
-                <div class="head"><h3>${esc(t("adminSettings"))}</h3><button class="primary" data-action="admin-save">${esc(t("save"))}</button></div>
+                <div class="head"><div><h3>${esc(t("adminSettings"))}</h3><span class="section-kicker">${esc(t("networkAccess"))}</span></div><button class="primary" data-action="admin-save">${esc(t("save"))}</button></div>
                 <div class="body form-grid">
                   ${field("admin-bind", t("bindAddress"), "text", "", cfg.admin?.bind || "0.0.0.0")}
                   ${field("admin-port", t("port"), "number", "", cfg.admin?.port || 33333)}
                 </div>
               </div>
               <div class="card">
-                <div class="head"><h3>${esc(t("changePassword"))}</h3><button data-action="password-save">${esc(t("save"))}</button></div>
+                <div class="head"><div><h3>${esc(t("changePassword"))}</h3><span class="section-kicker">${esc(t("accountSecurity"))}</span></div><button data-action="password-save">${esc(t("save"))}</button></div>
                 <div class="body form-grid">
                   ${field("password-current", t("currentPassword"), "password", "current-password", "")}
                   ${field("password-next", t("newPassword"), "password", "new-password", "")}
@@ -1356,9 +1423,9 @@
           "browser-reset-session": "reset-session",
         };
         for (const [key, action] of Object.entries(actions)) {
-          document.querySelector(`[data-action="${key}"]`)?.addEventListener("click", () => browserAction(action, key));
+          document.querySelectorAll(`[data-action="${key}"]`).forEach((button) => button.addEventListener("click", () => browserAction(action, key)));
         }
-        document.querySelector('[data-action="browser-repair-ha"]')?.addEventListener("click", repairHASession);
+        document.querySelectorAll('[data-action="browser-repair-ha"]').forEach((button) => button.addEventListener("click", repairHASession));
       }
 
       async function browserAction(action, key) {
@@ -2083,10 +2150,10 @@
           const topic = document.getElementById("mqtt-topic");
           if (topic) topic.textContent = commandTopic();
         }));
-        document.querySelector('[data-action="mqtt-save"]')?.addEventListener("click", saveMQTT);
-        document.querySelector('[data-action="mqtt-test"]')?.addEventListener("click", testMQTT);
-        document.querySelector('[data-action="mqtt-discovery"]')?.addEventListener("click", publishMQTTDiscovery);
-        document.querySelector('[data-action="mqtt-discovery-reset"]')?.addEventListener("click", resetMQTTDiscovery);
+        document.querySelectorAll('[data-action="mqtt-save"]').forEach((button) => button.addEventListener("click", saveMQTT));
+        document.querySelectorAll('[data-action="mqtt-test"]').forEach((button) => button.addEventListener("click", testMQTT));
+        document.querySelectorAll('[data-action="mqtt-discovery"]').forEach((button) => button.addEventListener("click", publishMQTTDiscovery));
+        document.querySelectorAll('[data-action="mqtt-discovery-reset"]').forEach((button) => button.addEventListener("click", resetMQTTDiscovery));
       }
 
       async function saveMQTT() {
@@ -2216,7 +2283,11 @@
           "sys-shutdown": "shutdown",
         };
         for (const [action, name] of Object.entries(map)) {
-          document.querySelector(`[data-action="${action}"]`)?.addEventListener("click", () => startSystemJob(action, name));
+          document.querySelector(`[data-action="${action}"]`)?.addEventListener("click", () => {
+            if (action === "sys-reboot" && !window.confirm(t("confirmReboot"))) return;
+            if (action === "sys-shutdown" && !window.confirm(t("confirmShutdown"))) return;
+            startSystemJob(action, name);
+          });
         }
         document.querySelector('[data-action="priv-clear"]')?.addEventListener("click", async () => {
           await deleteJSON("/api/privilege");
@@ -2308,6 +2379,11 @@
           localStorage.setItem("kioskmate.logSource", state.logSource);
           refreshLogs().catch(() => {});
         });
+        document.getElementById("log-filter")?.addEventListener("input", (event) => {
+          state.logFilter = event.target.value;
+          localStorage.setItem("kioskmate.logFilter", state.logFilter);
+          updateFilteredLogs();
+        });
         if (!state.loaded.logs) {
           state.loaded.logs = true;
           refreshLogs().catch(() => {});
@@ -2323,6 +2399,23 @@
           state.logWarning = result.warning || "";
           renderApp();
         }, t("refreshLogs"));
+      }
+
+      function filteredLogs() {
+        const query = state.logFilter.trim().toLowerCase();
+        if (!query) return state.logs || [];
+        return (state.logs || []).filter((line) => String(line).toLowerCase().includes(query));
+      }
+
+      function updateFilteredLogs() {
+        const lines = filteredLogs();
+        const output = document.getElementById("log-output");
+        const count = document.getElementById("log-result-count");
+        if (output) {
+          output.textContent = lines.length ? lines.join("\n") : t("noLogsAvailable");
+          output.classList.toggle("empty-log", !lines.length);
+        }
+        if (count) count.textContent = `${t("logEntries")}: ${lines.length}`;
       }
 
       function bindSettings() {
@@ -2723,6 +2816,7 @@
       }
 
       function renderJobsHTML() {
+        if (!state.jobs.length) return `<div class="empty empty-action"><strong>${esc(t("noJobsYet"))}</strong><span>${esc(t("noJobsYetHint"))}</span></div>`;
         return renderJobList(state.jobs);
       }
 
@@ -2930,6 +3024,21 @@
 
       function statusTile(title, value, stateClass = "", meta = "") {
         return `<div class="status-tile ${esc(stateClass)}"><span>${esc(title)}</span><strong>${esc(value)}</strong><small>${esc(meta)}</small></div>`;
+      }
+
+      function stateBanner(tone, title, message, action = "") {
+        return `<section class="state-banner ${esc(tone)}" role="status">
+          <div class="state-indicator" aria-hidden="true"></div>
+          <div><strong>${esc(title)}</strong><span>${esc(message)}</span></div>
+          ${action ? `<div class="actions">${action}</div>` : ""}
+        </section>`;
+      }
+
+      function readinessItem(label, ready, detail) {
+        return `<div class="readiness-item ${ready ? "ok" : "warn"}">
+          <span class="readiness-mark" aria-hidden="true">${ready ? "✓" : "!"}</span>
+          <div><strong>${esc(label)}</strong><span>${esc(detail)}</span></div>
+        </div>`;
       }
 
       function healthRow(title, value, stateClass = "") {

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.0
+
+- Reorganized the remaining Admin UI around consistent runtime banners, status summaries, focused primary actions and secondary diagnostic disclosures.
+- Added collapsible desktop navigation groups and a dedicated compact mobile menu so the control panel no longer pushes content below a large horizontal navigation strip.
+- Simplified Dashboard operation to display start/stop, page reload and workflow management while moving restart, session reset and diagnostics into troubleshooting.
+- Added state-driven Dashboard guidance for stopped displays, browser errors, the current page, the next scheduler switch and the real MQTT runtime state.
+- Added MQTT connection readiness checks for broker address, credentials, protocol version and Home Assistant discovery, plus actionable connected, disabled and error states.
+- Added a useful MQTT protocol empty state and preserved the detailed live connection test as the primary diagnostic path.
+- Separated package and service maintenance from reboot and shutdown actions, added privilege guidance and replaced empty job output with a clear maintenance-job timeline state.
+- Added live client-side log filtering, visible result counts and useful no-result feedback without additional server requests.
+- Added Admin access summaries for the listening endpoint, active sessions and SSH key state, with clearer network-access and account-security grouping.
+- Expanded and verified complete English/German translations, responsive layouts, keyboard-accessible navigation and embedded Admin UI regression contracts.
+
 ## v0.5.0
 
 - Rebuilt Kiosk -> Pages and workflow as a single all-in-one sequence workspace instead of separate page, rotation and time-rule forms.

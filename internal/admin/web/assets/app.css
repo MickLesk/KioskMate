@@ -238,7 +238,7 @@ p {
 }
 
 .login-brand,
-.brand {
+.brand-identity {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -276,9 +276,17 @@ p {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   min-height: 70px;
   padding: 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.mobile-menu-toggle {
+  display: none;
 }
 
 .brand h1 {
@@ -328,6 +336,26 @@ p {
 
 .nav-parent {
   font-weight: 760;
+}
+
+.nav-meta {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-chevron {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .nav-parent small {
@@ -542,6 +570,49 @@ p {
   box-shadow: var(--shadow);
 }
 
+.state-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+}
+
+.state-banner > div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.state-banner span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.state-indicator {
+  width: 10px;
+  height: 34px;
+  border-radius: 3px;
+  background: var(--muted);
+}
+
+.state-banner.ok .state-indicator {
+  background: var(--green);
+}
+
+.state-banner.warn .state-indicator {
+  background: var(--amber);
+}
+
+.state-banner.bad .state-indicator {
+  background: var(--red);
+}
+
 .status-tile {
   display: grid;
   min-width: 0;
@@ -633,7 +704,7 @@ p {
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(340px, 0.72fr) minmax(480px, 1.28fr);
+  grid-template-columns: minmax(400px, 0.85fr) minmax(480px, 1.15fr);
   align-items: start;
   gap: 14px;
 }
@@ -650,7 +721,11 @@ p {
 
 .command-primary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.command-primary button:nth-child(3) {
+  grid-column: 1 / -1;
 }
 
 .command-primary button {
@@ -680,6 +755,11 @@ p {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.active-page-copy small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .action-feedback {
@@ -1089,6 +1169,58 @@ p {
   overflow-wrap: anywhere;
 }
 
+.readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.readiness-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.readiness-item:last-child {
+  border-right: 0;
+}
+
+.readiness-item > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.readiness-item span:not(.readiness-mark) {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readiness-mark {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.readiness-item.ok .readiness-mark {
+  color: var(--green);
+}
+
 .disclosure > summary {
   min-height: 52px;
   padding: 16px;
@@ -1129,6 +1261,33 @@ p {
 
 .danger-zone {
   color: var(--red);
+}
+
+.danger-disclosure {
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--red-soft) 35%, var(--panel));
+}
+
+.danger-disclosure summary {
+  padding: 14px 16px;
+  color: var(--red);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.danger-disclosure > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.danger-disclosure p {
+  max-width: 580px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .metric {
@@ -1822,7 +1981,7 @@ tr:last-child td {
 
 .log-filters {
   display: grid;
-  grid-template-columns: minmax(180px, 280px) 110px;
+  grid-template-columns: minmax(180px, 280px) 110px minmax(180px, 320px);
   gap: 8px;
 }
 
@@ -1834,6 +1993,11 @@ tr:last-child td {
   min-height: 62vh;
   border: 0;
   border-radius: 0;
+}
+
+.empty-log {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .compact-log {
@@ -2019,6 +2183,18 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .readiness-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .readiness-item:nth-child(2) {
+    border-right: 0;
+  }
+
+  .readiness-item:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
   .live-preview {
     grid-template-rows: auto minmax(360px, 62vh) auto;
   }
@@ -2167,7 +2343,9 @@ tr:last-child td {
   }
 
   .sidebar {
-    display: block;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
     overflow: hidden;
   }
 
@@ -2175,11 +2353,39 @@ tr:last-child td {
     border-right: 0;
   }
 
-  .sidebar-foot {
+  .mobile-menu-toggle {
+    display: grid;
+    flex: 0 0 36px;
+    place-items: center;
+  }
+
+  .sidebar .nav,
+  .sidebar .sidebar-foot {
+    display: none;
+  }
+
+  .sidebar.mobile-open .nav {
+    display: grid;
+    max-height: 55vh;
+    gap: 4px;
+    overflow-y: auto;
+  }
+
+  .sidebar.mobile-open .sidebar-foot {
     display: grid;
   }
 
+  .sidebar.mobile-open .nav-group {
+    width: 100%;
+    flex: none;
+  }
+
+  .sidebar.mobile-open .nav-children {
+    margin-left: 12px;
+  }
+
   .status-strip,
+  .readiness-grid,
   .form-grid,
   .schedule-settings,
   .page-item-fields,
@@ -2190,9 +2396,35 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .state-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .state-banner > .actions {
+    grid-column: 1 / -1;
+  }
+
+  .state-banner > .actions button {
+    width: 100%;
+  }
+
+  .readiness-item {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .readiness-item:last-child {
+    border-bottom: 0;
+  }
+
   .terminal-command,
   .log-filters {
     grid-template-columns: 1fr;
+  }
+
+  .danger-disclosure > div {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .status-tile {
