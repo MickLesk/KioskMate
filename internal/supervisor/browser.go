@@ -42,6 +42,7 @@ type Browser struct {
 	rotationIndex int
 	rotationUntil time.Time
 	devTools      bool
+	themeStatus   ThemeStatus
 	authGuard     AuthGuardStatus
 }
 
@@ -62,7 +63,20 @@ type Status struct {
 	LastError  string                  `json:"last_error,omitempty"`
 	LastExit   *time.Time              `json:"last_exit,omitempty"`
 	DevTools   bool                    `json:"devtools"`
+	Theme      ThemeStatus             `json:"theme_status"`
 	AuthGuard  AuthGuardStatus         `json:"auth_guard"`
+}
+
+type ThemeStatus struct {
+	State          string     `json:"state"`
+	Configured     string     `json:"configured"`
+	RequestedTheme string     `json:"requested_theme,omitempty"`
+	RequestedDark  *bool      `json:"requested_dark,omitempty"`
+	SelectedTheme  string     `json:"selected_theme,omitempty"`
+	SelectedDark   *bool      `json:"selected_dark,omitempty"`
+	AppliedDark    *bool      `json:"applied_dark,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	Updated        *time.Time `json:"updated,omitempty"`
 }
 
 type AuthGuardStatus struct {
@@ -158,6 +172,8 @@ func (b *Browser) Start(ctx context.Context) error {
 	b.hotSince = time.Time{}
 	b.lastError = ""
 	b.devTools = false
+	configuredTheme := b.cfg.Snapshot().Kiosk.Theme
+	b.themeStatus = ThemeStatus{State: "pending", Configured: configuredTheme}
 	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command, "args", args)
 	if logFile != nil {
 		_, _ = fmt.Fprintf(logFile, "started pid: %d\n", cmd.Process.Pid)
@@ -336,7 +352,7 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: activeURL(cfg, b.active), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, AuthGuard: b.authGuard}
+	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: activeURL(cfg, b.active), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard}
 	if !b.lastExit.IsZero() {
 		lastExit := b.lastExit
 		status.LastExit = &lastExit

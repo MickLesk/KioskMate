@@ -598,6 +598,7 @@
                       [t("watchdogAction"), watchdog.last_action || "-"],
                       [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
                       [t("devTools"), browser.devtools ? t("connected") : t("notConnected")],
+                      [t("haThemeSync"), formatThemeStatus(browser.theme_status)],
                       [t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready")],
                     ])}
                     ${renderRecoveryHints(browser)}
@@ -1071,6 +1072,14 @@
         if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
         state.snapshotURL = "";
         state.snapshotTime = "";
+      }
+
+      function formatThemeStatus(status) {
+        if (!status || !status.state) return "-";
+        if (status.state === "pending") return t("pending");
+        if (status.state === "failed") return `${t("failed")}: ${status.error || "-"}`;
+        const mode = status.applied_dark ? t("dark") : t("light");
+        return `${t("applied")}: ${status.selected_theme || status.requested_theme || "default"} / ${mode}`;
       }
 
       async function repairHASession() {

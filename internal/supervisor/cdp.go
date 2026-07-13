@@ -40,6 +40,18 @@ type cdpSession struct {
 	next atomic.Int64
 }
 
+const themeStatusConsolePrefix = "__KIOSKMATE_THEME__"
+
+type themeReport struct {
+	OK             bool   `json:"ok"`
+	Error          string `json:"error,omitempty"`
+	RequestedTheme string `json:"requested_theme"`
+	RequestedDark  bool   `json:"requested_dark"`
+	SelectedTheme  string `json:"selected_theme,omitempty"`
+	SelectedDark   *bool  `json:"selected_dark,omitempty"`
+	AppliedDark    *bool  `json:"applied_dark,omitempty"`
+}
+
 func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
 	target, err := waitForDevToolsTarget(ctx, profile)
 	if err != nil {
@@ -168,7 +180,20 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 		return
 	}
 	defer session.close()
+	defer func() {
+		b.mu.Lock()
+		if b.done == done {
+			b.devTools = false
+		}
+		b.mu.Unlock()
+	}()
+	if err := session.command(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+		b.setThemeError(theme, err)
+		b.logger.Warn("Chromium DevTools runtime monitor failed", "error", err)
+		return
+	}
 	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
+		b.setThemeError(theme, err)
 		b.logger.Warn("Home Assistant theme synchronization failed", "theme", theme, "error", err)
 	} else if _, ok := homeAssistantThemeScript(theme); ok {
 		b.logger.Info("Home Assistant theme synchronization enabled", "theme", theme)
@@ -191,6 +216,10 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 			continue
 		}
 		switch event.Method {
+		case "Runtime.consoleAPICalled":
+			if report, ok := parseThemeConsoleEvent(event.Params); ok {
+				b.setThemeReport(theme, report)
+			}
 		case "Network.webSocketFrameReceived":
 			var params struct {
 				Response struct {
@@ -259,27 +288,48 @@ func homeAssistantThemeScript(theme string) (string, bool) {
 	}
 	return fmt.Sprintf(`(() => {
   const desiredDark = %t;
+  const desiredTheme = "default";
   const timerKey = "__kioskmateThemeTimer";
+  const resultKey = "__kioskmateThemeResult";
   if (globalThis[timerKey]) clearInterval(globalThis[timerKey]);
   let attempts = 0;
   let stableChecks = 0;
+  const report = (ok, error, selected, applied) => {
+    const value = {
+      ok,
+      error: error || "",
+      requested_theme: desiredTheme,
+      requested_dark: desiredDark,
+      selected_theme: selected && selected.theme || "",
+      selected_dark: selected && typeof selected.dark === "boolean" ? selected.dark : null,
+      applied_dark: typeof applied === "boolean" ? applied : null
+    };
+    globalThis[resultKey] = value;
+    console.info("%s" + JSON.stringify(value));
+  };
   const apply = () => {
     attempts += 1;
     const root = document.querySelector("home-assistant");
     const selected = root && root.hass && root.hass.selectedTheme;
     const applied = root && root.hass && root.hass.themes && root.hass.themes.darkMode;
-    if (selected && selected.dark === desiredDark && applied === desiredDark) {
+    if (selected && selected.theme === desiredTheme && selected.dark === desiredDark && applied === desiredDark) {
       stableChecks += 1;
       if (stableChecks >= 12) {
         clearInterval(globalThis[timerKey]);
         globalThis[timerKey] = 0;
+        report(true, "", selected, applied);
       }
       return;
     }
     stableChecks = 0;
     if (root && root.hass) {
       root.dispatchEvent(new CustomEvent("settheme", {
-        detail: { dark: desiredDark },
+        detail: {
+          theme: desiredTheme,
+          dark: desiredDark,
+          primaryColor: undefined,
+          accentColor: undefined
+        },
         bubbles: true,
         composed: true
       }));
@@ -287,11 +337,64 @@ func homeAssistantThemeScript(theme string) (string, bool) {
     if (attempts >= 120) {
       clearInterval(globalThis[timerKey]);
       globalThis[timerKey] = 0;
+      report(false, root && root.hass ? "Home Assistant did not apply the requested default theme and color mode" : "Home Assistant frontend was not detected", selected, applied);
     }
   };
   globalThis[timerKey] = setInterval(apply, 250);
   apply();
-})();`, desiredDark), true
+})();`, desiredDark, themeStatusConsolePrefix), true
+}
+
+func parseThemeConsoleEvent(data json.RawMessage) (themeReport, bool) {
+	var params struct {
+		Args []struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"args"`
+	}
+	if json.Unmarshal(data, &params) != nil {
+		return themeReport{}, false
+	}
+	for _, arg := range params.Args {
+		var value string
+		if json.Unmarshal(arg.Value, &value) != nil || !strings.HasPrefix(value, themeStatusConsolePrefix) {
+			continue
+		}
+		var report themeReport
+		if json.Unmarshal([]byte(strings.TrimPrefix(value, themeStatusConsolePrefix)), &report) == nil {
+			return report, true
+		}
+	}
+	return themeReport{}, false
+}
+
+func (b *Browser) setThemeReport(configured string, report themeReport) {
+	now := time.Now()
+	requestedDark := report.RequestedDark
+	state := "failed"
+	if report.OK {
+		state = "applied"
+	}
+	b.mu.Lock()
+	b.themeStatus = ThemeStatus{
+		State:          state,
+		Configured:     configured,
+		RequestedTheme: report.RequestedTheme,
+		RequestedDark:  &requestedDark,
+		SelectedTheme:  report.SelectedTheme,
+		SelectedDark:   report.SelectedDark,
+		AppliedDark:    report.AppliedDark,
+		Error:          report.Error,
+		Updated:        &now,
+	}
+	b.mu.Unlock()
+	b.logger.Info("Home Assistant theme synchronization result", "state", state, "theme", report.SelectedTheme, "dark", report.AppliedDark, "error", report.Error)
+}
+
+func (b *Browser) setThemeError(configured string, err error) {
+	now := time.Now()
+	b.mu.Lock()
+	b.themeStatus = ThemeStatus{State: "failed", Configured: configured, Error: err.Error(), Updated: &now}
+	b.mu.Unlock()
 }
 
 func authRelevantResourceType(kind string) bool {

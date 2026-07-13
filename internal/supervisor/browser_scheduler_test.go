@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -313,9 +314,46 @@ func TestHomeAssistantThemeScriptUsesNativeThemeEvent(t *testing.T) {
 		if !strings.Contains(script, `new CustomEvent("settheme"`) {
 			t.Fatalf("theme %q script does not use Home Assistant's native theme event", test.theme)
 		}
+		if !strings.Contains(script, `const desiredTheme = "default"`) || !strings.Contains(script, `theme: desiredTheme`) {
+			t.Fatalf("theme %q script does not select Home Assistant's default theme", test.theme)
+		}
 	}
 	if script, ok := homeAssistantThemeScript("invalid"); ok || script != "" {
 		t.Fatalf("invalid theme produced script %q", script)
+	}
+}
+
+func TestParseThemeConsoleEvent(t *testing.T) {
+	dark := true
+	payload, err := json.Marshal(map[string]any{
+		"args": []map[string]any{{
+			"value": themeStatusConsolePrefix + `{"ok":true,"requested_theme":"default","requested_dark":true,"selected_theme":"default","selected_dark":true,"applied_dark":true}`,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, ok := parseThemeConsoleEvent(payload)
+	if !ok || !report.OK || report.RequestedTheme != "default" || report.SelectedDark == nil || *report.SelectedDark != dark || report.AppliedDark == nil || !*report.AppliedDark {
+		t.Fatalf("unexpected theme report: %#v, ok=%v", report, ok)
+	}
+}
+
+func TestThemeReportIsExposedInBrowserStatus(t *testing.T) {
+	cfg := schedulerTestConfig()
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dark := true
+	browser.setThemeReport("dark", themeReport{
+		OK:             true,
+		RequestedTheme: "default",
+		RequestedDark:  true,
+		SelectedTheme:  "default",
+		SelectedDark:   &dark,
+		AppliedDark:    &dark,
+	})
+	status := browser.Status().Theme
+	if status.State != "applied" || status.SelectedTheme != "default" || status.AppliedDark == nil || !*status.AppliedDark {
+		t.Fatalf("unexpected browser theme status: %#v", status)
 	}
 }
 

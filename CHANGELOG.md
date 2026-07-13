@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.10
+
+- Fixed native dark mode when the Home Assistant kiosk user had selected a custom theme without dark-mode support.
+- KioskMate now explicitly selects Home Assistant's built-in `default` theme together with the requested light or dark mode.
+- Added live Home Assistant theme synchronization status to the Dashboard, including the selected theme, applied color mode and timeout errors.
+
 ## v0.1.9
 
 - Fixed Home Assistant dashboards remaining light while the KioskMate kiosk theme was set to dark.
