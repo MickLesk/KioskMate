@@ -867,6 +867,15 @@ p {
   font-size: 12px;
 }
 
+.save-bar.dirty {
+  border-color: var(--amber);
+}
+
+.save-bar.dirty > span {
+  color: var(--amber);
+  font-weight: 700;
+}
+
 .schedule-settings {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(180px, 1fr) minmax(160px, 0.5fr);
@@ -887,7 +896,61 @@ p {
 }
 
 .rule-row {
-  grid-template-columns: minmax(120px, 0.9fr) minmax(130px, 0.9fr) 100px 100px minmax(120px, 0.7fr) auto auto;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(130px, 0.8fr) 100px 100px minmax(250px, 1.2fr) auto auto;
+}
+
+.day-picker {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.day-picker legend {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.day-picker > div {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(30px, 1fr));
+  gap: 4px;
+}
+
+.day-picker label {
+  position: relative;
+  cursor: pointer;
+}
+
+.day-picker input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.day-picker span {
+  display: grid;
+  min-height: 36px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.day-picker input:checked + span {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--text);
+  font-weight: 750;
+}
+
+.day-picker input:focus-visible + span {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
 }
 
 .topic-preview {
@@ -992,6 +1055,12 @@ p {
   text-align: center;
 }
 
+.empty-action {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1086,6 +1155,10 @@ tr:last-child td {
 }
 
 .toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--green);
   border-radius: 7px;
@@ -1105,6 +1178,17 @@ tr:last-child td {
 .toast strong {
   display: block;
   margin-bottom: 3px;
+}
+
+.toast-close {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
 }
 
 .modal-backdrop {

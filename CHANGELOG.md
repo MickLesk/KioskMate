@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.1
+
+- Added reliable unsaved-change tracking across kiosk pages, schedules, MQTT, device time, browser, access and raw configuration forms.
+- Added navigation and browser-close protection so edits cannot be discarded silently.
+- Disabled save actions when a form is unchanged and added a clear saved/unsaved state to persistent action bars.
+- Added translated validation for kiosk page URLs, scheduler timing and references, rotation durations and MQTT broker settings.
+- Replaced free-form scheduler weekday input with an accessible seven-day selector while preserving the existing configuration format.
+- Fixed the kiosk page filter so typing no longer rerenders the application, drops focus or loses pending field values.
+- Removed obsolete scheduler handlers from the page-management view and consolidated page creation into one action path.
+- Added direct progress labels to running buttons, dismissible live-region toasts and Escape/focus handling for dialogs.
+- Added an actionable empty state for first-time kiosk page setup and retained zero-overflow mobile behavior.
+
 ## v0.2.0
 
 - Rebuilt the embedded Admin UI around five predictable operating areas: Dashboard, Kiosk, MQTT, System and Settings.

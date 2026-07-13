@@ -3,6 +3,7 @@ package admin
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -33,5 +34,27 @@ func TestAssetRejectsNestedPaths(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
+	app, err := content.ReadFile("web/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i18n, err := content.ReadFile("web/assets/i18n.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT"} {
+		if !strings.Contains(string(app), marker) {
+			t.Errorf("embedded app.js missing %q", marker)
+		}
+	}
+	for _, marker := range []string{"allChangesSaved", "validationPageUrl", "dayShort_mon"} {
+		if !strings.Contains(string(i18n), marker) {
+			t.Errorf("embedded i18n.js missing %q", marker)
+		}
 	}
 }

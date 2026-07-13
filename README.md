@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.2.0` introduces the redesigned Admin UI while preserving the existing config format, browser profiles and Home Assistant sessions.
+KioskMate `0.2.1` refines the redesigned Admin UI with protected form changes, inline validation and simpler scheduler controls while preserving the existing config format, browser profiles and Home Assistant sessions.
 
 The Admin UI is organized by task:
 
@@ -77,8 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.2.0/kioskmate_0.2.0_arm64.deb
-sudo apt install ./kioskmate_0.2.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.2.1/kioskmate_0.2.1_arm64.deb
+sudo apt install ./kioskmate_0.2.1_arm64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now kioskmate.service
 ```
@@ -194,14 +194,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.2.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.2.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.2.1 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.2.1 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.2.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.2.1 --arch arm64 --arch amd64
 ```
 
 The package installs:

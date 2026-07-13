@@ -59,6 +59,7 @@
         view: VIEW_ALIASES[localStorage.getItem("kioskmate.view")] || localStorage.getItem("kioskmate.view") || "dashboard",
         auth: null,
         config: null,
+        persistedConfig: null,
         status: null,
         hardware: null,
         privilege: null,
@@ -77,8 +78,29 @@
         jobs: [],
         loaded: {},
         busy: new Set(),
+        dirtyViews: new Set(),
         snapshotURL: "",
         snapshotTime: "",
+      };
+
+      const DIRTY_PREFIXES = {
+        "kiosk-pages": ["page-name-", "page-url-", "page-disabled-"],
+        "kiosk-schedule": ["scheduler-", "rotation-", "rule-"],
+        mqtt: ["mqtt-"],
+        "system-device": ["time-"],
+        "settings-browser": ["kiosk-", "perf-", "watchdog-"],
+        "settings-admin": ["admin-"],
+        "settings-config": ["config-raw"],
+      };
+
+      const SAVE_ACTIONS = {
+        "kiosk-pages": ["kiosk-save", "kiosk-save-restart"],
+        "kiosk-schedule": ["scheduler-save"],
+        mqtt: ["mqtt-save"],
+        "system-device": ["time-save"],
+        "settings-browser": ["browser-settings-save", "browser-settings-save-restart"],
+        "settings-admin": ["admin-save"],
+        "settings-config": ["config-raw-save"],
       };
 
       document.documentElement.dataset.theme = state.theme;
@@ -105,16 +127,29 @@
         document.querySelectorAll(`[data-busy="${CSS.escape(name)}"]`).forEach((el) => {
           el.disabled = on;
           el.classList.toggle("busy", on);
+          el.setAttribute("aria-busy", String(on));
+          if (on) {
+            el.dataset.idleLabel = el.textContent;
+            el.textContent = t("working");
+          } else if (el.dataset.idleLabel) {
+            el.textContent = el.dataset.idleLabel;
+            delete el.dataset.idleLabel;
+          }
         });
+        if (!on) updateDirtyUI();
       }
 
       function toast(title, message = "", type = "ok") {
         const item = document.createElement("div");
         item.className = "toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "");
-        item.innerHTML = `<strong>${esc(title)}</strong>${message ? `<div class="muted">${esc(message)}</div>` : ""}`;
+        item.setAttribute("role", type === "error" ? "alert" : "status");
+        item.innerHTML = `<div><strong>${esc(title)}</strong>${message ? `<div class="muted">${esc(message)}</div>` : ""}</div><button class="toast-close" title="${esc(t("close"))}" aria-label="${esc(t("close"))}">&times;</button>`;
+        item.querySelector(".toast-close")?.addEventListener("click", () => item.remove());
         toasts.appendChild(item);
         setTimeout(() => item.remove(), 5200);
       }
+
+      let modalKeyHandler = null;
 
       function openModal(html) {
         modalRoot.innerHTML = `<div class="modal-backdrop" data-modal-backdrop>${html}</div>`;
@@ -122,9 +157,16 @@
         modalRoot.querySelector("[data-modal-backdrop]")?.addEventListener("click", (event) => {
           if (event.target?.dataset?.modalBackdrop !== undefined) closeModal();
         });
+        modalKeyHandler = (event) => {
+          if (event.key === "Escape") closeModal();
+        };
+        document.addEventListener("keydown", modalKeyHandler);
+        requestAnimationFrame(() => modalRoot.querySelector("[data-modal-close], button, input, select, textarea")?.focus());
       }
 
       function closeModal() {
+        if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
+        modalKeyHandler = null;
         modalRoot.innerHTML = "";
       }
 
@@ -281,11 +323,67 @@
           toast(t("failed"), err.message, "error");
           if (err.data?.browser_log || err.data?.core_log) showActionFailureDetails(err);
           recordAction(t("failed"), `${name}: ${err.message}`, "error");
-          throw err;
+          return undefined;
         } finally {
           setBusy(name, false);
         }
       }
+
+      function markDirty(view = state.view) {
+        state.dirtyViews.add(view);
+        updateDirtyUI();
+      }
+
+      function clearDirty(view = state.view) {
+        state.dirtyViews.delete(view);
+        updateDirtyUI();
+      }
+
+      function isDirty(view = state.view) {
+        return state.dirtyViews.has(view);
+      }
+
+      function updateDirtyUI() {
+        const dirty = isDirty();
+        document.querySelectorAll("[data-dirty-indicator]").forEach((element) => {
+          element.textContent = t(dirty ? "unsavedChanges" : "allChangesSaved");
+        });
+        document.querySelectorAll(".save-bar").forEach((element) => element.classList.toggle("dirty", dirty));
+        for (const action of SAVE_ACTIONS[state.view] || []) {
+          document.querySelectorAll(`[data-action="${CSS.escape(action)}"]`).forEach((button) => {
+            if (!state.busy.has(action)) button.disabled = !dirty;
+          });
+        }
+      }
+
+      function confirmDiscard(view = state.view) {
+        if (!isDirty(view)) return true;
+        if (!confirm(t("confirmDiscardChanges"))) return false;
+        state.dirtyViews.delete(view);
+        if (state.persistedConfig) state.config = JSON.parse(JSON.stringify(state.persistedConfig));
+        return true;
+      }
+
+      function bindDirtyTracking() {
+        const prefixes = DIRTY_PREFIXES[state.view] || [];
+        if (!prefixes.length) return;
+        const content = document.querySelector(".content");
+        const onChange = (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) return;
+          if (target.dataset.noDirty !== undefined || target.type === "file") return;
+          if (prefixes.some((prefix) => target.id === prefix || target.id.startsWith(prefix))) markDirty();
+        };
+        content?.addEventListener("input", onChange);
+        content?.addEventListener("change", onChange);
+        updateDirtyUI();
+      }
+
+      window.addEventListener("beforeunload", (event) => {
+        if (!state.dirtyViews.size) return;
+        event.preventDefault();
+        event.returnValue = "";
+      });
 
       function recordAction(title, detail = "", type = "ok") {
         state.actionLog.unshift({ title, detail, type, at: new Date().toISOString() });
@@ -336,6 +434,7 @@
           getJSON("/api/privilege"),
         ]);
         state.config = cfg;
+        state.persistedConfig = JSON.parse(JSON.stringify(cfg));
         state.status = status;
         state.hardware = hardware;
         state.privilege = privilege;
@@ -428,6 +527,7 @@
           </div>`;
         bindShell();
         bindView();
+        bindDirtyTracking();
       }
 
       function renderNav() {
@@ -497,7 +597,9 @@
       function bindShell() {
         document.querySelectorAll("[data-view]").forEach((button) => {
           button.addEventListener("click", () => {
-            state.view = button.dataset.view;
+            const nextView = button.dataset.view;
+            if (nextView === state.view || !confirmDiscard()) return;
+            state.view = nextView;
             localStorage.setItem("kioskmate.view", state.view);
             renderApp();
           });
@@ -505,14 +607,22 @@
         document.getElementById("lang")?.addEventListener("change", (event) => setLanguage(event.target.value));
         document.getElementById("theme")?.addEventListener("change", (event) => setTheme(event.target.value));
         document.querySelector('[data-action="logout"]')?.addEventListener("click", async () => {
+          if (!confirmDiscard()) return;
           await postJSON("/api/auth/logout");
           state.auth = null;
           await boot();
         });
-        document.querySelector('[data-action="refresh"]')?.addEventListener("click", refreshAndRender);
+        document.querySelector('[data-action="refresh"]')?.addEventListener("click", () => {
+          if (confirmDiscard()) refreshAndRender();
+        });
       }
 
       function setLanguage(lang) {
+        if (!confirmDiscard()) {
+          const select = document.getElementById("lang");
+          if (select) select.value = state.lang;
+          return;
+        }
         state.lang = lang === "de" ? "de" : "en";
         localStorage.setItem("kioskmate.lang", state.lang);
         document.documentElement.lang = state.lang;
@@ -520,6 +630,11 @@
       }
 
       function setTheme(theme) {
+        if (!confirmDiscard()) {
+          const select = document.getElementById("theme");
+          if (select) select.value = state.theme;
+          return;
+        }
         state.theme = theme === "light" ? "light" : "dark";
         localStorage.setItem("kioskmate.theme", state.theme);
         localStorage.setItem("kioskmate.theme.explicit", "1");
@@ -665,15 +780,15 @@
               <div class="data-section-body">
                 <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
                 <div class="toolbar">
-                  <input id="page-filter" type="search" placeholder="${esc(t("filterPages"))}" value="${esc(state.pageFilter || "")}" />
-                  <span class="chip">${esc(t("visiblePages"))}: ${pages.length}</span>
+                  <input id="page-filter" data-no-dirty type="search" placeholder="${esc(t("filterPages"))}" value="${esc(state.pageFilter || "")}" />
+                  <span id="visible-pages-count" class="chip">${esc(t("visiblePages"))}: ${pages.length}</span>
                 </div>
                 <div id="pages-list">${renderPages(pages)}</div>
                 <div id="page-check-all-output" class="check-panel"></div>
               </div>
             </section>
             <div class="save-bar">
-              <span>${esc(t("unsavedChangesHint"))}</span>
+              <span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span>
               <div class="actions">
                 ${button("save", "kiosk-save")}
                 ${button("saveRestart", "kiosk-save-restart", "primary")}
@@ -710,7 +825,7 @@
                 <div class="data-section-body" id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
               </section>
             </div>
-            <div class="save-bar"><span>${esc(t("schedulerSaveHint"))}</span><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
+            <div class="save-bar"><span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
           </div>`;
       }
 
@@ -756,7 +871,7 @@
               <div class="head"><h3>${esc(t("connectionProtocol"))}</h3><span class="section-kicker">${esc(t("lastTestResult"))}</span></div>
               <pre id="mqtt-result" class="logbox compact-log"></pre>
             </div>
-            <div class="save-bar"><span>${esc(t("mqttSaveHint"))}</span><div class="actions">${button("testConnection", "mqtt-test")}${button("save", "mqtt-save", "primary")}</div></div>
+            <div class="save-bar"><span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span><div class="actions">${button("testConnection", "mqtt-test")}${button("save", "mqtt-save", "primary")}</div></div>
           </div>`;
       }
 
@@ -975,7 +1090,7 @@
                 ${state.diagnostics ? `<div class="span-2">${kvTable(objectEntries(state.diagnostics))}</div>` : ""}
               </div>
             </details>
-            <div class="save-bar"><span>${esc(t("browserRestartHint"))}</span><div class="actions">${button("save", "browser-settings-save")}${button("saveRestart", "browser-settings-save-restart", "primary")}</div></div>
+            <div class="save-bar"><span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span><div class="actions">${button("save", "browser-settings-save")}${button("saveRestart", "browser-settings-save-restart", "primary")}</div></div>
           </div>`;
       }
 
@@ -1223,24 +1338,8 @@
 
       function bindKiosk() {
         bindBrowserButtons();
-        document.querySelector('[data-action="page-add"]')?.addEventListener("click", () => {
-          const cfg = cloneConfig();
-          cfg.kiosk = cfg.kiosk || {};
-          cfg.kiosk.pages = collectPages();
-          cfg.kiosk.pages.push({ name: `Kiosk ${cfg.kiosk.pages.length + 1}`, url: "http://homeassistant.local:8123", disabled: false });
-          syncKioskURLs(cfg.kiosk);
-          state.config = cfg;
-          renderApp();
-        });
-        document.querySelector('[data-action="page-add-ha"]')?.addEventListener("click", () => {
-          const cfg = cloneConfig();
-          cfg.kiosk = cfg.kiosk || {};
-          cfg.kiosk.pages = collectPages();
-          cfg.kiosk.pages.push({ name: "Home Assistant", url: "http://homeassistant.local:8123", disabled: false });
-          syncKioskURLs(cfg.kiosk);
-          state.config = cfg;
-          renderApp();
-        });
+        document.querySelectorAll('[data-action="page-add"]').forEach((button) => button.addEventListener("click", () => addKioskPage(false)));
+        document.querySelectorAll('[data-action="page-add-ha"]').forEach((button) => button.addEventListener("click", () => addKioskPage(true)));
         document.querySelector('[data-action="kiosk-save"]')?.addEventListener("click", () => saveKiosk(false));
         document.querySelector('[data-action="kiosk-save-restart"]')?.addEventListener("click", () => saveKiosk(true));
         document.querySelector('[data-action="page-check"]')?.addEventListener("click", checkSelectedPage);
@@ -1253,35 +1352,9 @@
         document.getElementById("pages-import-file")?.addEventListener("change", importPages);
         document.querySelector('[data-action="page-activate"]')?.addEventListener("click", activateSelectedPage);
         document.querySelector('[data-action="preview-open"]')?.addEventListener("click", openPreview);
-        document.querySelector('[data-action="scheduler-save"]')?.addEventListener("click", saveScheduler);
-        document.querySelector('[data-action="rotation-build"]')?.addEventListener("click", buildRotationFromPages);
-        document.querySelector('[data-action="rotation-clear"]')?.addEventListener("click", () => clearKioskList("rotation"));
-        document.querySelector('[data-action="rules-clear"]')?.addEventListener("click", () => clearKioskList("time_rules"));
         document.getElementById("page-filter")?.addEventListener("input", (event) => {
-          const cfg = cloneConfig();
-          cfg.kiosk = cfg.kiosk || {};
-          cfg.kiosk.pages = collectPages();
-          state.config = cfg;
           state.pageFilter = event.target.value || "";
-          renderApp();
-        });
-        document.querySelector('[data-action="rotation-add"]')?.addEventListener("click", () => {
-          const cfg = cloneConfig();
-          cfg.kiosk = cfg.kiosk || {};
-          cfg.kiosk.pages = collectPages();
-          cfg.kiosk.rotation = collectRotation();
-          cfg.kiosk.rotation.push({ page: 0, duration_seconds: 3600 });
-          state.config = cfg;
-          renderApp();
-        });
-        document.querySelector('[data-action="rule-add"]')?.addEventListener("click", () => {
-          const cfg = cloneConfig();
-          cfg.kiosk = cfg.kiosk || {};
-          cfg.kiosk.pages = collectPages();
-          cfg.kiosk.time_rules = collectRules();
-          cfg.kiosk.time_rules.push({ name: "Dashboard", page: 0, start: "13:00", end: "14:00", days: [], disabled: false });
-          state.config = cfg;
-          renderApp();
+          applyPageFilter(state.pageFilter);
         });
         document.querySelectorAll("[data-page-remove]").forEach((button) => {
           button.addEventListener("click", () => {
@@ -1289,6 +1362,7 @@
             cfg.kiosk.pages = collectPages();
             removePage(cfg.kiosk, Number(button.dataset.pageRemove));
             state.config = cfg;
+            markDirty();
             renderApp();
           });
         });
@@ -1302,6 +1376,7 @@
             if (source) cfg.kiosk.pages.splice(index + 1, 0, { ...source, name: `${source.name || t("pages")} ${t("copy")}` });
             syncKioskURLs(cfg.kiosk);
             state.config = cfg;
+            markDirty();
             renderApp();
           });
         });
@@ -1312,23 +1387,40 @@
             cfg.kiosk.pages = collectPages();
             movePage(cfg.kiosk, Number(button.dataset.pageMove), Number(button.dataset.direction));
             state.config = cfg;
+            markDirty();
             renderApp();
           });
         });
-        document.querySelectorAll("[data-rotation-remove]").forEach((button) => button.addEventListener("click", () => {
-          const cfg = cloneConfig();
-          cfg.kiosk.pages = collectPages();
-          cfg.kiosk.rotation = collectRotation().filter((_, i) => i !== Number(button.dataset.rotationRemove));
-          state.config = cfg;
-          renderApp();
-        }));
-        document.querySelectorAll("[data-rule-remove]").forEach((button) => button.addEventListener("click", () => {
-          const cfg = cloneConfig();
-          cfg.kiosk.pages = collectPages();
-          cfg.kiosk.time_rules = collectRules().filter((_, i) => i !== Number(button.dataset.ruleRemove));
-          state.config = cfg;
-          renderApp();
-        }));
+      }
+
+      function addKioskPage(homeAssistant) {
+        const cfg = cloneConfig();
+        cfg.kiosk = cfg.kiosk || {};
+        cfg.kiosk.pages = collectPages();
+        cfg.kiosk.pages.push({
+          name: homeAssistant ? "Home Assistant" : `Kiosk ${cfg.kiosk.pages.length + 1}`,
+          url: "http://homeassistant.local:8123",
+          disabled: false,
+        });
+        syncKioskURLs(cfg.kiosk);
+        state.config = cfg;
+        markDirty();
+        renderApp();
+        requestAnimationFrame(() => document.getElementById(`page-name-${cfg.kiosk.pages.length - 1}`)?.focus());
+      }
+
+      function applyPageFilter(query) {
+        const filter = String(query || "").trim().toLowerCase();
+        let visible = 0;
+        document.querySelectorAll("[data-page-index]").forEach((item) => {
+          const index = Number(item.dataset.pageIndex);
+          const text = `${val(`page-name-${index}`)} ${val(`page-url-${index}`)}`.toLowerCase();
+          const matches = !filter || text.includes(filter);
+          item.hidden = !matches;
+          if (matches) visible++;
+        });
+        const counter = document.getElementById("visible-pages-count");
+        if (counter) counter.textContent = `${t("visiblePages")}: ${visible}`;
       }
 
       async function applySafeMode() {
@@ -1370,11 +1462,13 @@
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
           cfg.kiosk.pages = collectPages();
+          validatePages(cfg.kiosk.pages);
           cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
           await postJSON("/api/config", cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
           state.config = cfg;
+          clearDirty("kiosk-pages");
           renderApp();
         }, t("saved"));
       }
@@ -1430,6 +1524,7 @@
         cfg.kiosk.pages = collectPages().map((page) => ({ ...page, disabled }));
         syncKioskURLs(cfg.kiosk);
         state.config = cfg;
+        markDirty();
         renderApp();
       }
 
@@ -1461,6 +1556,7 @@
           })).filter((page) => page.name || page.url);
           syncKioskURLs(cfg.kiosk);
           state.config = cfg;
+          markDirty();
           renderApp();
         }, t("importPages"));
       }
@@ -1474,6 +1570,7 @@
           .filter((item) => !item.page.disabled && item.page.url)
           .map((item) => ({ page: item.index, duration_seconds: 3600 }));
         state.config = cfg;
+        markDirty("kiosk-schedule");
         renderApp();
       }
 
@@ -1483,6 +1580,7 @@
         cfg.kiosk.pages = collectPages();
         cfg.kiosk[key] = [];
         state.config = cfg;
+        markDirty("kiosk-schedule");
         renderApp();
       }
 
@@ -1546,6 +1644,7 @@
           cfg.kiosk.rotation = collectRotation();
           cfg.kiosk.rotation.push({ page: 0, duration_seconds: 3600 });
           state.config = cfg;
+          markDirty();
           renderApp();
         });
         document.querySelector('[data-action="rule-add"]')?.addEventListener("click", () => {
@@ -1554,18 +1653,21 @@
           cfg.kiosk.time_rules = collectRules();
           cfg.kiosk.time_rules.push({ name: "Dashboard", page: 0, start: "13:00", end: "14:00", days: [], disabled: false });
           state.config = cfg;
+          markDirty();
           renderApp();
         });
         document.querySelectorAll("[data-rotation-remove]").forEach((button) => button.addEventListener("click", () => {
           const cfg = cloneConfig();
           cfg.kiosk.rotation = collectRotation().filter((_, i) => i !== Number(button.dataset.rotationRemove));
           state.config = cfg;
+          markDirty();
           renderApp();
         }));
         document.querySelectorAll("[data-rule-remove]").forEach((button) => button.addEventListener("click", () => {
           const cfg = cloneConfig();
           cfg.kiosk.time_rules = collectRules().filter((_, i) => i !== Number(button.dataset.ruleRemove));
           state.config = cfg;
+          markDirty();
           renderApp();
         }));
       }
@@ -1577,8 +1679,10 @@
           cfg.kiosk.scheduler = { enabled: checked("scheduler-enabled"), mode: val("scheduler-mode"), tick_interval: durationToNs(val("scheduler-tick")) };
           cfg.kiosk.rotation = collectRotation();
           cfg.kiosk.time_rules = collectRules();
+          validateScheduler(cfg.kiosk);
           await postJSON("/api/config", cfg);
           await refreshCore();
+          clearDirty("kiosk-schedule");
           renderApp();
         }, t("saved"));
       }
@@ -1612,8 +1716,10 @@
             force_disable_retain: checked("mqtt-disable-retain"),
             interval: durationToNs(val("mqtt-interval")),
           });
+          validateMQTT(cfg.mqtt);
           await postJSON("/api/config", cfg);
           await refreshCore();
+          clearDirty("mqtt");
           renderApp();
         }, t("saved"));
       }
@@ -1759,6 +1865,7 @@
           cfg.time.timezone = val("time-zone");
           await postJSON("/api/config", cfg);
           await refreshCore();
+          clearDirty("system-device");
           renderApp();
         }, t("saved"));
       }
@@ -1869,6 +1976,7 @@
           cfg.admin.port = Number(val("admin-port") || 33333);
           await postJSON("/api/config", cfg);
           await refreshCore();
+          clearDirty("settings-admin");
           renderApp();
         }, t("saved"));
       }
@@ -1900,6 +2008,7 @@
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
           state.config = cfg;
+          clearDirty("settings-browser");
           renderApp();
         }, t("saved"));
       }
@@ -1926,6 +2035,7 @@
           const cfg = JSON.parse(val("config-raw"));
           await postJSON("/api/config", cfg);
           await refreshCore();
+          clearDirty("settings-config");
           renderApp();
         }, t("saved"));
       }
@@ -1998,13 +2108,15 @@
       }
 
       function renderPages(pages) {
-        if (!pages.length) return `<div class="empty">${esc(t("noData"))}</div>`;
+        if (!pages.length) {
+          return `<div class="empty empty-action"><strong>${esc(t("noPagesConfigured"))}</strong><button class="primary" data-action="page-add-ha">${esc(t("addHomeAssistant"))}</button></div>`;
+        }
         const filter = String(state.pageFilter || "").trim().toLowerCase();
         return `<div class="page-list">${pages
           .map((page, index) => {
             const matches = !filter || String(page.name || "").toLowerCase().includes(filter) || String(page.url || "").toLowerCase().includes(filter);
             return `
-            <article class="page-item ${state.status?.browser?.active === index ? "active" : ""}" ${matches ? "" : "hidden"}>
+            <article class="page-item ${state.status?.browser?.active === index ? "active" : ""}" data-page-index="${index}" ${matches ? "" : "hidden"}>
               <div class="page-item-index">${index + 1}</div>
               <div class="page-item-content">
                 <div class="page-item-fields">
@@ -2068,10 +2180,20 @@
             ${selectHtml(`rule-page-${index}`, t("pages"), String(item.page || 0), pages.map((p, i) => [String(i), p.name || p.url || String(i)]))}
             ${field(`rule-start-${index}`, t("start"), "time", "", item.start || "13:00")}
             ${field(`rule-end-${index}`, t("end"), "time", "", item.end || "14:00")}
-            ${field(`rule-days-${index}`, t("days"), "text", "", (item.days || []).join(","))}
+            ${renderDayPicker(index, item.days || [])}
             <label class="switch"><span>${esc(t("disabled"))}</span><input id="rule-disabled-${index}" type="checkbox" ${item.disabled ? "checked" : ""}></label>
             <button data-rule-remove="${index}" class="danger">${esc(t("remove"))}</button>
           </div>`).join("");
+      }
+
+      function renderDayPicker(index, selected) {
+        const active = new Set((selected || []).map((day) => String(day).slice(0, 3).toLowerCase()));
+        const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+        return `
+          <fieldset class="day-picker">
+            <legend>${esc(t("days"))}</legend>
+            <div>${days.map((day) => `<label title="${esc(t(`day_${day}`))}"><input id="rule-day-${index}-${day}" type="checkbox" ${active.has(day) ? "checked" : ""}><span>${esc(t(`dayShort_${day}`))}</span></label>`).join("")}</div>
+          </fieldset>`;
       }
 
       function renderWorkflowPreview(kiosk) {
@@ -2137,6 +2259,74 @@
         return state.jobs.map((job) => `$ ${job.name} (${job.exit_code})\n${(job.output || []).join("\n")}`).join("\n\n");
       }
 
+      function validationError(id, message) {
+        const input = document.getElementById(id);
+        if (input) {
+          input.setCustomValidity(message);
+          input.reportValidity();
+          input.focus();
+          input.addEventListener("input", () => input.setCustomValidity(""), { once: true });
+        }
+        throw new Error(message);
+      }
+
+      function validatePages(pages) {
+        const enabled = pages.filter((page) => !page.disabled);
+        if (!enabled.length) throw new Error(t("validationEnabledPage"));
+        pages.forEach((page, index) => {
+          if (page.disabled && !page.name && !page.url) return;
+          if (!page.name.trim()) validationError(`page-name-${index}`, t("validationPageName"));
+          if (!page.url.trim()) validationError(`page-url-${index}`, t("validationPageUrl"));
+          try {
+            const parsed = new URL(page.url);
+            if (!["http:", "https:", "file:"].includes(parsed.protocol)) throw new Error("protocol");
+          } catch {
+            validationError(`page-url-${index}`, t("validationPageUrl"));
+          }
+        });
+      }
+
+      function validateScheduler(kiosk) {
+        const pages = normalizePages(kiosk.pages, kiosk.urls);
+        const mode = kiosk.scheduler?.mode || "rotation";
+        const rotation = kiosk.rotation || [];
+        const rules = kiosk.time_rules || [];
+        if (secondsToDuration(kiosk.scheduler?.tick_interval, 0) < 1) validationError("scheduler-tick", t("validationTick"));
+        if (mode !== "time") {
+          rotation.forEach((item, index) => {
+            if (item.page < 0 || item.page >= pages.length) validationError(`rotation-page-${index}`, t("validationPageReference"));
+            if (Number(item.duration_seconds) < 5) validationError(`rotation-duration-${index}`, t("validationDuration"));
+          });
+        }
+        if (mode !== "rotation") {
+          rules.forEach((rule, index) => {
+            if (rule.disabled) return;
+            if (!rule.name.trim()) validationError(`rule-name-${index}`, t("validationRuleName"));
+            if (rule.page < 0 || rule.page >= pages.length) validationError(`rule-page-${index}`, t("validationPageReference"));
+            if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(rule.end)) {
+              validationError(`rule-start-${index}`, t("validationTime"));
+            }
+          });
+        }
+        if (!kiosk.scheduler?.enabled) return;
+        const activeRules = rules.filter((rule) => !rule.disabled);
+        if ((mode === "rotation" && !rotation.length) || (mode === "time" && !activeRules.length) || (mode === "hybrid" && !rotation.length && !activeRules.length)) {
+          throw new Error(t("validationScheduleEmpty"));
+        }
+      }
+
+      function validateMQTT(mqtt) {
+        if (!mqtt.enabled) return;
+        try {
+          const parsed = new URL(mqtt.url);
+          if (!["mqtt:", "mqtts:", "ws:", "wss:"].includes(parsed.protocol)) throw new Error("protocol");
+        } catch {
+          validationError("mqtt-url", t("validationBrokerUrl"));
+        }
+        if (!String(mqtt.node || "").trim()) validationError("mqtt-node", t("validationMQTTNode"));
+        if (!String(mqtt.base_topic || "").trim()) validationError("mqtt-base-topic", t("validationMQTTTopic"));
+      }
+
       function collectPages() {
         const existing = normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls);
         if (!document.getElementById("page-name-0")) return existing.map((page) => ({ ...page }));
@@ -2156,12 +2346,13 @@
       function collectRules() {
         const items = state.config?.kiosk?.time_rules || [];
         if (!document.getElementById("rule-name-0")) return items.map((item) => ({ ...item, days: [...(item.days || [])] }));
+        const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
         return items.map((_, index) => ({
           name: val(`rule-name-${index}`),
           page: Number(val(`rule-page-${index}`) || 0),
           start: val(`rule-start-${index}`),
           end: val(`rule-end-${index}`),
-          days: val(`rule-days-${index}`).split(",").map((s) => s.trim()).filter(Boolean),
+          days: days.filter((day) => checked(`rule-day-${index}-${day}`)),
           disabled: checked(`rule-disabled-${index}`),
         }));
       }
