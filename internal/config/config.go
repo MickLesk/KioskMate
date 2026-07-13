@@ -57,9 +57,33 @@ type KioskConfig struct {
 }
 
 type KioskPage struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Disabled bool   `json:"disabled"`
+	PageID          string              `json:"page_id"`
+	Name            string              `json:"name"`
+	URL             string              `json:"url"`
+	SourceType      string              `json:"source_type,omitempty"`
+	DisplayMode     string              `json:"display_mode,omitempty"`
+	DurationSeconds int                 `json:"duration_seconds,omitempty"`
+	Schedule        KioskPageSchedule   `json:"schedule,omitempty"`
+	Trigger         KioskPageTrigger    `json:"trigger,omitempty"`
+	DisplayOptions  KioskDisplayOptions `json:"display_options,omitempty"`
+	Disabled        bool                `json:"disabled"`
+}
+
+type KioskPageSchedule struct {
+	Start string   `json:"start,omitempty"`
+	End   string   `json:"end,omitempty"`
+	Days  []string `json:"days,omitempty"`
+}
+
+type KioskPageTrigger struct {
+	Topic   string `json:"topic,omitempty"`
+	Payload string `json:"payload,omitempty"`
+}
+
+type KioskDisplayOptions struct {
+	PowerOffAfter bool `json:"power_off_after,omitempty"`
+	Screensaver   bool `json:"screensaver,omitempty"`
+	Brightness    *int `json:"brightness,omitempty"`
 }
 
 type KioskScheduler struct {
@@ -420,6 +444,8 @@ func normalize(cfg *Config) {
 			cfg.Kiosk.Pages = append(cfg.Kiosk.Pages, KioskPage{Name: fmt.Sprintf("Kiosk %d", i+1), URL: url})
 		}
 	}
+	migrateLegacySequence(&cfg.Kiosk)
+	normalizeKioskPages(&cfg.Kiosk)
 	cfg.Kiosk.URLs = cfg.Kiosk.PageURLs()
 	if cfg.Kiosk.BrowserPreset == "" {
 		cfg.Kiosk.BrowserPreset = "chromium"
@@ -501,6 +527,154 @@ func normalize(cfg *Config) {
 	}
 	if cfg.Update.Service == "" || staleProjectValue(cfg.Update.Service) {
 		cfg.Update.Service = "kioskmate.service"
+	}
+}
+
+func migrateLegacySequence(kiosk *KioskConfig) {
+	if len(kiosk.Rotation) == 0 || len(kiosk.Pages) == 0 {
+		return
+	}
+	for _, page := range kiosk.Pages {
+		if page.PageID != "" {
+			return
+		}
+	}
+	var enabled []KioskPage
+	for _, page := range kiosk.Pages {
+		if !page.Disabled && strings.TrimSpace(page.URL) != "" {
+			enabled = append(enabled, page)
+		}
+	}
+	if len(enabled) == 0 {
+		return
+	}
+	canonical := len(kiosk.Rotation) == len(enabled)
+	for index, item := range kiosk.Rotation {
+		if item.Page < 0 || item.Page >= len(enabled) {
+			return
+		}
+		if item.Page != index {
+			canonical = false
+		}
+	}
+	if canonical {
+		return
+	}
+
+	rotationCount := len(kiosk.Rotation)
+	sequence := make([]KioskPage, 0, rotationCount+len(kiosk.Pages))
+	firstIndex := make(map[int]int, len(enabled))
+	referenced := make(map[int]bool, len(enabled))
+	for _, item := range kiosk.Rotation {
+		page := enabled[item.Page]
+		page.DurationSeconds = item.DurationSeconds
+		if _, exists := firstIndex[item.Page]; !exists {
+			firstIndex[item.Page] = len(sequence)
+		}
+		referenced[item.Page] = true
+		sequence = append(sequence, page)
+	}
+	for oldIndex, page := range enabled {
+		if referenced[oldIndex] {
+			continue
+		}
+		firstIndex[oldIndex] = len(sequence)
+		sequence = append(sequence, page)
+	}
+	for _, page := range kiosk.Pages {
+		if page.Disabled || strings.TrimSpace(page.URL) == "" {
+			sequence = append(sequence, page)
+		}
+	}
+	for index := range kiosk.TimeRules {
+		if mapped, ok := firstIndex[kiosk.TimeRules[index].Page]; ok {
+			kiosk.TimeRules[index].Page = mapped
+		}
+	}
+	kiosk.Pages = sequence
+	kiosk.Rotation = make([]RotationItem, 0, rotationCount)
+	for index, page := range sequence[:rotationCount] {
+		duration := page.DurationSeconds
+		if duration <= 0 {
+			duration = 3600
+		}
+		kiosk.Rotation = append(kiosk.Rotation, RotationItem{Page: index, DurationSeconds: duration})
+	}
+}
+
+func normalizeKioskPages(kiosk *KioskConfig) {
+	used := make(map[string]bool, len(kiosk.Pages))
+	for index := range kiosk.Pages {
+		page := &kiosk.Pages[index]
+		if page.PageID == "" {
+			page.PageID = legacyPageID(page.Name, index, used)
+		} else if used[page.PageID] {
+			page.PageID = uniquePageID(page.PageID, used)
+		}
+		used[page.PageID] = true
+		if page.SourceType == "" {
+			if strings.Contains(strings.ToLower(page.URL), "home-assistant") || strings.Contains(strings.ToLower(page.URL), ":8123") {
+				page.SourceType = "home_assistant"
+			} else {
+				page.SourceType = "url"
+			}
+		}
+		if page.DisplayMode == "" {
+			page.DisplayMode = "duration"
+			for _, rule := range kiosk.TimeRules {
+				if rule.Page == index && !rule.Disabled {
+					page.DisplayMode = "schedule"
+					page.Schedule = KioskPageSchedule{Start: rule.Start, End: rule.End, Days: append([]string(nil), rule.Days...)}
+					break
+				}
+			}
+		}
+		if page.DurationSeconds <= 0 {
+			page.DurationSeconds = 3600
+			for _, item := range kiosk.Rotation {
+				if item.Page == index && item.DurationSeconds > 0 {
+					page.DurationSeconds = item.DurationSeconds
+					break
+				}
+			}
+		}
+		if page.DisplayOptions.Brightness == nil {
+			brightness := 100
+			page.DisplayOptions.Brightness = &brightness
+		}
+	}
+}
+
+func legacyPageID(name string, index int, used map[string]bool) string {
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore && builder.Len() > 0 {
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	base := strings.Trim(builder.String(), "_")
+	if base == "" {
+		base = fmt.Sprintf("page_%d", index+1)
+	}
+	return uniquePageID(base, used)
+}
+
+func uniquePageID(base string, used map[string]bool) string {
+	if !used[base] {
+		return base
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s_%d", base, suffix)
+		if !used[candidate] {
+			return candidate
+		}
 	}
 }
 

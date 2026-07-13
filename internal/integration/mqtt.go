@@ -354,6 +354,11 @@ func (s *MQTTService) commands(ctx context.Context) {
 	for _, page := range s.pageEntities() {
 		topics = append(topics, s.root()+"/pages/"+page.ID+"/activate")
 	}
+	for _, page := range s.cfg.Snapshot().Kiosk.Pages {
+		if !page.Disabled && page.DisplayMode == "mqtt" && strings.TrimSpace(page.Trigger.Topic) != "" {
+			topics = append(topics, strings.TrimSpace(page.Trigger.Topic))
+		}
+	}
 	for {
 		err := client.Subscribe(topics, func(topic string, payload []byte) {
 			s.handleCommand(ctx, topic, strings.TrimSpace(string(payload)))
@@ -373,6 +378,14 @@ func (s *MQTTService) commands(ctx context.Context) {
 func (s *MQTTService) handleCommand(ctx context.Context, topic string, command string) {
 	actionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	if page, matched := s.triggeredPage(topic, command); matched {
+		err := s.browser.SetActive(actionCtx, page)
+		if err != nil {
+			s.logger.Warn("mqtt page trigger failed", "topic", topic, "page", page, "error", err)
+		}
+		s.publishCommandResult(topic, command, err)
+		return
+	}
 	var err error
 	switch {
 	case strings.HasSuffix(topic, "/browser/set"):
@@ -521,6 +534,23 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		s.logger.Warn("mqtt command failed", "command", command, "error", err)
 	}
 	s.publishCommandResult(topic, command, err)
+}
+
+func (s *MQTTService) triggeredPage(topic, payload string) (int, bool) {
+	enabledIndex := 0
+	for _, page := range s.cfg.Snapshot().Kiosk.Pages {
+		if page.Disabled || strings.TrimSpace(page.URL) == "" {
+			continue
+		}
+		if page.DisplayMode == "mqtt" && strings.TrimSpace(page.Trigger.Topic) == topic {
+			expected := strings.TrimSpace(page.Trigger.Payload)
+			if expected == "" || expected == payload {
+				return enabledIndex, true
+			}
+		}
+		enabledIndex++
+	}
+	return -1, false
 }
 
 func (s *MQTTService) publishAll() error {
@@ -1682,24 +1712,38 @@ func (s *MQTTService) setPageByEntityTopic(ctx context.Context, topic string) er
 }
 
 func (s *MQTTService) pageEntities() []pageEntity {
-	urls := s.cfg.Snapshot().Kiosk.PageURLs()
-	entities := make([]pageEntity, 0, len(urls))
+	cfg := s.cfg.Snapshot().Kiosk
+	entities := make([]pageEntity, 0, len(cfg.Pages))
 	seen := map[string]int{}
-	for index, url := range urls {
-		name := s.cfg.Snapshot().Kiosk.PageName(index)
+	enabledIndex := 0
+	for _, configured := range cfg.Pages {
+		url := strings.TrimSpace(configured.URL)
+		if configured.Disabled || url == "" {
+			continue
+		}
+		name := configured.Name
 		if name == "" {
 			name = url
 		}
-		base := slug(name)
+		base := slug(configured.PageID)
 		if base == "" {
-			base = fmt.Sprintf("page_%d", index+1)
+			base = slug(name)
+		}
+		if base == "" {
+			base = fmt.Sprintf("page_%d", enabledIndex+1)
 		}
 		id := base
 		if seen[base] > 0 {
 			id = fmt.Sprintf("%s_%d", base, seen[base]+1)
 		}
 		seen[base]++
-		entities = append(entities, pageEntity{Index: index, Name: name, URL: url, ID: id})
+		entities = append(entities, pageEntity{Index: enabledIndex, Name: name, URL: url, ID: id})
+		enabledIndex++
+	}
+	if len(entities) == 0 {
+		for index, url := range cfg.PageURLs() {
+			entities = append(entities, pageEntity{Index: index, Name: cfg.PageName(index), URL: url, ID: fmt.Sprintf("page_%d", index+1)})
+		}
 	}
 	return entities
 }

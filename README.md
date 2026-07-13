@@ -9,7 +9,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Native `kioskmate` daemon written in Go.
 - External Chromium rendering instead of bundling Electron.
 - Embedded Admin UI with setup token, password login and session protection.
-- Kiosk page management with manual switching, rotation and time rules.
+- Visual kiosk sequence management with Storybook cards, a flow graph, a guided page wizard, rotation, fixed schedules and MQTT triggers.
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.4.0` adds update preflight diagnostics, persistent install history, private configuration backups, post-restart verification, controlled rollback and complete Home Assistant update state while preserving the existing config format, browser profiles and Home Assistant sessions.
+KioskMate `0.5.0` rebuilds page and workflow management as one visual sequence workspace with Storybook and flow views, a guided page wizard, stable page identities and per-page duration, schedule, MQTT trigger and display behavior.
 
 The Admin UI is organized by task:
 
@@ -77,8 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.4.0/kioskmate_0.4.0_arm64.deb
-sudo apt install ./kioskmate_0.4.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.5.0/kioskmate_0.5.0_arm64.deb
+sudo apt install ./kioskmate_0.5.0_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
@@ -100,7 +100,15 @@ The updater can run a preflight before installation, validates the downloaded pa
   },
   "kiosk": {
     "pages": [
-      {"name": "Home Assistant", "url": "http://homeassistant.local:8123"}
+      {
+        "page_id": "home_assistant",
+        "name": "Home Assistant",
+        "url": "http://homeassistant.local:8123",
+        "source_type": "home_assistant",
+        "display_mode": "duration",
+        "duration_seconds": 60,
+        "display_options": {"brightness": 100}
+      }
     ],
     "browser_command": "chromium-browser",
     "extra_args": [],
@@ -197,14 +205,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.4.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.4.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.5.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.5.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.4.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.5.0 --arch arm64 --arch amd64
 ```
 
 The package installs:

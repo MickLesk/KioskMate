@@ -73,6 +73,9 @@
         diagnostics: null,
         repair: null,
         pageFilter: "",
+        kioskEditorMode: localStorage.getItem("kioskmate.kioskEditorMode") === "flow" ? "flow" : "storybook",
+        kioskSelectedPageIndex: null,
+        pageWizard: null,
         actionLog: [],
         logs: [],
         logSource: localStorage.getItem("kioskmate.logSource") || "combined",
@@ -822,91 +825,130 @@
       }
 
       function renderKiosk() {
-        const cfg = state.config || {};
-        const kiosk = cfg.kiosk || {};
+        const kiosk = state.config?.kiosk || {};
         const browser = state.status?.browser || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
         const enabledPages = pages.filter((page) => !page.disabled && page.url).length;
+        const selected = selectedKioskPageIndex(pages);
+        const current = pages[selected] || {};
         return `
-          <div class="page-stack">
-            <section class="section-toolbar">
+          <div class="page-stack kiosk-workspace">
+            <section class="kiosk-commandbar">
               <div class="section-summary">
-                <strong>${esc(t("kioskPages"))}</strong>
-                <span>${esc(t("enabledPages"))}: ${enabledPages} / ${pages.length}</span>
+                <strong>${esc(t("kioskSequence"))}</strong>
+                <span>${esc(t("kioskSequenceHint"))}</span>
               </div>
               <div class="actions">
-                ${button("addPage", "page-add", "primary")}
-                ${button("addHomeAssistant", "page-add-ha")}
+                <div class="segmented" role="group" aria-label="${esc(t("editorView"))}">
+                  <button data-kiosk-mode="storybook" class="${state.kioskEditorMode === "storybook" ? "active" : ""}">${esc(t("storybookView"))}</button>
+                  <button data-kiosk-mode="flow" class="${state.kioskEditorMode === "flow" ? "active" : ""}">${esc(t("flowView"))}</button>
+                </div>
+                <button class="primary" data-action="page-wizard-new">+ ${esc(t("newPage"))}</button>
               </div>
             </section>
-            <div class="card">
-              <div class="head">
-                <div><h3>${esc(t("currentSelection"))}</h3><span class="section-kicker">${esc(browser.page_name || t("noData"))}</span></div>
-                <div class="actions">
-                  ${button("activatePage", "page-activate", "primary")}
-                  ${button("checkPage", "page-check")}
-                </div>
+            <section class="kiosk-overview" aria-label="${esc(t("workflowStatus"))}">
+              <div><span>${esc(t("pages"))}</span><strong>${enabledPages} / ${pages.length}</strong></div>
+              <div><span>${esc(t("scheduler"))}</span><strong class="${kiosk.scheduler?.enabled ? "ok-text" : ""}">${esc(kiosk.scheduler?.enabled ? t("active") : t("disabled"))}</strong></div>
+              <div><span>${esc(t("currentPage"))}</span><strong>${esc(browser.page_name || current.name || "-")}</strong></div>
+              <div><span>${esc(t("nextSwitch"))}</span><strong>${esc(formatDate(browser.scheduler?.next_switch))}</strong></div>
+            </section>
+            <section class="sequence-canvas ${state.kioskEditorMode === "flow" ? "flow-mode" : "storybook-mode"}">
+              <div class="sequence-canvas-head">
+                <div><h3>${esc(state.kioskEditorMode === "flow" ? t("visualWorkflow") : t("linearSequence"))}</h3><span>${esc(state.kioskEditorMode === "flow" ? t("flowViewHint") : t("storybookViewHint"))}</span></div>
+                ${switchHtml("scheduler-enabled", t("runAutomatically"), !!kiosk.scheduler?.enabled)}
               </div>
-              <div class="body">
-                <div id="page-check-output" class="action-feedback">${esc(browser.url || "-")}</div>
+              ${state.kioskEditorMode === "flow" ? renderKioskFlow(pages, selected) : renderKioskStorybook(pages, selected)}
+            </section>
+            <section class="selected-page-bar">
+              <div>
+                <span>${esc(t("selectedPage"))}</span>
+                <strong>${esc(current.name || t("noPagesConfigured"))}</strong>
+                <small>${esc(current.url || t("addFirstPageHint"))}</small>
               </div>
-            </div>
-            <section class="data-section">
-              <div class="data-section-head">
-                <div><h3>${esc(t("pages"))}</h3><span class="section-kicker">${esc(t("pageOrderHint"))}</span></div>
-              </div>
-              <div class="data-section-body">
-                <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
-                <div class="toolbar">
-                  <input id="page-filter" data-no-dirty type="search" placeholder="${esc(t("filterPages"))}" value="${esc(state.pageFilter || "")}" />
-                  <span id="visible-pages-count" class="chip">${esc(t("visiblePages"))}: ${pages.length}</span>
-                </div>
-                <div id="pages-list">${renderPages(pages)}</div>
-                <div id="page-check-all-output" class="check-panel"></div>
-                <details class="disclosure compact-disclosure">
-                  <summary>${esc(t("advancedActions"))}</summary>
-                  <div class="disclosure-body actions">
-                    ${button("renderCheck", "render-check")}
-                    ${button("openPreview", "preview-open")}
-                    ${button("checkAllPages", "page-check-all")}
-                    ${button("importPages", "pages-import")}
-                    ${button("exportPages", "pages-export")}
-                    ${button("enableAll", "page-enable-all")}
-                    ${button("disableAll", "page-disable-all")}
-                  </div>
-                </details>
+              <div class="actions">
+                <button data-action="page-activate" ${pages.length ? "" : "disabled"} title="${esc(t("activatePageHint"))}">${esc(t("activatePage"))}</button>
+                <button data-action="page-check" ${pages.length ? "" : "disabled"} title="${esc(t("checkPageHint"))}">${esc(t("checkPage"))}</button>
+                <button data-action="page-wizard-edit" ${pages.length ? "" : "disabled"}>${esc(t("editPage"))}</button>
               </div>
             </section>
-            <section class="data-section workflow-editor">
-              <div class="data-section-head">
-                <div><h3>${esc(t("workflow"))}</h3><span class="section-kicker">${esc(t("schedulerSaveHint"))}</span></div>
-                ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
-              </div>
-              <div class="data-section-body grid">
-                <div class="form-grid workflow-settings">
-                  ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
+            <div id="page-check-output" class="action-feedback">${esc(current.url || browser.url || "-")}</div>
+            <details class="card disclosure advanced-settings">
+              <summary>${esc(t("sequenceAdvanced"))}</summary>
+              <div class="disclosure-body advanced-sequence-grid">
+                <div class="form-grid">
                   ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
+                  <div class="readonly-field"><span>${esc(t("schedulerMode"))}</span><strong>${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</strong></div>
                 </div>
-                <div class="schedule-columns">
-                  <div>
-                    <div class="subsection-head"><strong>${esc(t("rotation"))}</strong><div class="actions">${button("buildRotation", "rotation-build")}${button("addRotation", "rotation-add", "primary")}</div></div>
-                    <div id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
-                  </div>
-                  <div>
-                    <div class="subsection-head"><strong>${esc(t("timeRules"))}</strong><div class="actions">${button("addRule", "rule-add", "primary")}</div></div>
-                    <div id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
-                  </div>
+                <div class="actions">
+                  ${button("renderCheck", "render-check")}
+                  ${button("checkAllPages", "page-check-all")}
+                  ${button("importPages", "pages-import")}
+                  ${button("exportPages", "pages-export")}
                 </div>
+                <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
+                <div id="page-check-all-output" class="check-panel span-2"></div>
               </div>
-            </section>
+            </details>
             <div class="save-bar">
               <span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span>
-              <div class="actions">
-                ${button("save", "kiosk-save")}
-                ${button("saveRestart", "kiosk-save-restart", "primary")}
-              </div>
+              <div class="actions">${button("save", "kiosk-save")}${button("saveStartKiosk", "kiosk-save-restart", "primary")}</div>
             </div>
           </div>`;
+      }
+
+      function selectedKioskPageIndex(pages) {
+        const fallback = Number(state.status?.browser?.active || 0);
+        const selected = state.kioskSelectedPageIndex === null ? fallback : Number(state.kioskSelectedPageIndex);
+        return Math.max(0, Math.min(pages.length - 1, Number.isFinite(selected) ? selected : 0));
+      }
+
+      function pageTimingLabel(page) {
+        if (page.display_mode === "schedule") return `${page.schedule?.start || "--:--"} - ${page.schedule?.end || "--:--"}`;
+        if (page.display_mode === "mqtt") return t("mqttTrigger");
+        return formatDuration(Number(page.duration_seconds || 3600));
+      }
+
+      function renderKioskStorybook(pages, selected) {
+        if (!pages.length) return `<div class="sequence-empty"><strong>${esc(t("noPagesConfigured"))}</strong><span>${esc(t("addFirstPageHint"))}</span><button class="primary" data-action="page-wizard-new">+ ${esc(t("newPage"))}</button></div>`;
+        return `<div class="storybook-track" data-sequence-track>
+          ${pages.map((page, index) => `${index ? `<button class="insert-page" data-page-insert="${index}" title="${esc(t("insertPageHere"))}">+</button>` : ""}${renderSequenceCard(page, index, selected)}`).join("")}
+          <button class="add-page-card" data-page-insert="${pages.length}"><span>+</span><strong>${esc(t("addPage"))}</strong><small>${esc(t("addPageAtEnd"))}</small></button>
+        </div>`;
+      }
+
+      function renderSequenceCard(page, index, selected) {
+        let host = "";
+        try { host = new URL(page.url).host; } catch { host = page.url || t("notConfigured"); }
+        return `<article class="sequence-card ${selected === index ? "selected" : ""} ${page.disabled ? "disabled" : ""}" draggable="true" data-sequence-index="${index}" data-page-select="${index}">
+          <div class="sequence-card-top"><span class="step-number">${index + 1}</span><span class="duration-badge">${esc(pageTimingLabel(page))}</span><button class="icon-button drag-handle" data-page-drag-handle title="${esc(t("dragToReorder"))}" aria-label="${esc(t("dragToReorder"))}">&#8942;&#8942;</button></div>
+          <button class="page-preview-tile" data-page-edit="${index}" title="${esc(t("editPage"))}">
+            <span class="source-mark">${page.source_type === "home_assistant" ? "HA" : "WEB"}</span>
+            <strong>${esc(host)}</strong>
+            <small>${esc(page.display_mode === "schedule" ? t("fixedSchedule") : page.display_mode === "mqtt" ? t("triggerBased") : t("customDuration"))}</small>
+          </button>
+          <div class="sequence-card-copy"><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><span>${esc(page.url || t("notConfigured"))}</span></div>
+          <div class="sequence-card-actions">
+            <button data-page-move="${index}" data-direction="-1" ${index === 0 ? "disabled" : ""} title="${esc(t("moveUp"))}" aria-label="${esc(t("moveUp"))}">&larr;</button>
+            <button data-page-move="${index}" data-direction="1" ${index === normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls).length - 1 ? "disabled" : ""} title="${esc(t("moveDown"))}" aria-label="${esc(t("moveDown"))}">&rarr;</button>
+            <button data-page-edit="${index}">${esc(t("edit"))}</button>
+            <button class="danger-ghost" data-page-remove="${index}" title="${esc(t("remove"))}">&times;</button>
+          </div>
+        </article>`;
+      }
+
+      function renderKioskFlow(pages, selected) {
+        return `<div class="flow-canvas">
+          <div class="flow-track">
+            <div class="flow-terminal">${esc(t("flowStart"))}</div>
+            ${pages.map((page, index) => `<span class="flow-arrow">&rarr;</span><article class="flow-node ${selected === index ? "selected" : ""} ${page.disabled ? "disabled" : ""}" data-page-select="${index}" data-page-edit="${index}"><span>${index + 1}</span><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><small>${esc(pageTimingLabel(page))}</small></article>`).join("")}
+            <span class="flow-arrow">&rarr;</span><div class="flow-terminal">${esc(kioskLoops() ? t("loop") : t("flowEnd"))}</div>
+            <button class="flow-add" data-page-insert="${pages.length}">+ ${esc(t("newPage"))}</button>
+          </div>
+        </div>`;
+      }
+
+      function kioskLoops() {
+        return (state.config?.kiosk?.rotation || []).length > 1;
       }
 
       function renderScheduler() {
@@ -1472,6 +1514,24 @@
 
       function bindKiosk() {
         bindBrowserButtons();
+        document.querySelectorAll("[data-kiosk-mode]").forEach((button) => button.addEventListener("click", () => {
+          state.kioskEditorMode = button.dataset.kioskMode === "flow" ? "flow" : "storybook";
+          localStorage.setItem("kioskmate.kioskEditorMode", state.kioskEditorMode);
+          renderApp();
+        }));
+        document.querySelectorAll("[data-page-select]").forEach((item) => item.addEventListener("click", (event) => {
+          if (event.target.closest("[data-page-edit],[data-page-remove],[data-page-move]")) return;
+          state.kioskSelectedPageIndex = Number(item.dataset.pageSelect);
+          renderApp();
+        }));
+        document.querySelectorAll("[data-page-edit]").forEach((button) => button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openPageWizard(Number(button.dataset.pageEdit));
+        }));
+        document.querySelector('[data-action="page-wizard-edit"]')?.addEventListener("click", () => openPageWizard(selectedKioskPageIndex(collectPages())));
+        document.querySelector('[data-action="page-wizard-new"]')?.addEventListener("click", () => openPageWizard(null, collectPages().length));
+        document.querySelectorAll("[data-page-insert]").forEach((button) => button.addEventListener("click", () => openPageWizard(null, Number(button.dataset.pageInsert))));
+        bindSequenceDragAndDrop();
         document.querySelectorAll('[data-action="page-add"]').forEach((button) => button.addEventListener("click", () => addKioskPage(false)));
         document.querySelectorAll('[data-action="page-add-ha"]').forEach((button) => button.addEventListener("click", () => addKioskPage(true)));
         document.querySelector('[data-action="kiosk-save"]')?.addEventListener("click", () => saveKiosk(false));
@@ -1492,10 +1552,13 @@
         });
         document.querySelectorAll("[data-page-remove]").forEach((button) => {
           button.addEventListener("click", () => {
+            if (!confirm(t("confirmRemovePage"))) return;
             const cfg = cloneConfig();
             cfg.kiosk.pages = collectPages();
             removePage(cfg.kiosk, Number(button.dataset.pageRemove));
+            synchronizeKioskWorkflow(cfg.kiosk);
             state.config = cfg;
+            state.kioskSelectedPageIndex = Math.max(0, Math.min(Number(button.dataset.pageRemove), cfg.kiosk.pages.length - 1));
             markDirty();
             renderApp();
           });
@@ -1520,11 +1583,187 @@
             cfg.kiosk = cfg.kiosk || {};
             cfg.kiosk.pages = collectPages();
             movePage(cfg.kiosk, Number(button.dataset.pageMove), Number(button.dataset.direction));
+            synchronizeKioskWorkflow(cfg.kiosk);
             state.config = cfg;
+            state.kioskSelectedPageIndex = Math.max(0, Number(button.dataset.pageMove) + Number(button.dataset.direction));
             markDirty();
             renderApp();
           });
         });
+      }
+
+      function bindSequenceDragAndDrop() {
+        let dragged = null;
+        document.querySelectorAll("[data-sequence-index]").forEach((card) => {
+          card.addEventListener("dragstart", (event) => {
+            dragged = Number(card.dataset.sequenceIndex);
+            card.classList.add("dragging");
+            event.dataTransfer.effectAllowed = "move";
+          });
+          card.addEventListener("dragend", () => card.classList.remove("dragging"));
+          card.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            card.classList.add("drag-over");
+          });
+          card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+          card.addEventListener("drop", (event) => {
+            event.preventDefault();
+            card.classList.remove("drag-over");
+            const target = Number(card.dataset.sequenceIndex);
+            if (dragged === null || dragged === target) return;
+            const cfg = cloneConfig();
+            cfg.kiosk.pages = collectPages();
+            const [page] = cfg.kiosk.pages.splice(dragged, 1);
+            cfg.kiosk.pages.splice(target, 0, page);
+            synchronizeKioskWorkflow(cfg.kiosk);
+            state.config = cfg;
+            state.kioskSelectedPageIndex = target;
+            markDirty();
+            renderApp();
+          });
+        });
+      }
+
+      function openPageWizard(index = null, insertAt = null, sourceType = "url") {
+        const pages = collectPages();
+        const editing = index !== null && pages[index];
+        const page = editing ? { ...pages[index], schedule: { ...(pages[index].schedule || {}) }, trigger: { ...(pages[index].trigger || {}) }, display_options: { ...(pages[index].display_options || {}) } } : {
+          page_id: createPageID(),
+          name: sourceType === "home_assistant" ? "Home Assistant" : `${t("pages")} ${pages.length + 1}`,
+          url: sourceType === "home_assistant" ? "http://homeassistant.local:8123" : "https://",
+          source_type: sourceType,
+          display_mode: "duration",
+          duration_seconds: 60,
+          schedule: { start: "08:00", end: "18:00", days: [] },
+          trigger: { topic: "", payload: "ON" },
+          display_options: { power_off_after: false, screensaver: false, brightness: 100 },
+          disabled: false,
+        };
+        state.pageWizard = { step: 1, index: editing ? Number(index) : null, insertAt: insertAt === null ? pages.length : Number(insertAt), page };
+        renderPageWizard();
+      }
+
+      function createPageID() {
+        if (globalThis.crypto?.randomUUID) return `page_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+        return `page_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      }
+
+      function renderPageWizard() {
+        const wizard = state.pageWizard;
+        if (!wizard) return;
+        if (modalRoot.innerHTML) closeModal();
+        const page = wizard.page;
+        openModal(`
+          <div class="modal page-wizard" role="dialog" aria-modal="true" aria-labelledby="page-wizard-title">
+            <div class="modal-head"><div><h3 id="page-wizard-title">${esc(wizard.index === null ? t("createKioskPage") : t("editKioskPage"))}</h3><div class="hint">${esc(t("wizardHint"))}</div></div><button data-modal-close aria-label="${esc(t("close"))}">&times;</button></div>
+            <div class="wizard-progress" aria-label="${esc(t("wizardProgress"))}">${[1, 2, 3].map((step) => `<div class="${wizard.step === step ? "active" : wizard.step > step ? "done" : ""}"><span>${wizard.step > step ? "&#10003;" : step}</span><strong>${esc(t(`wizardStep${step}`))}</strong></div>`).join("")}</div>
+            <div class="modal-body wizard-body">${renderPageWizardStep(wizard)}</div>
+            <div class="modal-foot"><button data-modal-close>${esc(t("cancel"))}</button><div class="actions">${wizard.step > 1 ? `<button data-wizard-back>${esc(t("back"))}</button>` : ""}${wizard.step < 3 ? `<button class="primary" data-wizard-next>${esc(t("next"))}</button>` : `<button data-wizard-finish>${esc(t("finish"))}</button><button class="primary" data-wizard-start>${esc(t("finishAndStart"))}</button>`}</div></div>
+          </div>`);
+        document.querySelector("[data-wizard-back]")?.addEventListener("click", () => { readPageWizardStep(); state.pageWizard.step--; renderPageWizard(); });
+        document.querySelector("[data-wizard-next]")?.addEventListener("click", () => {
+          try { readPageWizardStep(true); state.pageWizard.step++; renderPageWizard(); } catch (error) { toast(t("validationFailed"), error.message, "error"); }
+        });
+        document.querySelector("[data-wizard-finish]")?.addEventListener("click", () => commitPageWizard(false));
+        document.querySelector("[data-wizard-start]")?.addEventListener("click", () => commitPageWizard(true));
+        document.getElementById("wizard-display-mode")?.addEventListener("change", () => { readPageWizardStep(false); renderPageWizard(); });
+        document.getElementById("wizard-source-type")?.addEventListener("change", (event) => {
+          readPageWizardStep(false);
+          state.pageWizard.page.source_type = event.target.value;
+          if (event.target.value === "home_assistant" && (!state.pageWizard.page.url || state.pageWizard.page.url === "https://")) state.pageWizard.page.url = "http://homeassistant.local:8123";
+          renderPageWizard();
+        });
+        document.getElementById("wizard-brightness")?.addEventListener("input", (event) => {
+          const output = document.getElementById("wizard-brightness-value");
+          if (output) output.textContent = `${event.target.value}%`;
+        });
+      }
+
+      function renderPageWizardStep(wizard) {
+        const page = wizard.page;
+        if (wizard.step === 1) return `<div class="wizard-step-grid">
+          ${field("wizard-page-name", t("pageName"), "text", "", page.name || "")}
+          ${selectHtml("wizard-source-type", t("pageSource"), page.source_type || "url", [["url", t("webAddress")], ["home_assistant", t("homeAssistantDashboard")]])}
+          <div class="span-2">${field("wizard-page-url", t("pageUrl"), "url", "", page.url || "")}</div>
+          <div class="span-2">${switchHtml("wizard-page-disabled", t("disablePage"), !!page.disabled)}</div>
+          <div class="span-2 wizard-callout"><strong>${esc(t("validation"))}</strong><span>${esc(t("urlValidationHint"))}</span></div>
+        </div>`;
+        if (wizard.step === 2) {
+          const mode = page.display_mode || "duration";
+          return `<div class="wizard-step-grid">
+            <div class="span-2">${selectHtml("wizard-display-mode", t("displayMode"), mode, [["duration", t("customDuration")], ["schedule", t("fixedSchedule")], ["mqtt", t("triggerBased")]])}</div>
+            ${mode === "duration" ? field("wizard-duration", t("durationSeconds"), "number", "", page.duration_seconds || 60) : ""}
+            ${mode === "schedule" ? `${field("wizard-schedule-start", t("start"), "time", "", page.schedule?.start || "08:00")}${field("wizard-schedule-end", t("end"), "time", "", page.schedule?.end || "18:00")}<div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
+            ${mode === "mqtt" ? `${field("wizard-trigger-topic", t("mqttTopic"), "text", "", page.trigger?.topic || "")}${field("wizard-trigger-payload", t("mqttPayload"), "text", "", page.trigger?.payload || "ON")}` : ""}
+            <details class="span-2 wizard-options" open><summary>${esc(t("advancedDisplayActions"))}</summary><div class="wizard-option-grid">
+              ${switchHtml("wizard-power-off", t("powerOffAfterExpiry"), !!page.display_options?.power_off_after)}
+              ${switchHtml("wizard-screensaver", t("activateScreensaver"), !!page.display_options?.screensaver)}
+              <label class="range-field"><span>${esc(t("brightness"))}</span><input id="wizard-brightness" type="range" min="0" max="100" value="${esc(page.display_options?.brightness ?? 100)}"><strong id="wizard-brightness-value">${esc(page.display_options?.brightness ?? 100)}%</strong></label>
+            </div></details>
+          </div>`;
+        }
+        const pages = collectPages();
+        const nextIndex = wizard.index === null ? Math.min(wizard.insertAt, pages.length - 1) : (wizard.index + 1) % Math.max(1, pages.length);
+        const next = pages[nextIndex];
+        return `<div class="wizard-review">
+          <div class="review-visual"><span>${esc(page.source_type === "home_assistant" ? "HA" : "WEB")}</span><strong>${esc(page.name)}</strong><small>${esc(page.url)}</small></div>
+          <dl><div><dt>${esc(t("displayMode"))}</dt><dd>${esc(page.display_mode === "schedule" ? t("fixedSchedule") : page.display_mode === "mqtt" ? t("triggerBased") : t("customDuration"))}</dd></div><div><dt>${esc(t("timing"))}</dt><dd>${esc(pageTimingLabel(page))}</dd></div><div><dt>${esc(t("nextPage"))}</dt><dd>${esc(next?.name || (pages.length ? pages[0]?.name : t("loop")))}</dd></div><div><dt>${esc(t("brightness"))}</dt><dd>${esc(page.display_options?.brightness ?? 100)}%</dd></div></dl>
+          <div class="wizard-summary">${esc(t("workflowReview").replace("{name}", page.name).replace("{timing}", pageTimingLabel(page)).replace("{next}", next?.name || t("loop")))}</div>
+        </div>`;
+      }
+
+      function renderWizardDayPicker(selected) {
+        const active = new Set((selected || []).map((day) => String(day).slice(0, 3).toLowerCase()));
+        return `<fieldset class="day-picker"><legend>${esc(t("days"))}</legend><div>${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((day) => `<label><input id="wizard-day-${day}" type="checkbox" ${active.has(day) ? "checked" : ""}><span>${esc(t(`dayShort_${day}`))}</span></label>`).join("")}</div></fieldset>`;
+      }
+
+      function readPageWizardStep(validate = false) {
+        const wizard = state.pageWizard;
+        if (!wizard) return;
+        const page = wizard.page;
+        if (wizard.step === 1) {
+          page.name = val("wizard-page-name") || page.name;
+          page.source_type = val("wizard-source-type") || page.source_type;
+          page.url = val("wizard-page-url") || page.url;
+          page.disabled = checked("wizard-page-disabled");
+          if (validate && !String(page.name || "").trim()) validationError("wizard-page-name", t("validationPageName"));
+          if (validate) {
+            try { const parsed = new URL(page.url); if (!["http:", "https:", "file:"].includes(parsed.protocol)) throw new Error("protocol"); }
+            catch { validationError("wizard-page-url", t("validationPageUrl")); }
+          }
+        }
+        if (wizard.step === 2) {
+          page.display_mode = val("wizard-display-mode") || page.display_mode || "duration";
+          page.duration_seconds = Number(val("wizard-duration") || page.duration_seconds || 60);
+          page.schedule = { start: val("wizard-schedule-start") || page.schedule?.start || "08:00", end: val("wizard-schedule-end") || page.schedule?.end || "18:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].filter((day) => checked(`wizard-day-${day}`)) };
+          page.trigger = { topic: val("wizard-trigger-topic") || page.trigger?.topic || "", payload: val("wizard-trigger-payload") || page.trigger?.payload || "ON" };
+          page.display_options = { power_off_after: checked("wizard-power-off"), screensaver: checked("wizard-screensaver"), brightness: Number(val("wizard-brightness") || page.display_options?.brightness || 100) };
+          if (validate && page.display_mode === "duration" && page.duration_seconds < 5) validationError("wizard-duration", t("validationDuration"));
+          if (validate && page.display_mode === "schedule" && (!page.schedule.start || !page.schedule.end)) throw new Error(t("validationTime"));
+          if (validate && page.display_mode === "mqtt" && !page.trigger.topic.trim()) validationError("wizard-trigger-topic", t("validationMQTTTopic"));
+        }
+      }
+
+      async function commitPageWizard(startKiosk) {
+        try {
+          const wizard = state.pageWizard;
+          const cfg = cloneConfig();
+          cfg.kiosk = cfg.kiosk || {};
+          cfg.kiosk.pages = collectPages();
+          const page = { ...wizard.page, schedule: { ...(wizard.page.schedule || {}) }, trigger: { ...(wizard.page.trigger || {}) }, display_options: { ...(wizard.page.display_options || {}) } };
+          if (wizard.index === null) cfg.kiosk.pages.splice(Math.max(0, Math.min(wizard.insertAt, cfg.kiosk.pages.length)), 0, page);
+          else cfg.kiosk.pages[wizard.index] = page;
+          synchronizeKioskWorkflow(cfg.kiosk);
+          state.config = cfg;
+          state.kioskSelectedPageIndex = wizard.index === null ? Math.max(0, Math.min(wizard.insertAt, cfg.kiosk.pages.length - 1)) : wizard.index;
+          state.pageWizard = null;
+          closeModal();
+          markDirty();
+          renderApp();
+          if (startKiosk) await saveKiosk(true, true);
+        } catch (error) {
+          toast(t("validationFailed"), error.message, "error");
+        }
       }
 
       function addKioskPage(homeAssistant) {
@@ -1590,22 +1829,21 @@
         }, t("testBrowser"));
       }
 
-      async function saveKiosk(restart) {
-        if (restart && !confirm(t("confirmRestart"))) return;
+      async function saveKiosk(restart, skipConfirm = false) {
+        if (restart && !skipConfirm && !confirm(t("confirmRestart"))) return;
         await runAction(restart ? "kiosk-save-restart" : "kiosk-save", async () => {
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
           cfg.kiosk.pages = collectPages();
           validatePages(cfg.kiosk.pages);
-          cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
-          cfg.kiosk.scheduler = { enabled: checked("scheduler-enabled"), mode: val("scheduler-mode") || "rotation", tick_interval: durationToNs(val("scheduler-tick") || 15) };
-          cfg.kiosk.rotation = collectRotation();
-          cfg.kiosk.time_rules = collectRules();
+          cfg.kiosk.scheduler = cfg.kiosk.scheduler || {};
+          cfg.kiosk.scheduler.enabled = checked("scheduler-enabled");
+          cfg.kiosk.scheduler.tick_interval = durationToNs(val("scheduler-tick") || secondsToDuration(cfg.kiosk.scheduler.tick_interval, 15));
+          synchronizeKioskWorkflow(cfg.kiosk);
           validateScheduler(cfg.kiosk);
           await postJSON("/api/config", cfg);
-          if (restart) await postJSON("/api/browser/restart");
+          if (restart) await postJSON(state.status?.browser?.running ? "/api/browser/restart" : "/api/browser/start");
           await refreshCore();
-          state.config = cfg;
           clearDirty("kiosk-pages");
           renderApp();
         }, t("saved"));
@@ -1687,12 +1925,9 @@
           if (!Array.isArray(pages)) throw new Error("Invalid pages file");
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
-          cfg.kiosk.pages = pages.map((page, index) => ({
-            name: String(page.name || `Kiosk ${index + 1}`),
-            url: String(page.url || ""),
-            disabled: !!page.disabled,
-          })).filter((page) => page.name || page.url);
-          syncKioskURLs(cfg.kiosk);
+          cfg.kiosk.pages = normalizePages(pages.map((page, index) => ({ ...page, name: String(page.name || `Kiosk ${index + 1}`), url: String(page.url || "") })), [])
+            .filter((page) => page.name || page.url);
+          synchronizeKioskWorkflow(cfg.kiosk);
           state.config = cfg;
           markDirty();
           renderApp();
@@ -1743,6 +1978,24 @@
 
       function syncKioskURLs(kiosk) {
         kiosk.urls = (kiosk.pages || []).filter((p) => !p.disabled && p.url).map((p) => p.url);
+      }
+
+      function synchronizeKioskWorkflow(kiosk) {
+        kiosk.pages = normalizePages(kiosk.pages, kiosk.urls);
+        syncKioskURLs(kiosk);
+        const rotation = [];
+        const rules = [];
+        let enabledIndex = 0;
+        kiosk.pages.forEach((page) => {
+          if (page.disabled || !page.url) return;
+          if ((page.display_mode || "duration") === "duration") rotation.push({ page: enabledIndex, duration_seconds: Math.max(5, Number(page.duration_seconds || 60)) });
+          if (page.display_mode === "schedule") rules.push({ name: page.name || `Page ${enabledIndex + 1}`, page: enabledIndex, start: page.schedule?.start || "08:00", end: page.schedule?.end || "18:00", days: [...(page.schedule?.days || [])], disabled: false });
+          enabledIndex++;
+        });
+        kiosk.rotation = rotation;
+        kiosk.time_rules = rules;
+        kiosk.scheduler = kiosk.scheduler || {};
+        kiosk.scheduler.mode = rules.length && rotation.length ? "hybrid" : rules.length ? "time" : "rotation";
       }
 
       function movePage(kiosk, index, direction) {
@@ -2579,7 +2832,8 @@
         }
         if (!kiosk.scheduler?.enabled) return;
         const activeRules = rules.filter((rule) => !rule.disabled);
-        if ((mode === "rotation" && !rotation.length) || (mode === "time" && !activeRules.length) || (mode === "hybrid" && !rotation.length && !activeRules.length)) {
+        const mqttTriggers = pages.filter((page) => !page.disabled && page.display_mode === "mqtt" && page.trigger?.topic).length;
+        if (!mqttTriggers && ((mode === "rotation" && !rotation.length) || (mode === "time" && !activeRules.length) || (mode === "hybrid" && !rotation.length && !activeRules.length))) {
           throw new Error(t("validationScheduleEmpty"));
         }
       }
@@ -2600,6 +2854,7 @@
         const existing = normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls);
         if (!document.getElementById("page-name-0")) return existing.map((page) => ({ ...page }));
         return existing.map((_, index) => ({
+          ...existing[index],
           name: val(`page-name-${index}`),
           url: val(`page-url-${index}`),
           disabled: checked(`page-disabled-${index}`),
@@ -2627,8 +2882,20 @@
       }
 
       function normalizePages(pages, urls) {
-        if (Array.isArray(pages) && pages.length) return pages.map((p, i) => ({ name: p.name || `Page ${i + 1}`, url: p.url || "", disabled: !!p.disabled }));
-        return (urls || []).map((url, i) => ({ name: `Page ${i + 1}`, url, disabled: false }));
+        if (Array.isArray(pages) && pages.length) return pages.map((p, i) => ({
+          ...p,
+          page_id: p.page_id || `page_${i + 1}`,
+          name: p.name || `Page ${i + 1}`,
+          url: p.url || "",
+          source_type: p.source_type || (String(p.url || "").includes(":8123") ? "home_assistant" : "url"),
+          display_mode: p.display_mode || "duration",
+          duration_seconds: Number(p.duration_seconds || 3600),
+          schedule: { start: p.schedule?.start || "08:00", end: p.schedule?.end || "18:00", days: [...(p.schedule?.days || [])] },
+          trigger: { topic: p.trigger?.topic || "", payload: p.trigger?.payload || "ON" },
+          display_options: { power_off_after: !!p.display_options?.power_off_after, screensaver: !!p.display_options?.screensaver, brightness: Number(p.display_options?.brightness ?? 100) },
+          disabled: !!p.disabled,
+        }));
+        return (urls || []).map((url, i) => ({ page_id: `page_${i + 1}`, name: `Page ${i + 1}`, url, source_type: String(url).includes(":8123") ? "home_assistant" : "url", display_mode: "duration", duration_seconds: 3600, schedule: { start: "08:00", end: "18:00", days: [] }, trigger: { topic: "", payload: "ON" }, display_options: { brightness: 100 }, disabled: false }));
       }
 
       function lines(id) {

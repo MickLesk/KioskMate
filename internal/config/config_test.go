@@ -55,6 +55,79 @@ func TestLoadPreservesExistingKioskMateConfig(t *testing.T) {
 	}
 }
 
+func TestLoadMigratesPagesToWorkflowMetadata(t *testing.T) {
+	home := testHome(t)
+	path := filepath.Join(home, ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{
+  "version": 2,
+  "admin": {"bind": "0.0.0.0", "port": 33333},
+  "kiosk": {
+    "pages": [
+      {"name": "Dashboard", "url": "http://homeassistant.local:8123"},
+      {"name": "Weather", "url": "https://example.test/weather"}
+    ],
+    "rotation": [{"page": 0, "duration_seconds": 45}],
+    "time_rules": [{"name": "Weather", "page": 1, "start": "13:00", "end": "14:00", "days": ["mon"]}]
+  },
+  "update": {"repository": "MickLesk/KioskMate", "service": "kioskmate.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := cfg.Kiosk.Pages[0], cfg.Kiosk.Pages[1]
+	if first.PageID == "" || second.PageID == "" || first.PageID == second.PageID {
+		t.Fatalf("page ids were not generated uniquely: %q %q", first.PageID, second.PageID)
+	}
+	if first.SourceType != "home_assistant" || first.DisplayMode != "duration" || first.DurationSeconds != 45 {
+		t.Fatalf("first page metadata = %#v", first)
+	}
+	if second.DisplayMode != "schedule" || second.Schedule.Start != "13:00" || len(second.Schedule.Days) != 1 {
+		t.Fatalf("second page schedule = %#v", second)
+	}
+	if first.DisplayOptions.Brightness == nil || *first.DisplayOptions.Brightness != 100 {
+		t.Fatalf("default brightness = %#v", first.DisplayOptions.Brightness)
+	}
+}
+
+func TestLoadMigratesCustomRotationIntoPageSequence(t *testing.T) {
+	home := testHome(t)
+	path := filepath.Join(home, ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{
+  "version": 2,
+  "admin": {"bind": "0.0.0.0", "port": 33333},
+  "kiosk": {
+    "pages": [
+      {"name": "Home", "url": "https://example.test/home"},
+      {"name": "Weather", "url": "https://example.test/weather"}
+    ],
+    "rotation": [
+      {"page": 1, "duration_seconds": 15},
+      {"page": 0, "duration_seconds": 60},
+      {"page": 1, "duration_seconds": 10}
+    ]
+  },
+  "update": {"repository": "MickLesk/KioskMate", "service": "kioskmate.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Kiosk.Pages) != 3 || cfg.Kiosk.Pages[0].Name != "Weather" || cfg.Kiosk.Pages[1].Name != "Home" || cfg.Kiosk.Pages[2].Name != "Weather" {
+		t.Fatalf("migrated page sequence = %#v", cfg.Kiosk.Pages)
+	}
+	for index, want := range []int{15, 60, 10} {
+		if cfg.Kiosk.Pages[index].DurationSeconds != want || cfg.Kiosk.Rotation[index].Page != index {
+			t.Fatalf("step %d = page %#v rotation %#v", index, cfg.Kiosk.Pages[index], cfg.Kiosk.Rotation[index])
+		}
+	}
+	if cfg.Kiosk.Pages[0].PageID == cfg.Kiosk.Pages[2].PageID {
+		t.Fatalf("duplicate sequence entries share page id %q", cfg.Kiosk.Pages[0].PageID)
+	}
+}
+
 func TestLoadNormalizesStaleProjectIdentity(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")

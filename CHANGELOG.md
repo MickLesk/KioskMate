@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.0
+
+- Rebuilt Kiosk -> Pages and workflow as a single all-in-one sequence workspace instead of separate page, rotation and time-rule forms.
+- Added a non-technical Storybook view with numbered page cards, source previews, duration badges, inline insertion, keyboard-friendly move actions and native drag-and-drop ordering.
+- Added an optional visual flow view that renders START, page nodes, transitions and END/LOOP state for power users.
+- Added a guided three-step page wizard for source details, URL validation, timing/trigger behavior, display actions and a plain-language review before activation.
+- Added per-page display modes for custom duration, fixed schedules and MQTT triggers with conditional fields that keep advanced settings out of the normal workflow.
+- Added stable `page_id` values, source metadata, page-level timing, schedule, trigger and display-option fields while preserving existing URLs, sessions, rotations and time rules during migration.
+- Kept Home Assistant MQTT page entity IDs compatible for existing installations and made newly renamed pages retain their entity identity.
+- Added custom per-page MQTT trigger topics and payload matching that activate the configured page without routing through the generic command topic.
+- Unified page order, scheduler mode, rotation and fixed time rules behind one save path so the same configuration is no longer maintained in multiple places.
+- Added responsive English and German UI text, clear selected-page actions, advanced diagnostics disclosure and zero-overflow mobile layouts.
+- Added migration, MQTT trigger and embedded Admin UI contract tests plus browser-based desktop, mobile and wizard verification.
+
 ## v0.4.0
 
 - Added persistent update history with install/rollback versions, lifecycle stages, timestamps, results and recovery metadata across service restarts.

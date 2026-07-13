@@ -35,6 +35,23 @@ func TestMQTTConnectionStatusTracksSuccessAndAuthFailure(t *testing.T) {
 	}
 }
 
+func TestTriggeredPageUsesCustomTopicAndPayload(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	cfg.Kiosk.Pages = []config.KioskPage{
+		{Name: "Disabled", URL: "https://disabled.test", Disabled: true},
+		{Name: "Main", URL: "https://main.test"},
+		{Name: "Weather", URL: "https://weather.test", DisplayMode: "mqtt", Trigger: config.KioskPageTrigger{Topic: "house/kiosk/weather", Payload: "SHOW"}},
+	}
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if page, ok := service.triggeredPage("house/kiosk/weather", "SHOW"); !ok || page != 1 {
+		t.Fatalf("triggered page = %d, %v; want enabled page 1", page, ok)
+	}
+	if _, ok := service.triggeredPage("house/kiosk/weather", "HIDE"); ok {
+		t.Fatal("unexpected trigger match for different payload")
+	}
+}
+
 type fakeBrowser struct {
 	active       int
 	starts       int

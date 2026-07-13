@@ -3,6 +3,7 @@ dist/
 out/
 build/
 tmp/
+.tmp/
 
 # Go
 *.test
