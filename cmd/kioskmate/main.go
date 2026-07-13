@@ -57,6 +57,12 @@ func main() {
 		}
 		return
 	}
+	instanceLock, err := acquireInstanceLock(filepath.Join(config.ConfigDir(cfg.Path), "kioskmate.lock"))
+	if err != nil {
+		logger.Error("another KioskMate instance is already running", "error", err)
+		os.Exit(1)
+	}
+	defer instanceLock.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

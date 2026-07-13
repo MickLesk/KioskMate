@@ -191,17 +191,6 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 		}
 		b.mu.Unlock()
 	}()
-	if err := session.command(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
-		b.setThemeError(theme, err)
-		b.logger.Warn("Chromium DevTools runtime monitor failed", "error", err)
-		return
-	}
-	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
-		b.setThemeError(theme, err)
-		b.logger.Warn("Home Assistant theme synchronization failed", "theme", theme, "error", err)
-	} else if _, ok := homeAssistantThemeScript(theme); ok {
-		b.logger.Info("Home Assistant theme synchronization enabled", "theme", theme)
-	}
 	if err := session.command(ctx, "Network.enable", map[string]any{}, nil); err != nil {
 		b.logger.Warn("Chromium DevTools network monitor failed", "error", err)
 		return
@@ -210,6 +199,7 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 	b.devTools = true
 	b.mu.Unlock()
 	b.logger.Info("Chromium DevTools monitor attached")
+	go b.monitorTheme(profile, theme, done)
 	for {
 		_, data, err := session.conn.Read(ctx)
 		if err != nil {
@@ -220,17 +210,13 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 			continue
 		}
 		switch event.Method {
-		case "Runtime.consoleAPICalled":
-			if report, ok := parseThemeConsoleEvent(event.Params); ok {
-				b.setThemeReport(theme, report)
-			}
 		case "Network.webSocketFrameReceived":
 			var params struct {
 				Response struct {
 					PayloadData string `json:"payloadData"`
 				} `json:"response"`
 			}
-			if json.Unmarshal(event.Params, &params) == nil && strings.Contains(params.Response.PayloadData, `"type":"auth_invalid"`) {
+			if json.Unmarshal(event.Params, &params) == nil && homeAssistantAuthFailureFrame(params.Response.PayloadData) {
 				b.tripAuthGuard("Home Assistant rejected the stored WebSocket access token")
 				return
 			}
@@ -242,12 +228,72 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 					URL    string  `json:"url"`
 				} `json:"response"`
 			}
-			if json.Unmarshal(event.Params, &params) == nil && int(params.Response.Status) == http.StatusForbidden && authRelevantResourceType(params.Type) && likelyHomeAssistantURL(params.Response.URL) {
-				b.tripAuthGuard("Home Assistant returned HTTP 403 for " + params.Type)
+			if json.Unmarshal(event.Params, &params) == nil && homeAssistantAuthFailureResponse(int(params.Response.Status), params.Type, params.Response.URL) {
+				b.tripAuthGuard(fmt.Sprintf("Home Assistant returned HTTP %d for %s", int(params.Response.Status), params.Type))
 				return
 			}
 		}
 	}
+}
+
+func (b *Browser) monitorTheme(profile string, theme string, done <-chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	session, err := dialDevTools(ctx, profile)
+	if err != nil {
+		b.setThemeError(theme, err)
+		return
+	}
+	defer session.close()
+	if err := session.command(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+		b.setThemeError(theme, err)
+		b.logger.Warn("Chromium DevTools runtime monitor failed", "error", err)
+		return
+	}
+	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
+		b.setThemeError(theme, err)
+		b.logger.Warn("Home Assistant theme synchronization failed", "theme", theme, "error", err)
+		return
+	}
+	if _, ok := homeAssistantThemeScript(theme); ok {
+		b.logger.Info("Home Assistant theme synchronization enabled", "theme", theme)
+	}
+	for {
+		_, data, err := session.conn.Read(ctx)
+		if err != nil {
+			return
+		}
+		var event cdpMessage
+		if json.Unmarshal(data, &event) != nil || event.Method != "Runtime.consoleAPICalled" {
+			continue
+		}
+		if report, ok := parseThemeConsoleEvent(event.Params); ok {
+			b.setThemeReport(theme, report)
+		}
+	}
+}
+
+func homeAssistantAuthFailureFrame(payload string) bool {
+	compact := strings.ReplaceAll(strings.ReplaceAll(payload, " ", ""), "\n", "")
+	return strings.Contains(compact, `"type":"auth_invalid"`)
+}
+
+func homeAssistantAuthFailureResponse(status int, kind string, rawURL string) bool {
+	if !authRelevantResourceType(kind) || !likelyHomeAssistantURL(rawURL) {
+		return false
+	}
+	if status == http.StatusForbidden {
+		return true
+	}
+	lowerURL := strings.ToLower(rawURL)
+	return status == http.StatusUnauthorized && (strings.Contains(lowerURL, "/auth/token") || strings.Contains(lowerURL, "/api/websocket"))
 }
 
 func configureHomeAssistantTheme(ctx context.Context, session cdpCommander, theme string) error {

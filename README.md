@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.7.2` decouples Admin authentication completely from Chromium and other runtime locks, building on the cache-safe embedded assets and redesigned sign-in experience.
+KioskMate `0.7.3` adds an authentication safety layer that prevents stale Chromium credentials, duplicate instances and recovery actions from repeatedly reaching Home Assistant after an invalid login.
 
 The Admin UI is organized by task:
 
@@ -77,8 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.7.2/kioskmate_0.7.2_arm64.deb
-sudo apt install ./kioskmate_0.7.2_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.7.3/kioskmate_0.7.3_arm64.deb
+sudo apt install ./kioskmate_0.7.3_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
@@ -185,7 +185,7 @@ If entities become stale after page renames, use **MQTT -> Reset discovery** in 
 
 ## Home Assistant 403 / White Page Troubleshooting
 
-If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication guard and stops Chromium to prevent a reconnect loop. Remove the kiosk IP from `ip_bans.yaml`, restart Home Assistant, then use **Dashboard -> Reset HA session**. The reset waits for all Chromium processes, backs up the old session under `~/.config/kioskmate/Browser/SessionBackups`, clears current Chromium authentication storage and starts a clean session.
+If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication guard and stops Chromium to prevent a reconnect loop. Remove the kiosk IP from `ip_bans.yaml`, restart Home Assistant, then use **Dashboard -> Reset HA session** exactly once. The reset waits for all Chromium processes, backs up the old session under `~/.config/kioskmate/Browser/SessionBackups`, clears current Chromium authentication and saved login storage, and starts a clean session. KioskMate never stores or automatically resubmits the Home Assistant password; Home Assistant keeps the authenticated session in its browser storage after the successful manual login.
 
 If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snapshot** or **Kiosk -> Pages -> Render check**. For the active Chromium display this captures the real signed-in browser session through the local DevTools connection. Snapshots are only captured on demand and cached briefly.
 
@@ -205,14 +205,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.7.2 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.7.2 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.7.3 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.7.3 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.7.2 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.7.3 --arch arm64 --arch amd64
 ```
 
 The package installs:

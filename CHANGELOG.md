@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.3
+
+- Moved Home Assistant network authentication monitoring ahead of theme synchronization and onto a dedicated CDP connection so `auth_invalid` events cannot be consumed by unrelated DevTools commands.
+- Disabled Chromium password saving, credential autofill, password leak services and crashed-session restore in the dedicated KioskMate browser profile.
+- Added a one-time non-destructive migration that quarantines existing Chromium password databases under `SessionBackups` without removing the active Home Assistant token, cookies or dashboard storage.
+- Expanded explicit HA session resets to back up and remove saved Chromium login databases as well as cookies, local storage, IndexedDB and service worker state.
+- Blocked reload, page navigation, scheduler switches and MQTT-driven page changes while the persistent Home Assistant authentication guard is active.
+- Added a safe `/manifest.json` preflight that refuses to start Chromium when Home Assistant already returns an IP-ban `403` response.
+- Added a Linux process lock before browser startup so overlapping service or manual KioskMate instances cannot launch multiple Chromium sessions.
+- Added regression coverage for credential quarantine, profile preference preservation, auth-failure detection, guarded actions and Home Assistant ban preflight behavior.
+
 ## v0.7.2
 
 - Removed all browser, MQTT, hardware and updater runtime locks from the authenticated Admin bootstrap path.

@@ -47,7 +47,7 @@ func TestBrowserProcessOutlivesStartRequestContext(t *testing.T) {
 
 func TestBackupAndResetSessionMovesCurrentChromiumStorage(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"Default/Local Storage/leveldb/data", "Default/Network/Cookies", "Default/WebStorage/data"} {
+	for _, name := range []string{"Default/Local Storage/leveldb/data", "Default/Network/Cookies", "Default/WebStorage/data", "Default/Login Data"} {
 		path := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -62,6 +62,9 @@ func TestBackupAndResetSessionMovesCurrentChromiumStorage(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "Default", "Local Storage")); !os.IsNotExist(err) {
 		t.Fatalf("local storage still exists: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "Default", "Login Data")); !os.IsNotExist(err) {
+		t.Fatalf("saved Chromium login data still exists: %v", err)
+	}
 	backups, err := os.ReadDir(filepath.Join(dir, "SessionBackups"))
 	if err != nil || len(backups) != 1 {
 		t.Fatalf("session backup missing: %v %#v", err, backups)
@@ -75,6 +78,19 @@ func TestAuthGuardBlocksBrowserStartUntilSessionReset(t *testing.T) {
 	browser.TripAuthGuard("invalid access token")
 	if err := browser.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "authentication guard") {
 		t.Fatalf("start error = %v", err)
+	}
+}
+
+func TestAuthGuardBlocksReloadAndNavigation(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Path = filepath.Join(t.TempDir(), "config.json")
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	browser.TripAuthGuard("invalid access token")
+	if err := browser.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "authentication guard") {
+		t.Fatalf("reload error = %v", err)
+	}
+	if err := browser.SetActive(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "authentication guard") {
+		t.Fatalf("navigation error = %v", err)
 	}
 }
 
@@ -216,6 +232,9 @@ func TestBrowserPresetArgs(t *testing.T) {
 	}
 	if !containsPrefix(chromium, "--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests") {
 		t.Fatalf("chromium-lite args missing local network feature disables: %#v", chromium)
+	}
+	if !contains(chromium, "--disable-save-password-bubble") || !containsPrefix(chromium, "--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PasswordManagerOnboarding") {
+		t.Fatalf("chromium-lite args missing authentication safety flags: %#v", chromium)
 	}
 
 	firefox := browserArgs(cfg, "firefox", "http://ha.local", cfg.Kiosk.ExtraArgs, 0)

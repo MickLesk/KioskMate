@@ -146,12 +146,40 @@ func (b *Browser) Start(ctx context.Context) error {
 		return fmt.Errorf("Home Assistant authentication guard is active: %s; reset the browser session before starting", b.authGuard.Reason)
 	}
 	b.stopping = false
+	target := activeURL(b.cfg.Snapshot(), b.active)
+	if likelyHomeAssistantURL(target) {
+		banned, checkErr := checkHomeAssistantBan(ctx, target)
+		if checkErr != nil {
+			b.logger.Debug("Home Assistant ban preflight unavailable", "url", target, "error", checkErr)
+		} else if banned {
+			reason := "Home Assistant returned HTTP 403 before browser startup"
+			now := time.Now()
+			kind, action := classifyAuthGuard(reason)
+			b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, Kind: kind, SuggestedAction: action, KioskIP: localKioskIP(), At: &now}
+			b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: action, LastAt: &now}
+			b.lastError = "authentication guard: " + reason
+			go b.persistAuthGuard()
+			go b.persistRuntimeState()
+			return fmt.Errorf("%s; %s", reason, action)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	command, args, err := b.command()
 	if err != nil {
 		b.lastError = err.Error()
 		b.setStartFailureLocked(err)
 		go b.persistRuntimeState()
 		return err
+	}
+	if supportsCDP(browserPreset(b.cfg.Snapshot().Kiosk.BrowserPreset)) {
+		if err := hardenChromiumProfile(browserUserDataDir(b.cfg.Snapshot(), b.active)); err != nil {
+			b.lastError = "harden Chromium profile: " + err.Error()
+			b.setStartFailureLocked(err)
+			go b.persistRuntimeState()
+			return fmt.Errorf("harden Chromium profile: %w", err)
+		}
 	}
 	// The browser lifetime belongs to the supervisor, not to the HTTP/MQTT
 	// request that asked for it to start.
@@ -282,6 +310,9 @@ func (b *Browser) Restart(ctx context.Context) error {
 }
 
 func (b *Browser) Reload(ctx context.Context) error {
+	if err := b.authenticationAllowed(); err != nil {
+		return err
+	}
 	if err := b.reloadDevTools(ctx); err == nil {
 		return nil
 	}
@@ -311,6 +342,9 @@ func (b *Browser) Previous(ctx context.Context) error {
 }
 
 func (b *Browser) SetActive(ctx context.Context, index int) error {
+	if err := b.authenticationAllowed(); err != nil {
+		return err
+	}
 	cfg := b.cfg.Snapshot()
 	b.mu.Lock()
 	if index < 0 || index >= cfg.Kiosk.PageCount() {
@@ -367,6 +401,15 @@ func (b *Browser) CaptureScreenshot(ctx context.Context) ([]byte, error) {
 
 func (b *Browser) TripAuthGuard(reason string) {
 	b.tripAuthGuard(reason)
+}
+
+func (b *Browser) authenticationAllowed() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.authGuard.Tripped {
+		return nil
+	}
+	return fmt.Errorf("Home Assistant authentication guard is active: %s; reset the browser session before continuing", b.authGuard.Reason)
 }
 
 func (b *Browser) Status() Status {
@@ -907,13 +950,15 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--kiosk",
 		"--user-data-dir=" + browserUserDataDir(cfg, page),
 		"--no-first-run",
+		"--no-default-browser-check",
 		"--disable-translate",
 		"--disable-session-crashed-bubble",
+		"--disable-save-password-bubble",
 		"--disable-infobars",
 		"--autoplay-policy=user-gesture-required",
 		"--disable-background-networking",
 		"--disable-component-update",
-		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests",
+		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,InfiniteSessionRestore",
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
 	}
@@ -958,6 +1003,10 @@ func backupAndResetSession(dir string) error {
 		"Default/Cache",
 		"Default/Code Cache",
 		"Default/GPUCache",
+		"Default/Login Data",
+		"Default/Login Data-journal",
+		"Default/Login Data For Account",
+		"Default/Login Data For Account-journal",
 	}
 	moved := false
 	for _, name := range paths {
