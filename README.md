@@ -28,7 +28,16 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.1.11` is the final reliability-focused release before the planned `0.2.0` Admin UI redesign.
+KioskMate `0.2.0` introduces the redesigned Admin UI while preserving the existing config format, browser profiles and Home Assistant sessions.
+
+The Admin UI is organized by task:
+
+- **Dashboard** for live status, quick display control and recovery.
+- **Kiosk -> Pages** for dashboard URLs and display order.
+- **Kiosk -> Schedule** for rotations and fixed time rules.
+- **MQTT** for broker connectivity and Home Assistant discovery.
+- **System** for device controls, maintenance, terminal and logs.
+- **Settings** for browser behavior, access, backups and updates.
 
 ## Requirements
 
@@ -68,8 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.1.11/kioskmate_0.1.11_arm64.deb
-sudo apt install ./kioskmate_0.1.11_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.2.0/kioskmate_0.2.0_arm64.deb
+sudo apt install ./kioskmate_0.2.0_arm64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now kioskmate.service
 ```
@@ -167,7 +176,7 @@ If entities become stale after page renames, use **MQTT -> Reset discovery** in 
 
 If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication guard and stops Chromium to prevent a reconnect loop. Remove the kiosk IP from `ip_bans.yaml`, restart Home Assistant, then use **Dashboard -> Reset HA session**. The reset waits for all Chromium processes, backs up the old session under `~/.config/kioskmate/Browser/SessionBackups`, clears current Chromium authentication storage and starts a clean session.
 
-If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snapshot** or **Kiosk -> Render check**. For the active Chromium display this captures the real signed-in browser session through the local DevTools connection. Snapshots are only captured on demand and cached briefly.
+If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snapshot** or **Kiosk -> Pages -> Render check**. For the active Chromium display this captures the real signed-in browser session through the local DevTools connection. Snapshots are only captured on demand and cached briefly.
 
 Regular Home Assistant health checks use the unauthenticated `/manifest.json` endpoint and exponential error backoff. They do not submit or reuse Home Assistant credentials.
 
@@ -185,14 +194,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.1.11 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.1.11 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.2.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.2.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.1.11 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.2.0 --arch arm64 --arch amd64
 ```
 
 The package installs:

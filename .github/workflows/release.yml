@@ -26,6 +26,10 @@ jobs:
           test -z "$(gofmt -l .)"
           go vet ./...
           go test ./...
+          node --check internal/admin/web/assets/theme.js
+          node --check internal/admin/web/assets/i18n.js
+          node --check internal/admin/web/assets/app.js
+          node scripts/check-i18n.mjs
 
       - name: Build deb packages
         run: |

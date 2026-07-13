@@ -4,15 +4,23 @@
 
       const NAV = [
         { id: "dashboard", label: "dashboard", hint: "overview" },
-        { id: "kiosk", label: "kiosk", hint: "kioskStreaming" },
+        {
+          id: "kiosk",
+          label: "kiosk",
+          hint: "kioskStreaming",
+          children: [
+            { id: "kiosk-pages", label: "kioskPages", hint: "pages" },
+            { id: "kiosk-schedule", label: "kioskSchedule", hint: "scheduler" },
+          ],
+        },
         { id: "mqtt", label: "mqtt", hint: "mqttSettings" },
         {
           id: "system",
           label: "system",
           hint: "systemTools",
           children: [
-            { id: "system-actions", label: "systemActions", hint: "privilegedActions" },
-            { id: "system-hardware", label: "hardwareControls", hint: "hardwareStatus" },
+            { id: "system-device", label: "deviceAndTime", hint: "hardwareStatus" },
+            { id: "system-maintenance", label: "systemMaintenance", hint: "privilegedActions" },
             { id: "system-terminal", label: "terminal", hint: "runCommand" },
             { id: "system-logs", label: "logs", hint: "refreshLogs" },
           ],
@@ -22,13 +30,23 @@
           label: "settings",
           hint: "adminSettings",
           children: [
-            { id: "settings-admin", label: "adminAccess", hint: "adminSettings" },
             { id: "settings-browser", label: "browserPerformance", hint: "performance" },
+            { id: "settings-admin", label: "adminAccess", hint: "adminSettings" },
             { id: "settings-config", label: "configData", hint: "configFile" },
-            { id: "settings-maintenance", label: "maintenance", hint: "update" },
+            { id: "settings-updates", label: "updatesAndRepair", hint: "update" },
           ],
         },
       ];
+
+      const VIEW_ALIASES = {
+        kiosk: "kiosk-pages",
+        scheduler: "kiosk-schedule",
+        system: "system-device",
+        "system-actions": "system-maintenance",
+        "system-hardware": "system-device",
+        settings: "settings-browser",
+        "settings-maintenance": "settings-updates",
+      };
 
       const root = document.getElementById("root");
       const toasts = document.getElementById("toasts");
@@ -38,7 +56,7 @@
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: storedTheme === "light" ? "light" : "dark",
         themeExplicit: localStorage.getItem("kioskmate.theme.explicit") === "1",
-        view: localStorage.getItem("kioskmate.view") || "dashboard",
+        view: VIEW_ALIASES[localStorage.getItem("kioskmate.view")] || localStorage.getItem("kioskmate.view") || "dashboard",
         auth: null,
         config: null,
         status: null,
@@ -386,8 +404,10 @@
                 ${renderNav()}
               </nav>
               <div class="sidebar-foot">
-                ${selectHtml("lang", t("language"), state.lang, [["en", "English"], ["de", "Deutsch"]])}
-                ${selectHtml("theme", t("theme"), state.theme, [["dark", t("dark")], ["light", t("light")]])}
+                <div class="sidebar-selects">
+                  ${selectHtml("lang", t("language"), state.lang, [["en", "English"], ["de", "Deutsch"]])}
+                  ${selectHtml("theme", t("theme"), state.theme, [["dark", t("dark")], ["light", t("light")]])}
+                </div>
                 <button data-action="logout">${esc(t("logout"))}</button>
               </div>
             </aside>
@@ -400,8 +420,7 @@
                 <div class="chips">
                   <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
                   <span class="chip">${esc(state.auth?.version || "dev")}</span>
-                  <span class="chip ${state.config?.mqtt?.enabled ? "ok" : ""}">MQTT ${esc(state.config?.mqtt?.enabled ? t("enabled") : t("disabled"))}</span>
-                  <button data-busy="refresh" data-action="refresh">${esc(t("refresh"))}</button>
+                  <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">↻</button>
                 </div>
               </header>
               <section class="content">${renderView()}</section>
@@ -416,14 +435,14 @@
           const children = item.children || [];
           const active = isNavActive(item);
           const target = children[0]?.id || item.id;
-          const childHtml = active && children.length
+          const childHtml = children.length
             ? `<div class="nav-children">${children.map((child) => `<button class="${state.view === child.id ? "active" : ""}" data-view="${child.id}"><span>${esc(t(child.label))}</span><small>${esc(t(child.hint))}</small></button>`).join("")}</div>`
             : "";
           return `
             <div class="nav-group">
               <button class="nav-parent ${active ? "active" : ""}" data-view="${target}">
                 <span>${esc(t(item.label))}</span>
-                ${children.length ? `<span class="chevron">${active ? "▾" : "▸"}</span>` : `<small>${esc(t(item.hint))}</small>`}
+                ${children.length ? `<small>${esc(t(item.hint))}</small>` : `<small>${esc(t(item.hint))}</small>`}
               </button>
               ${childHtml}
             </div>`;
@@ -446,26 +465,29 @@
       function renderView() {
         switch (state.view) {
           case "kiosk":
+          case "kiosk-pages":
             return renderKiosk();
+          case "kiosk-schedule":
+            return renderScheduler();
           case "mqtt":
             return renderMQTT();
           case "system":
-          case "system-actions":
+          case "system-maintenance":
             return renderSystemActions();
-          case "system-hardware":
+          case "system-device":
             return renderHardware();
           case "system-terminal":
             return renderTerminal();
           case "system-logs":
             return renderLogs();
           case "settings":
-          case "settings-admin":
-            return renderSettingsAdmin();
           case "settings-browser":
             return renderSettingsBrowser();
+          case "settings-admin":
+            return renderSettingsAdmin();
           case "settings-config":
             return renderSettingsConfig();
-          case "settings-maintenance":
+          case "settings-updates":
             return renderSettingsMaintenance();
           default:
             return renderDashboard();
@@ -517,7 +539,6 @@
       function renderDashboard() {
         const browser = state.status?.browser || {};
         const cfg = state.config || {};
-        const hw = state.hardware || {};
         const stats = browser.stats || {};
         const watchdog = browser.watchdog || {};
         const pages = normalizePages(cfg.kiosk?.pages, cfg.kiosk?.urls);
@@ -525,83 +546,55 @@
         const activePage = pages[activeIndex] || {};
         const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         return `
-          <div class="grid">
-            <div class="grid three">
-              ${metric(t("browser"), browser.running ? t("running") : t("stopped"), browser.url || "-")}
-              ${metric(t("currentPage"), browser.page_name || "-", browser.url || "-")}
-              ${metric(t("performance"), formatValue(stats.cpu_percent, "% CPU"), formatValue(stats.rss_mb, " MB RSS"))}
-            </div>
+          <div class="page-stack">
+            <section class="status-strip" aria-label="${esc(t("status"))}">
+              ${statusTile(t("displayStatus"), browser.running ? t("running") : t("stopped"), browser.running ? "ok" : "bad", browser.pid ? `PID ${browser.pid}` : t("noProcess"))}
+              ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
+              ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", formatValue(stats.rss_mb, " MB RAM"))}
+              ${statusTile("MQTT", cfg.mqtt?.enabled ? t("enabled") : t("disabled"), cfg.mqtt?.enabled ? "ok" : "", cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-")}
+            </section>
             <div class="dashboard-layout">
               <div class="control-stack">
                 <div class="card">
                   <div class="head">
-                    <h3>${esc(t("controlCenter"))}</h3>
+                    <div><h3>${esc(t("quickControl"))}</h3><span class="section-kicker">${esc(browser.page_name || activePage.name || t("noData"))}</span></div>
                     <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
                   </div>
-                  <div class="body grid">
-                    <div class="control-card">
-                      <h4>${esc(t("displayControls"))}</h4>
-                      <div class="control-grid">
-                        ${button("startBrowser", "browser-start")}
-                        ${button("stopBrowser", "browser-stop")}
-                        ${button("restartBrowser", "browser-restart", "primary")}
-                        ${button("reloadBrowser", "browser-reload")}
-                      </div>
+                  <div class="body command-panel">
+                    <div class="command-primary">
+                      ${browser.running ? button("stopBrowser", "browser-stop") : button("startBrowser", "browser-start", "primary")}
+                      ${button("reloadBrowser", "browser-reload", browser.running ? "primary" : "")}
+                      ${button("restartBrowser", "browser-restart")}
                     </div>
-                    <div class="control-card">
-                      <h4>${esc(t("pageControls"))}</h4>
-                      <div class="control-grid">
-                        ${button("previousPage", "browser-previous")}
-                        ${button("nextPage", "browser-next")}
+                    <div class="active-page-summary">
+                      <div class="active-page-copy"><strong>${esc(activePage.name || browser.page_name || t("noData"))}</strong><span>${esc(activePage.url || browser.url || "-")}</span></div>
+                      <div class="actions">${button("previousPage", "browser-previous")}${button("nextPage", "browser-next")}</div>
+                    </div>
+                    <div id="page-check-output" class="action-feedback" aria-live="polite"></div>
+                    <details class="disclosure">
+                      <summary>${esc(t("troubleshooting"))}</summary>
+                      <div class="disclosure-body action-matrix">
                         ${button("checkPage", "dashboard-page-check")}
                         ${button("renderCheck", "dashboard-render-check")}
-                      </div>
-                      <div id="page-check-output" class="hint">${esc(activePage.name || browser.page_name || "-")} · ${esc(activePage.url || browser.url || "-")}</div>
-                    </div>
-                    <div class="control-card">
-                      <h4>${esc(t("recovery"))}</h4>
-                      <div class="control-grid">
-                        ${button("repairHA", "browser-repair-ha", "primary")}
-                        ${button("resetSession", "browser-reset-session")}
+                        ${button("repairHA", "browser-repair-ha")}
                         ${button("recoveryWorkflow", "browser-recover")}
                         ${button("browserDoctor", "browser-doctor")}
+                        ${button("resetSession", "browser-reset-session", "danger-ghost")}
                         ${button("openPreview", "dashboard-preview-open")}
                         ${button("diagnostics", "dashboard-diagnostics")}
                       </div>
-                    </div>
-                    <div class="control-card">
-                      <h4>${esc(t("displayAudio"))}</h4>
-                      <div class="form-grid">
-                        ${selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]])}
-                        ${field("display-brightness", t("brightness"), "number", "", hw.display?.brightness || 80)}
-                        ${field("audio-volume", t("volume"), "number", "", hw.audio?.volume || 50)}
-                        ${field("audio-mic", t("microphone"), "number", "", hw.audio?.microphone || 50)}
-                        ${selectHtml("keyboard-power", t("keyboard"), "ON", [["ON", t("on")], ["OFF", t("off")]])}
-                        <button data-action="display-apply" class="primary">${esc(t("applyDisplay"))}</button>
-                        <button data-action="audio-apply" class="span-2">${esc(t("applyAudio"))}</button>
-                      </div>
-                    </div>
+                    </details>
                   </div>
                 </div>
                 <div class="card">
-                  <div class="head"><h3>${esc(t("sessionHealth"))}</h3><button data-action="hardware-refresh">${esc(t("refresh"))}</button></div>
-                  <div class="body grid">
+                  <div class="head"><h3>${esc(t("healthAndProtection"))}</h3><button data-view="system-logs">${esc(t("openLogs"))}</button></div>
+                  <div class="body health-list">
                     ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
-                    ${kvTable([
-                      [t("pid"), browser.pid || "-"],
-                      [t("activePage"), `${activeIndex + 1} / ${Math.max(1, pages.length)}`],
-                      [t("lastError"), browser.last_error || "-"],
-                      [t("lastExit"), formatDate(browser.last_exit)],
-                      [t("browserStarts"), browser.start_count ?? 0],
-                      [t("browserRestarts"), browser.restart_count ?? 0],
-                      [t("watchdogPressure"), watchdog.pressure || "normal"],
-                      [t("watchdogAction"), watchdog.last_action || "-"],
-                      [t("watchdogLimits"), `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`],
-                      [t("devTools"), browser.devtools ? t("connected") : t("notConnected")],
-                      [t("haThemeSync"), formatThemeStatus(browser.theme_status)],
-                      [t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready")],
-                    ])}
-                    ${renderRecoveryHints(browser)}
+                    ${healthRow(t("browserControl"), browser.devtools ? t("connected") : t("notConnected"), browser.devtools ? "ok" : "warn")}
+                    ${healthRow(t("haThemeSync"), formatThemeStatus(browser.theme_status), browser.theme_status?.state === "applied" ? "ok" : browser.theme_status?.state === "failed" ? "bad" : "")}
+                    ${healthRow(t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready"), browser.auth_guard?.tripped ? "bad" : "ok")}
+                    ${healthRow(t("watchdog"), watchdog.pressure || t("normal"), watchdog.pressure && watchdog.pressure !== "normal" ? "warn" : "ok")}
+                    ${healthRow(t("lastError"), browser.last_error || t("none"), browser.last_error ? "bad" : "")}
                     ${renderActionLog()}
                   </div>
                 </div>
@@ -619,7 +612,7 @@
                   ${state.snapshotURL ? `<img id="snapshot-image" class="snapshot-image" src="${esc(state.snapshotURL)}" alt="${esc(t("liveView"))}" />` : `<div id="snapshot-empty" class="empty">${esc(browser.running ? t("snapshotOnDemand") : t("liveViewStopped"))}</div>`}
                 </div>
                 <div class="body">
-                  <p class="hint">${esc(t("liveViewHint"))}</p>
+                  <div class="preview-meta"><span>${esc(state.snapshotTime ? formatDate(state.snapshotTime) : t("snapshotOnDemand"))}</span><button data-view="kiosk-pages">${esc(t("managePages"))}</button></div>
                 </div>
               </div>
             </div>
@@ -630,105 +623,60 @@
         const cfg = state.config || {};
         const kiosk = cfg.kiosk || {};
         const browser = state.status?.browser || {};
-        const watchdog = browser.watchdog || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
         const enabledPages = pages.filter((page) => !page.disabled && page.url).length;
-        const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         return `
-          <div class="kiosk-shell">
-            <div class="kiosk-hero">
-              <div class="card">
-                <div class="head">
-                  <h3>${esc(t("currentPage"))}</h3>
-                  <div class="actions">
-                    <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
-                    <span class="chip">${esc(browser.page_name || "-")}</span>
-                  </div>
-                </div>
-                <div class="body kiosk-status">
-                  <strong>${esc(browser.page_name || t("noData"))}</strong>
-                  <div class="status-url">${esc(browser.url || "-")}</div>
-                  ${browser.last_error ? `<div class="chip bad">${esc(browser.last_error)}</div>` : ""}
-                  ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
-                  <div class="status-grid">
-                    ${metric(t("watchdogPressure"), watchdog.pressure || "normal", `${watchdog.max_rss_mb || "-"} MB / ${watchdog.max_cpu_percent || "-"} %`)}
-                    ${metric(t("watchdogLastRestart"), formatDate(watchdog.last_restart), watchdog.hot_since ? `${t("reason")}: ${watchdog.pressure}` : "")}
-                    ${metric(t("watchdogAction"), watchdog.last_action || "-", watchdog.suppressed_until ? `${t("watchdogSuppressedUntil")}: ${formatDate(watchdog.suppressed_until)}` : `${t("watchdogRestartWindow")}: ${watchdog.restart_window_count ?? 0}`)}
-                  </div>
-                  <div class="primary-actions">
-                    ${button("activatePage", "page-activate", "primary")}
-                    ${button("checkPage", "page-check")}
-                    ${button("renderCheck", "render-check")}
-                    ${button("openPreview", "preview-open")}
-                    ${button("previousPage", "browser-previous")}
-                    ${button("nextPage", "browser-next")}
-                    ${button("reloadBrowser", "browser-reload")}
-                    ${button("startBrowser", "browser-start")}
-                    ${button("stopBrowser", "browser-stop")}
-                    ${button("restartBrowser", "browser-restart")}
-                    ${button("repairHA", "browser-repair-ha")}
-                    ${button("resetSession", "browser-reset-session")}
-                  </div>
-                  <div id="page-check-output" class="hint">${esc(t("openExternalHint"))}</div>
-                  ${renderActionLog()}
-                </div>
+          <div class="page-stack">
+            <section class="section-toolbar">
+              <div class="section-summary">
+                <strong>${esc(t("kioskPages"))}</strong>
+                <span>${esc(t("enabledPages"))}: ${enabledPages} / ${pages.length}</span>
               </div>
-              <div class="card">
-                <div class="head">
-                  <h3>${esc(t("workflowPreview"))}</h3>
-                  <span class="chip">${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</span>
-                </div>
-                <div class="body grid">
-                  ${renderSchedulerStatus(browser.scheduler || {})}
-                  ${renderWorkflowPreview(kiosk)}
-                </div>
+              <div class="actions">
+                ${button("addPage", "page-add", "primary")}
+                ${button("addHomeAssistant", "page-add-ha")}
+                ${button("importPages", "pages-import")}
+                ${button("exportPages", "pages-export")}
               </div>
-            </div>
+            </section>
             <div class="card">
               <div class="head">
-                <h3>${esc(t("pages"))}</h3>
+                <div><h3>${esc(t("currentSelection"))}</h3><span class="section-kicker">${esc(browser.page_name || t("noData"))}</span></div>
                 <div class="actions">
-                  <span class="chip">${esc(t("visiblePages"))}: ${pages.length}</span>
-                  <span class="chip ok">${esc(t("enabledPages"))}: ${enabledPages}</span>
-                  ${button("addPage", "page-add")}${button("addHomeAssistant", "page-add-ha")}${button("importPages", "pages-import")}${button("exportPages", "pages-export")}
+                  ${button("activatePage", "page-activate", "primary")}
+                  ${button("checkPage", "page-check")}
+                  ${button("renderCheck", "render-check")}
+                  ${button("openPreview", "preview-open")}
                 </div>
               </div>
-              <div class="body grid">
+              <div class="body">
+                <div id="page-check-output" class="action-feedback">${esc(browser.url || "-")}</div>
+              </div>
+            </div>
+            <section class="data-section">
+              <div class="data-section-head">
+                <div><h3>${esc(t("pages"))}</h3><span class="section-kicker">${esc(t("pageOrderHint"))}</span></div>
+                <div class="actions">
+                  ${button("checkAllPages", "page-check-all")}
+                  ${button("enableAll", "page-enable-all")}
+                  ${button("disableAll", "page-disable-all")}
+                </div>
+              </div>
+              <div class="data-section-body">
                 <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
                 <div class="toolbar">
                   <input id="page-filter" type="search" placeholder="${esc(t("filterPages"))}" value="${esc(state.pageFilter || "")}" />
-                  <div class="actions">
-                    ${button("checkAllPages", "page-check-all")}
-                    ${button("enableAll", "page-enable-all")}
-                    ${button("disableAll", "page-disable-all")}
-                  </div>
+                  <span class="chip">${esc(t("visiblePages"))}: ${pages.length}</span>
                 </div>
                 <div id="pages-list">${renderPages(pages)}</div>
                 <div id="page-check-all-output" class="check-panel"></div>
-                <div class="actions">
-                  ${button("save", "kiosk-save")}
-                  ${button("saveRestart", "kiosk-save-restart", "primary")}
-                </div>
               </div>
-            </div>
-            <div class="card">
-              <div class="head"><h3>${esc(t("workflow"))}</h3><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
-              <div class="body workflow-board">
-                <div class="workflow-settings">
-                  ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
-                  ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
-                  ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
-                </div>
-                <div class="workflow-lanes">
-                  <div class="lane">
-                    <div class="lane-head"><h3>${esc(t("rotation"))}</h3><div class="actions">${button("buildRotation", "rotation-build")}${button("clearRotation", "rotation-clear")}${button("addRotation", "rotation-add")}</div></div>
-                    <div id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
-                  </div>
-                  <div class="lane">
-                    <div class="lane-head"><h3>${esc(t("timeRules"))}</h3><div class="actions">${button("clearRules", "rules-clear")}${button("addRule", "rule-add")}</div></div>
-                    <div id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
-                  </div>
-                </div>
+            </section>
+            <div class="save-bar">
+              <span>${esc(t("unsavedChangesHint"))}</span>
+              <div class="actions">
+                ${button("save", "kiosk-save")}
+                ${button("saveRestart", "kiosk-save-restart", "primary")}
               </div>
             </div>
           </div>`;
@@ -736,125 +684,163 @@
 
       function renderScheduler() {
         const kiosk = state.config?.kiosk || {};
+        const browser = state.status?.browser || {};
         return `
-          <div class="grid">
+          <div class="page-stack">
+            <section class="status-strip">
+              ${statusTile(t("scheduler"), kiosk.scheduler?.enabled ? t("enabled") : t("disabled"), kiosk.scheduler?.enabled ? "ok" : "", t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}
+              ${statusTile(t("currentPage"), browser.page_name || "-", "", formatSchedulerReason(browser.scheduler?.reason))}
+              ${statusTile(t("nextSwitch"), formatDate(browser.scheduler?.next_switch), "", browser.scheduler?.active_rule || t("noActiveRule"))}
+            </section>
             <div class="card">
-              <div class="head"><h3>${esc(t("scheduler"))}</h3><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
-              <div class="body form-grid">
+              <div class="head"><div><h3>${esc(t("schedulerSettings"))}</h3><span class="section-kicker">${esc(t("scheduler"))}</span></div></div>
+              <div class="body schedule-settings">
                 ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
                 ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
                 ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
               </div>
             </div>
-            <div class="card">
-              <div class="head"><h3>${esc(t("rotation"))}</h3>${button("addRotation", "rotation-add")}</div>
-              <div class="body" id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
+            <div class="schedule-columns">
+              <section class="data-section">
+                <div class="data-section-head"><div><h3>${esc(t("rotation"))}</h3><span class="section-kicker">${esc(t("rotationSummary"))}</span></div><div class="actions">${button("buildRotation", "rotation-build")}${button("clearRotation", "rotation-clear")}${button("addRotation", "rotation-add", "primary")}</div></div>
+                <div class="data-section-body" id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
+              </section>
+              <section class="data-section">
+                <div class="data-section-head"><div><h3>${esc(t("timeRules"))}</h3><span class="section-kicker">${esc(t("timeRuleSummary"))}</span></div><div class="actions">${button("clearRules", "rules-clear")}${button("addRule", "rule-add", "primary")}</div></div>
+                <div class="data-section-body" id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
+              </section>
             </div>
-            <div class="card">
-              <div class="head"><h3>${esc(t("timeRules"))}</h3>${button("addRule", "rule-add")}</div>
-              <div class="body" id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
-            </div>
+            <div class="save-bar"><span>${esc(t("schedulerSaveHint"))}</span><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
           </div>`;
       }
 
       function renderMQTT() {
         const mqtt = state.config?.mqtt || {};
         return `
-          <div class="card">
-            <div class="head"><h3>${esc(t("mqttSettings"))}</h3><div class="actions">${button("testConnection", "mqtt-test")}${button("publishDiscovery", "mqtt-discovery")}${button("resetDiscovery", "mqtt-discovery-reset")}${button("save", "mqtt-save", "primary")}</div></div>
-            <div class="body grid">
-              ${switchHtml("mqtt-enabled", t("enabled"), !!mqtt.enabled)}
-              <div class="form-grid">
-                ${field("mqtt-url", t("mqttUrl"), "text", "", mqtt.url || "")}
-                ${selectHtml("mqtt-version", t("mqttVersion"), mqtt.version || "3.1.1", [["3.1.1", "MQTT 3.1.1"], ["5.0", "MQTT 5.0"]])}
-                ${field("mqtt-user", t("username"), "text", "username", mqtt.username || "")}
-                ${field("mqtt-password", t("password"), "password", "current-password", mqtt.password || "")}
-                ${field("mqtt-discovery", t("discoveryPrefix"), "text", "", mqtt.discovery || "homeassistant")}
-                ${field("mqtt-base-topic", t("baseTopic"), "text", "", mqtt.base_topic || "kioskmate")}
-                ${field("mqtt-node", t("node"), "text", "", mqtt.node || "kioskmate")}
+          <div class="page-stack">
+            <section class="status-strip">
+              ${statusTile(t("mqttService"), mqtt.enabled ? t("enabled") : t("disabled"), mqtt.enabled ? "ok" : "", mqtt.version ? `MQTT ${mqtt.version}` : "-")}
+              ${statusTile(t("broker"), mqtt.url || t("notConfigured"), mqtt.url ? "" : "warn", mqtt.username || t("anonymous"))}
+              ${statusTile(t("homeAssistantDiscovery"), mqtt.discovery || "homeassistant", mqtt.enabled ? "ok" : "", `${mqtt.base_topic || "kioskmate"}/${mqtt.node || "kioskmate"}`)}
+            </section>
+            <div class="settings-columns">
+              <div class="card">
+                <div class="head"><div><h3>${esc(t("connection"))}</h3><span class="section-kicker">${esc(t("mqttSettings"))}</span></div>${switchHtml("mqtt-enabled", t("enabled"), !!mqtt.enabled)}</div>
+                <div class="body form-grid">
+                  ${field("mqtt-url", t("mqttUrl"), "text", "", mqtt.url || "")}
+                  ${selectHtml("mqtt-version", t("mqttVersion"), mqtt.version || "3.1.1", [["3.1.1", "MQTT 3.1.1"], ["5.0", "MQTT 5.0"]])}
+                  ${field("mqtt-user", t("username"), "text", "username", mqtt.username || "")}
+                  ${field("mqtt-password", t("password"), "password", "current-password", mqtt.password || "")}
+                </div>
+              </div>
+              <div class="card">
+                <div class="head"><div><h3>${esc(t("homeAssistantDiscovery"))}</h3><span class="section-kicker">${esc(t("pageEntities"))}</span></div><div class="actions">${button("publishDiscovery", "mqtt-discovery", "primary")}${button("resetDiscovery", "mqtt-discovery-reset")}</div></div>
+                <div class="body form-grid">
+                  ${field("mqtt-discovery", t("discoveryPrefix"), "text", "", mqtt.discovery || "homeassistant")}
+                  ${field("mqtt-base-topic", t("baseTopic"), "text", "", mqtt.base_topic || "kioskmate")}
+                  ${field("mqtt-node", t("node"), "text", "", mqtt.node || "kioskmate")}
+                  <div class="span-2 topic-preview"><span>${esc(t("commandTopic"))}</span><strong id="mqtt-topic">${esc(commandTopic())}</strong></div>
+                </div>
+              </div>
+            </div>
+            <details class="card disclosure advanced-settings">
+              <summary>${esc(t("advancedSettings"))}</summary>
+              <div class="disclosure-body form-grid">
                 ${field("mqtt-client-id", t("clientId"), "text", "", mqtt.client_id || "")}
                 ${field("mqtt-keepalive", t("keepalive"), "number", "", secondsToDuration(mqtt.keepalive, 60))}
                 ${field("mqtt-interval", t("interval"), "number", "", secondsToDuration(mqtt.interval, 30))}
-                <div class="span-2">${switchHtml("mqtt-disable-retain", t("forceDisableRetain"), !!mqtt.force_disable_retain)}</div>
+                <div>${switchHtml("mqtt-disable-retain", t("forceDisableRetain"), !!mqtt.force_disable_retain)}</div>
               </div>
-              <div class="metric"><span class="muted">${esc(t("commandTopic"))}</span><strong id="mqtt-topic">${esc(commandTopic())}</strong></div>
-              <pre id="mqtt-result" class="logbox"></pre>
+            </details>
+            <div class="card result-panel">
+              <div class="head"><h3>${esc(t("connectionProtocol"))}</h3><span class="section-kicker">${esc(t("lastTestResult"))}</span></div>
+              <pre id="mqtt-result" class="logbox compact-log"></pre>
             </div>
+            <div class="save-bar"><span>${esc(t("mqttSaveHint"))}</span><div class="actions">${button("testConnection", "mqtt-test")}${button("save", "mqtt-save", "primary")}</div></div>
           </div>`;
       }
 
       function renderHardware() {
         const hw = state.hardware || {};
+        const timeCfg = state.config?.time || {};
         return `
-          <div class="grid">
-            <div class="grid three">
-              ${metric("CPU", formatValue(hw.system?.processor_usage_percent, "%"), "Temp " + formatValue(hw.system?.processor_temperature_c, " C"))}
-              ${metric("RAM", formatValue(hw.system?.memory_usage_percent, "%"), formatValue(hw.system?.memory_size_gib, " GiB"))}
-              ${metric(t("display"), formatValue(hw.display?.power), t("brightness") + " " + formatValue(hw.display?.brightness, "%"))}
-            </div>
-            <div class="grid two">
+          <div class="page-stack">
+            <section class="status-strip">
+              ${statusTile("CPU", formatValue(hw.system?.processor_usage_percent, "%"), Number(hw.system?.processor_usage_percent || 0) > 250 ? "warn" : "", `${t("temperature")} ${formatValue(hw.system?.processor_temperature_c, " C")}`)}
+              ${statusTile("RAM", formatValue(hw.system?.memory_usage_percent, "%"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
+              ${statusTile(t("storage"), formatValue(hw.system?.disk_usage?.percent, "%"), "", formatValue(hw.system?.disk_usage?.available_gb, " GB " + t("available")))}
+              ${statusTile(t("display"), formatValue(hw.display?.power), String(hw.display?.power || "").toUpperCase() === "ON" ? "ok" : "", `${t("brightness")} ${formatValue(hw.display?.brightness, "%")}`)}
+            </section>
+            <div class="settings-columns">
               <div class="card">
-                <div class="head"><h3>${esc(t("display"))}</h3><span class="chip">${esc(hw.display?.command || t("unsupported"))}</span></div>
+                <div class="head"><div><h3>${esc(t("displayAndInput"))}</h3><span class="section-kicker">${esc(hw.display?.command || t("unsupported"))}</span></div></div>
                 <div class="body form-grid">
                   ${selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]])}
                   ${field("display-brightness", t("brightness"), "number", "", hw.display?.brightness || 80)}
-                  <button data-action="display-apply" class="primary span-2">${esc(t("apply"))}</button>
+                  <button data-action="display-apply" class="primary span-2">${esc(t("applyDisplay"))}</button>
                 </div>
               </div>
               <div class="card">
-                <div class="head"><h3>${esc(t("audio"))}</h3></div>
+                <div class="head"><div><h3>${esc(t("audio"))}</h3><span class="section-kicker">${esc(t("volumeAndMicrophone"))}</span></div></div>
                 <div class="body form-grid">
                   ${field("audio-volume", t("volume"), "number", "", hw.audio?.volume || 50)}
                   ${field("audio-mic", t("microphone"), "number", "", hw.audio?.microphone || 50)}
                   ${selectHtml("keyboard-power", t("keyboard"), "ON", [["ON", t("on")], ["OFF", t("off")]])}
-                  <button data-action="audio-apply" class="primary">${esc(t("apply"))}</button>
+                  <button data-action="audio-apply" class="primary">${esc(t("applyAudio"))}</button>
                 </div>
               </div>
             </div>
-            <div class="grid two">
+            <div class="settings-columns">
+              <div class="card">
+                <div class="head"><div><h3>${esc(t("timeSettings"))}</h3><span class="section-kicker">${esc(t("timeAndTimezone"))}</span></div><button data-action="time-save" class="primary">${esc(t("save"))}</button></div>
+                <div class="body form-grid">
+                  ${field("time-ntp", t("ntpServer"), "text", "", timeCfg.ntp_server || "pool.ntp.org")}
+                  ${field("time-zone", t("timezone"), "text", "", timeCfg.timezone || "")}
+                </div>
+              </div>
               <div class="card"><div class="head"><h3>${esc(t("device"))}</h3></div><div class="body">${kvTable(objectEntries(hw.device))}</div></div>
-              <div class="card"><div class="head"><h3>${esc(t("support"))}</h3></div><div class="body">${kvTable(objectEntries(hw.support))}</div></div>
             </div>
+            <details class="card disclosure"><summary>${esc(t("technicalDetails"))}</summary><div class="disclosure-body settings-columns"><div>${kvTable(objectEntries(hw.system))}</div><div>${kvTable(objectEntries(hw.support))}</div></div></details>
           </div>`;
       }
 
       function renderSystemActions() {
         const privilege = state.privilege || {};
-        const timeCfg = state.config?.time || {};
+        const repairIssues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
         return `
-          <div class="grid">
-            <div class="grid two">
+          <div class="page-stack">
+            <section class="status-strip">
+              ${statusTile(t("privilege"), privilege.configured ? t("configured") : t("notConfigured"), privilege.configured ? "ok" : "warn", privilege.mode || "sudo")}
+              ${statusTile(t("jobs"), String(state.jobs.length), "", state.jobs.some((job) => !job.finished) ? t("jobRunning") : t("noActiveJobs"))}
+              ${statusTile(t("repairCenter"), repairIssues.length ? `${repairIssues.length} ${t("issues")}` : t("ready"), repairIssues.length ? "warn" : "ok", state.repair?.changed ? t("repairChanged") : t("noRepairIssues"))}
+            </section>
+            <div class="settings-columns">
               <div class="card">
-                <div class="head"><h3>${esc(t("privilege"))}</h3><span class="chip ${privilege.configured ? "ok" : ""}">${esc(privilege.configured ? t("configured") : t("notConfigured"))}</span></div>
+                <div class="head"><div><h3>${esc(t("privilege"))}</h3><span class="section-kicker">${esc(t("privilegeSession"))}</span></div><span class="chip ${privilege.configured ? "ok" : ""}">${esc(privilege.configured ? t("configured") : t("notConfigured"))}</span></div>
                 <div class="body form-grid">
                   ${selectHtml("priv-mode", t("privilegeMode"), privilege.mode || "sudo", [["sudo", "sudo"], ["su", "su / root"]])}
                   ${field("priv-password", t("password"), "password", "current-password", "")}
                   <div class="span-2">${switchHtml("priv-remember", t("rememberPassword"), false)}</div>
-                  <button data-action="priv-clear">${esc(t("clearPrivilege"))}</button>
+                  <button data-action="priv-clear" class="span-2">${esc(t("clearPrivilege"))}</button>
                 </div>
               </div>
               <div class="card">
-                <div class="head"><h3>${esc(t("privilegedActions"))}</h3></div>
-                <div class="body actions">
-                  ${button("aptUpdate", "sys-apt-update")}
-                  ${button("aptUpgrade", "sys-apt-upgrade")}
-                  ${button("restartService", "sys-restart-service", "primary")}
-                  ${button("reboot", "sys-reboot", "danger")}
-                  ${button("shutdown", "sys-shutdown", "danger")}
+                <div class="head"><div><h3>${esc(t("systemActions"))}</h3><span class="section-kicker">${esc(t("privilegedActions"))}</span></div></div>
+                <div class="body action-list">
+                  <div><span>${esc(t("packageMaintenance"))}</span><div class="actions">${button("aptUpdate", "sys-apt-update")}${button("aptUpgrade", "sys-apt-upgrade")}</div></div>
+                  <div><span>${esc(t("service"))}</span><div class="actions">${button("restartService", "sys-restart-service", "primary")}</div></div>
+                  <div class="danger-zone"><span>${esc(t("power"))}</span><div class="actions">${button("reboot", "sys-reboot", "danger-ghost")}${button("shutdown", "sys-shutdown", "danger")}</div></div>
                 </div>
               </div>
             </div>
             <div class="card">
-              <div class="head"><h3>${esc(t("timeSettings"))}</h3><button data-action="time-save" class="primary">${esc(t("save"))}</button></div>
-              <div class="body form-grid">
-                ${field("time-ntp", t("ntpServer"), "text", "", timeCfg.ntp_server || "pool.ntp.org")}
-                ${field("time-zone", t("timezone"), "text", "", timeCfg.timezone || "")}
-              </div>
+              <div class="head"><div><h3>${esc(t("repairCenter"))}</h3><span class="section-kicker">${esc(t("configurationCheck"))}</span></div><div class="actions">${button("refresh", "repair-check")}${button("runRepair", "repair-run", "primary")}</div></div>
+              <div class="body">${renderRepair()}</div>
             </div>
             <div class="card">
-              <div class="head"><h3>${esc(t("jobs"))}</h3></div>
+              <div class="head"><div><h3>${esc(t("jobs"))}</h3><span class="section-kicker">${esc(t("jobOutput"))}</span></div></div>
               <div class="body">
-                <pre class="terminal" id="job-output">${esc(renderJobs())}</pre>
+                <pre class="terminal compact-log" id="job-output">${esc(renderJobs())}</pre>
               </div>
             </div>
           </div>`;
@@ -862,14 +848,16 @@
 
       function renderTerminal() {
         return `
-          <div class="card">
-            <div class="head"><h3>${esc(t("terminal"))}</h3><span class="hint">${esc(t("terminalHint"))}</span></div>
-            <div class="body grid">
-              <div class="row">
-                <input id="terminal-command" value="systemctl --user status kioskmate.service --no-pager" />
-                <button class="primary" data-busy="terminal-run" data-action="terminal-run">${esc(t("runCommand"))}</button>
+          <div class="page-stack">
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("terminal"))}</h3><span class="section-kicker">${esc(t("terminalHint"))}</span></div></div>
+              <div class="body grid">
+                <div class="terminal-command">
+                  <input id="terminal-command" aria-label="${esc(t("command"))}" value="systemctl --user status kioskmate.service --no-pager" />
+                  <button class="primary" data-busy="terminal-run" data-action="terminal-run">${esc(t("runCommand"))}</button>
+                </div>
+                <pre class="terminal">${esc(state.terminal || "")}</pre>
               </div>
-              <pre class="terminal">${esc(state.terminal || "")}</pre>
             </div>
           </div>`;
       }
@@ -884,20 +872,22 @@
           ["paths", t("logPaths")],
         ];
         return `
-          <div class="card">
-            <div class="head">
-              <h3>${esc(t("logs"))}</h3>
-              <div class="row">
-                <input id="log-lines" type="number" min="20" max="2000" value="300" />
-                <select id="log-source">${sources.map(([value, label]) => `<option value="${esc(value)}" ${state.logSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
-                <button data-busy="logs-refresh" data-action="logs-refresh">${esc(t("refreshLogs"))}</button>
+          <div class="page-stack">
+            <section class="section-toolbar log-toolbar">
+              <div class="log-filters">
+                ${selectHtml("log-source", t("logSource"), state.logSource, sources)}
+                ${field("log-lines", t("logLines"), "number", "", 300)}
+              </div>
+              <div class="actions">
+                <button class="primary" data-busy="logs-refresh" data-action="logs-refresh">${esc(t("refreshLogs"))}</button>
                 <button data-action="logs-download">${esc(t("downloadLogs"))}</button>
                 <button data-action="diagnostics-download">${esc(t("diagnosticBundle"))}</button>
               </div>
-            </div>
-            <div class="body grid">
-              ${state.logWarning ? `<div class="notice warn">${esc(state.logWarning)}</div>` : ""}
-              <pre class="logbox">${esc((state.logs || []).join("\n"))}</pre>
+            </section>
+            ${state.logWarning ? `<div class="notice warn">${esc(state.logWarning)}</div>` : ""}
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("logs"))}</h3><span class="section-kicker">${esc(t("logSource"))}: ${esc(t(`log${state.logSource.charAt(0).toUpperCase()}${state.logSource.slice(1)}`))}</span></div></div>
+              <pre class="logbox log-output">${esc((state.logs || []).join("\n"))}</pre>
             </div>
           </div>`;
       }
@@ -944,72 +934,89 @@
         const perf = cfg.performance || {};
         const watchdog = cfg.watchdog || {};
         return `
-          <div class="grid">
-            <div class="card">
-              <div class="head">
-                <h3>${esc(t("browserPerformance"))}</h3>
-                <div class="actions">${button("safeMode", "safe-mode")}${button("testBrowser", "browser-diagnostics")}${button("save", "browser-settings-save", "primary")}${button("saveRestart", "browser-settings-save-restart")}</div>
+          <div class="page-stack">
+            <div class="settings-columns">
+              <div class="card">
+                <div class="head"><div><h3>${esc(t("appearance"))}</h3><span class="section-kicker">${esc(t("displayRendering"))}</span></div></div>
+                <div class="body form-grid">
+                  ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")], ["force-dark", t("forceDark")]])}
+                  ${field("kiosk-zoom", t("zoomPercent"), "number", "", kiosk.zoom_percent || 125)}
+                  <div class="span-2">${switchHtml("kiosk-widget", t("widgetFlag"), kiosk.widget !== false)}</div>
+                  <p class="hint span-2">${esc(t("themeSyncHint"))}</p>
+                </div>
               </div>
-              <div class="body form-grid">
-                ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
-                ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
-                ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
-                <div class="span-2">${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}</div>
-                ${selectHtml("kiosk-theme", t("themeField"), kiosk.theme || "dark", [["dark", t("dark")], ["light", t("light")], ["force-dark", t("forceDark")]])}
-                ${field("kiosk-zoom", t("zoomPercent"), "number", "", kiosk.zoom_percent || 125)}
-                <p class="hint span-2">${esc(t("themeSyncHint"))}</p>
-                ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "low-power", [["low-power", t("lowPower")], ["raspberry", t("raspberry")], ["minimal", t("minimal")], ["balanced", t("balanced")], ["quality", t("quality")], ["conservative", t("conservative")]])}
-                ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
-                <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
-                <div class="span-2">${switchHtml("kiosk-widget", t("widgetFlag"), kiosk.widget !== false)}</div>
-                <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
-                <div class="span-2">${switchHtml("watchdog-enabled", t("watchdogEnabled"), watchdog.enabled !== false)}</div>
+              <div class="card">
+                <div class="head"><div><h3>${esc(t("performance"))}</h3><span class="section-kicker">${esc(t("resourceProfile"))}</span></div>${button("safeMode", "safe-mode")}</div>
+                <div class="body form-grid">
+                  ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "low-power", [["low-power", t("lowPower")], ["raspberry", t("raspberry")], ["minimal", t("minimal")], ["balanced", t("balanced")], ["quality", t("quality")], ["conservative", t("conservative")]])}
+                  ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
+                  <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("watchdog"))}</h3><span class="section-kicker">${esc(t("browserProtection"))}</span></div>${switchHtml("watchdog-enabled", t("enabled"), watchdog.enabled !== false)}</div>
+              <div class="body form-grid four-fields">
                 ${field("watchdog-rss", t("maxMemory"), "number", "", watchdog.max_rss_mb || 900)}
                 ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 300)}
                 ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 600))}
                 ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
-                <div class="span-2">${state.diagnostics ? kvTable(objectEntries(state.diagnostics)) : `<p class="hint">${esc(t("safeModeHint"))}</p>`}</div>
               </div>
             </div>
+            <details class="card disclosure advanced-settings">
+              <summary>${esc(t("advancedBrowserSettings"))}</summary>
+              <div class="disclosure-body form-grid">
+                ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
+                ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
+                ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
+                <div>${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}</div>
+                <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
+                <div class="span-2">${button("testBrowser", "browser-diagnostics")}</div>
+                ${state.diagnostics ? `<div class="span-2">${kvTable(objectEntries(state.diagnostics))}</div>` : ""}
+              </div>
+            </details>
+            <div class="save-bar"><span>${esc(t("browserRestartHint"))}</span><div class="actions">${button("save", "browser-settings-save")}${button("saveRestart", "browser-settings-save-restart", "primary")}</div></div>
           </div>`;
       }
 
       function renderSettingsConfig() {
         const cfg = state.config || {};
         return `
-          <div class="grid">
+          <div class="page-stack">
             <div class="card">
-              <div class="head"><h3>${esc(t("configFile"))}</h3><div class="actions">${button("exportConfig", "config-export")}${button("importConfig", "config-import")}${button("saveRaw", "config-raw-save", "primary")}</div></div>
-              <div class="body grid">
-                ${kvTable([[t("configFile"), cfg.path || "-"]])}
+              <div class="head"><div><h3>${esc(t("configAndBackups"))}</h3><span class="section-kicker">${esc(cfg.path || "-")}</span></div><div class="actions">${button("exportConfig", "config-export")}${button("importConfig", "config-import")}</div></div>
+              <div class="body">
                 <input id="config-import-file" type="file" accept="application/json,.json" class="hidden" />
+                ${renderBackups()}
+              </div>
+            </div>
+            <details class="card disclosure advanced-settings">
+              <summary>${esc(t("rawConfig"))}</summary>
+              <div class="disclosure-body grid">
                 ${textarea("config-raw", t("rawConfig"), JSON.stringify(cfg, null, 2))}
+                <div class="actions">${button("saveRaw", "config-raw-save", "primary")}</div>
               </div>
-            </div>
-            <div class="grid two">
-              <div class="card">
-                <div class="head"><h3>${esc(t("backups"))}</h3><button data-action="backups-refresh">${esc(t("refresh"))}</button></div>
-                <div class="body">${renderBackups()}</div>
-              </div>
-            </div>
+            </details>
           </div>`;
       }
 
       function renderSettingsMaintenance() {
         return `
-          <div class="grid">
+          <div class="page-stack">
+            <section class="status-strip">
+              ${statusTile(t("installed"), state.update?.current_version || state.update?.current || state.auth?.version || "-", "ok", t("currentVersion"))}
+              ${statusTile(t("latest"), state.update?.latest_version || state.update?.latest || t("notChecked"), state.update?.update_available ? "warn" : "", state.update?.update_available ? t("updateAvailable") : t("upToDate"))}
+            </section>
             <div class="card">
-              <div class="head"><h3>${esc(t("repairCenter"))}</h3><div class="actions">${button("refresh", "repair-check")}${button("runRepair", "repair-run", "primary")}</div></div>
-              <div class="body">${renderRepair()}</div>
-            </div>
-            <div class="card">
-              <div class="head"><h3>${esc(t("update"))}</h3><div class="actions">${button("checkUpdate", "update-check")}${button("installUpdate", "update-install", "primary")}</div></div>
-              <div class="body grid">
-                ${kvTable([[t("installed"), state.update?.current_version || state.update?.current || state.auth?.version || "-"], [t("latest"), state.update?.latest_version || state.update?.latest || "-"], [t("url"), state.update?.asset?.url || state.update?.asset_url || state.update?.url || "-"]])}
-                <pre class="terminal">${esc(renderJobs())}</pre>
+              <div class="head"><div><h3>${esc(t("update"))}</h3><span class="section-kicker">${esc(t("releaseChannel"))}: ${esc(state.update?.channel || "stable")}</span></div><div class="actions">${button("checkUpdate", "update-check")}${button("installUpdate", "update-install", "primary")}</div></div>
+              <div class="body update-layout">
                 <div>
                   <label>${esc(t("changelog"))}</label>
                   <pre class="jsonbox">${esc(state.update?.changelog || "")}</pre>
+                </div>
+                <div>
+                  <label>${esc(t("jobOutput"))}</label>
+                  <pre class="terminal">${esc(renderJobs())}</pre>
                 </div>
               </div>
             </div>
@@ -1018,10 +1025,14 @@
 
       function bindView() {
         if (state.view === "dashboard") bindDashboard();
-        if (state.view === "kiosk") bindKiosk();
+        if (state.view === "kiosk" || state.view === "kiosk-pages") bindKiosk();
+        if (state.view === "kiosk-schedule") bindScheduler();
         if (state.view === "mqtt") bindMQTT();
-        if (state.view === "system" || state.view === "system-actions") bindSystem();
-        if (state.view === "system-hardware") bindHardware();
+        if (state.view === "system" || state.view === "system-maintenance") bindSystemMaintenance();
+        if (state.view === "system-device") {
+          bindHardware();
+          bindSystem();
+        }
         if (state.view === "system-terminal") bindTerminal();
         if (state.view === "system-logs") bindLogs();
         if (state.view.startsWith("settings")) bindSettings();
@@ -1080,6 +1091,18 @@
         if (status.state === "failed") return `${t("failed")}: ${status.error || "-"}`;
         const mode = status.applied_dark ? t("dark") : t("light");
         return `${t("applied")}: ${status.selected_theme || status.requested_theme || "default"} / ${mode}`;
+      }
+
+      function formatSchedulerReason(reason) {
+        const key = {
+          disabled: "disabled",
+          time: "timeMode",
+          rotation: "rotationMode",
+          "no active time rule": "noActiveRule",
+          "no rotation items": "noRotationItems",
+          "unsupported mode": "unsupportedMode",
+        }[String(reason || "").toLowerCase()];
+        return key ? t(key) : (reason || "-");
       }
 
       async function repairHASession() {
@@ -1348,9 +1371,6 @@
           cfg.kiosk = cfg.kiosk || {};
           cfg.kiosk.pages = collectPages();
           cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
-          cfg.kiosk.scheduler = { enabled: checked("scheduler-enabled"), mode: val("scheduler-mode"), tick_interval: durationToNs(val("scheduler-tick")) };
-          cfg.kiosk.rotation = collectRotation();
-          cfg.kiosk.time_rules = collectRules();
           await postJSON("/api/config", cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
@@ -1517,6 +1537,9 @@
 
       function bindScheduler() {
         document.querySelector('[data-action="scheduler-save"]')?.addEventListener("click", saveScheduler);
+        document.querySelector('[data-action="rotation-build"]')?.addEventListener("click", buildRotationFromPages);
+        document.querySelector('[data-action="rotation-clear"]')?.addEventListener("click", () => clearKioskList("rotation"));
+        document.querySelector('[data-action="rules-clear"]')?.addEventListener("click", () => clearKioskList("time_rules"));
         document.querySelector('[data-action="rotation-add"]')?.addEventListener("click", () => {
           const cfg = cloneConfig();
           cfg.kiosk = cfg.kiosk || {};
@@ -1706,6 +1729,19 @@
         document.querySelector('[data-action="time-save"]')?.addEventListener("click", saveTimeSettings);
       }
 
+      function bindSystemMaintenance() {
+        bindSystem();
+        document.querySelector('[data-action="repair-check"]')?.addEventListener("click", checkRepair);
+        document.querySelector('[data-action="repair-run"]')?.addEventListener("click", runRepair);
+        if (!state.loaded.repair) {
+          state.loaded.repair = true;
+          getJSON("/api/repair").then((data) => {
+            state.repair = data;
+            if (state.view === "system-maintenance") renderApp();
+          }).catch(() => {});
+        }
+      }
+
       async function startSystemJob(action, name) {
         await runAction(action, async () => {
           const job = await postJSON("/api/system/" + name, { mode: val("priv-mode"), password: val("priv-password"), remember: checked("priv-remember") });
@@ -1734,7 +1770,7 @@
             const job = await getJSON("/api/jobs/" + encodeURIComponent(id));
             const index = state.jobs.findIndex((item) => item.id === id);
             if (index >= 0) state.jobs[index] = job;
-            if (state.view === "system" || state.view === "system-actions") {
+            if (state.view === "system" || state.view === "system-maintenance") {
               const output = document.getElementById("job-output");
               if (output) output.textContent = renderJobs();
             }
@@ -1811,21 +1847,17 @@
           });
         });
         document.querySelectorAll("[data-restore]").forEach((button) => button.addEventListener("click", () => restoreBackup(button.dataset.restore)));
-        if (!state.loaded.sessions) {
+        if (state.view === "settings-admin" && !state.loaded.sessions) {
           state.loaded.sessions = true;
           getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view.startsWith("settings")) renderApp(); }).catch(() => {});
         }
-        if (!state.loaded.ssh) {
+        if (state.view === "settings-admin" && !state.loaded.ssh) {
           state.loaded.ssh = true;
           getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view.startsWith("settings")) renderApp(); }).catch(() => {});
         }
-        if (!state.loaded.backups) {
+        if (state.view === "settings-config" && !state.loaded.backups) {
           state.loaded.backups = true;
           loadBackups().catch(() => {});
-        }
-        if (!state.loaded.repair) {
-          state.loaded.repair = true;
-          checkRepair().catch(() => {});
         }
       }
 
@@ -1959,7 +1991,7 @@
           const index = state.jobs.findIndex((item) => item.id === id);
           if (index >= 0) state.jobs[index] = job;
           else state.jobs.unshift(job);
-          if (state.view === "settings-maintenance") renderApp();
+          if (state.view === "settings-updates") renderApp();
           if (job.finished || job.exit_code >= 0) return;
           await sleep(1000);
         }
@@ -1972,26 +2004,27 @@
           .map((page, index) => {
             const matches = !filter || String(page.name || "").toLowerCase().includes(filter) || String(page.url || "").toLowerCase().includes(filter);
             return `
-            <div class="page-card ${state.status?.browser?.active === index ? "active" : ""}" ${matches ? "" : "hidden"}>
-              <div>
-                ${field(`page-name-${index}`, t("pageName"), "text", "", page.name || "")}
-                <div class="page-card-meta">
-                  <span class="chip">${index + 1}</span>
-                  ${page.disabled ? `<span class="chip warn">${esc(t("disabled"))}</span>` : `<span class="chip ok">${esc(t("enabled"))}</span>`}
+            <article class="page-item ${state.status?.browser?.active === index ? "active" : ""}" ${matches ? "" : "hidden"}>
+              <div class="page-item-index">${index + 1}</div>
+              <div class="page-item-content">
+                <div class="page-item-fields">
+                  ${field(`page-name-${index}`, t("pageName"), "text", "", page.name || "")}
+                  ${field(`page-url-${index}`, t("pageUrl"), "url", "", page.url || "")}
+                </div>
+                <div class="page-item-footer">
+                  <div class="page-selectors">
+                    <label class="inline-choice"><input data-page-active value="${index}" name="active-page" type="radio" ${state.status?.browser?.active === index ? "checked" : ""}><span>${esc(t("selectPage"))}</span></label>
+                    <label class="inline-choice"><input id="page-disabled-${index}" type="checkbox" ${page.disabled ? "checked" : ""}><span>${esc(t("disabled"))}</span></label>
+                  </div>
+                  <div class="actions page-order-actions">
+                    <button title="${esc(t("moveUp"))}" aria-label="${esc(t("moveUp"))}" data-page-move="${index}" data-direction="-1" ${index === 0 ? "disabled" : ""}>↑</button>
+                    <button title="${esc(t("moveDown"))}" aria-label="${esc(t("moveDown"))}" data-page-move="${index}" data-direction="1" ${index === pages.length - 1 ? "disabled" : ""}>↓</button>
+                    <button data-page-duplicate="${index}">${esc(t("duplicate"))}</button>
+                    <button data-page-remove="${index}" class="danger-ghost">${esc(t("remove"))}</button>
+                  </div>
                 </div>
               </div>
-              ${field(`page-url-${index}`, t("pageUrl"), "url", "", page.url || "")}
-              <div class="page-card-actions">
-                <label class="switch"><span>${esc(t("activePage"))}</span><input data-page-active value="${index}" name="active-page" type="radio" ${state.status?.browser?.active === index ? "checked" : ""}></label>
-                <label class="switch"><span>${esc(t("disabled"))}</span><input id="page-disabled-${index}" type="checkbox" ${page.disabled ? "checked" : ""}></label>
-                <div class="row">
-                  <button data-page-move="${index}" data-direction="-1" ${index === 0 ? "disabled" : ""}>${esc(t("moveUp"))}</button>
-                  <button data-page-move="${index}" data-direction="1" ${index === pages.length - 1 ? "disabled" : ""}>${esc(t("moveDown"))}</button>
-                </div>
-                <button data-page-duplicate="${index}">${esc(t("duplicate"))}</button>
-                <button data-page-remove="${index}" class="danger">${esc(t("remove"))}</button>
-              </div>
-            </div>`;
+            </article>`;
           })
           .join("")}</div>`;
       }
@@ -1999,7 +2032,7 @@
       function renderSchedulerStatus(scheduler) {
         return `
           <div class="status-grid">
-            ${metric(t("schedulerStatus"), scheduler.enabled ? t("enabled") : t("disabled"), scheduler.reason || "-")}
+            ${metric(t("schedulerStatus"), scheduler.enabled ? t("enabled") : t("disabled"), formatSchedulerReason(scheduler.reason))}
             ${metric(t("nextSwitch"), formatDate(scheduler.next_switch), scheduler.active_rule ? `${t("activeRule")}: ${scheduler.active_rule}` : `${t("mode")}: ${scheduler.mode || "-"}`)}
           </div>`;
       }
@@ -2091,8 +2124,8 @@
       }
 
       function renderRepair() {
-        const issues = state.repair?.issues || [];
-        if (!issues.length) return `<div class="empty">${esc(t("noData"))}</div>`;
+        const issues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
+        if (!issues.length) return `<div class="empty">${esc(t("noConfigIssues"))}</div>`;
         return table([t("diagnostics"), t("status")], issues.map((issue) => [
           issue.message || issue.id || "-",
           issue.fixed ? t("repairChanged") : t("noRepairIssues"),
@@ -2106,6 +2139,7 @@
 
       function collectPages() {
         const existing = normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls);
+        if (!document.getElementById("page-name-0")) return existing.map((page) => ({ ...page }));
         return existing.map((_, index) => ({
           name: val(`page-name-${index}`),
           url: val(`page-url-${index}`),
@@ -2115,11 +2149,13 @@
 
       function collectRotation() {
         const items = state.config?.kiosk?.rotation || [];
+        if (!document.getElementById("rotation-page-0")) return items.map((item) => ({ ...item }));
         return items.map((_, index) => ({ page: Number(val(`rotation-page-${index}`) || 0), duration_seconds: Number(val(`rotation-duration-${index}`) || 3600) }));
       }
 
       function collectRules() {
         const items = state.config?.kiosk?.time_rules || [];
+        if (!document.getElementById("rule-name-0")) return items.map((item) => ({ ...item, days: [...(item.days || [])] }));
         return items.map((_, index) => ({
           name: val(`rule-name-${index}`),
           page: Number(val(`rule-page-${index}`) || 0),
@@ -2163,6 +2199,14 @@
 
       function metric(title, value, hint = "") {
         return `<div class="metric"><span class="muted">${esc(title)}</span><strong>${esc(value)}</strong><span class="hint">${esc(hint)}</span></div>`;
+      }
+
+      function statusTile(title, value, stateClass = "", meta = "") {
+        return `<div class="status-tile ${esc(stateClass)}"><span>${esc(title)}</span><strong>${esc(value)}</strong><small>${esc(meta)}</small></div>`;
+      }
+
+      function healthRow(title, value, stateClass = "") {
+        return `<div class="health-row"><span>${esc(title)}</span><strong class="status-text ${esc(stateClass)}">${esc(value)}</strong></div>`;
       }
 
       function kvTable(rows) {

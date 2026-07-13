@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.0
+
+- Rebuilt the embedded Admin UI around five predictable operating areas: Dashboard, Kiosk, MQTT, System and Settings.
+- Split Kiosk management into independent Pages and Schedule views so saving page changes can no longer overwrite rotations or time rules, and vice versa.
+- Reworked the Dashboard into a focused quick-control surface with live snapshot, active-page controls, health indicators and a collapsed recovery section.
+- Consolidated device controls, hardware status, NTP and timezone settings under System -> Device and time.
+- Consolidated privileged package, service and power actions, configuration repair and job output under System -> Maintenance.
+- Moved browser appearance, performance, watchdog and advanced Chromium settings into clearly separated Settings sections.
+- Moved updater state, changelog and update jobs into Settings -> Updates while keeping repair operations with system maintenance.
+- Reorganized MQTT into connection, Home Assistant discovery, advanced options, live test output and a single persistent save action.
+- Added responsive layouts with contained horizontal navigation and verified zero document overflow on mobile viewports.
+- Added complete English/German labels for the new information architecture and automated translation parity checks in CI and release builds.
+- Reduced duplicated controls, nested panels, visual noise and unsolicited background diagnostics while preserving all existing APIs and configuration data.
+
 ## v0.1.11
 
 - Matched TouchKio's Electron `nativeTheme` behavior by emulating `prefers-color-scheme` directly on Chromium's active rendering target through DevTools.
