@@ -36,28 +36,36 @@ type Browser interface {
 	Status() supervisor.Status
 }
 
+type runtimeBrowser interface {
+	Recover(context.Context, string) error
+	SetOverride(context.Context, int, time.Duration, string) error
+	ClearOverride() error
+	ResetTelemetry() error
+}
+
 type MQTTService struct {
-	cfg            *config.Config
-	browser        Browser
-	hardware       *hardware.Service
-	updater        *updater.Service
-	actions        *actions.Service
-	logger         *slog.Logger
-	version        string
-	client         *mqttclient.Client
-	command        *mqttclient.Client
-	cache          map[string]string
-	health         map[string]pageHealth
-	healthIx       int
-	cleaned        bool
-	mu             sync.Mutex
-	healthNext     map[string]time.Time
-	healthFailures map[string]int
-	state          string
-	lastError      string
-	lastConnected  time.Time
-	lastPublished  time.Time
-	failures       int
+	cfg              *config.Config
+	browser          Browser
+	hardware         *hardware.Service
+	updater          *updater.Service
+	actions          *actions.Service
+	logger           *slog.Logger
+	version          string
+	client           *mqttclient.Client
+	command          *mqttclient.Client
+	cache            map[string]string
+	health           map[string]pageHealth
+	healthIx         int
+	cleaned          bool
+	mu               sync.Mutex
+	healthNext       map[string]time.Time
+	healthFailures   map[string]int
+	state            string
+	lastError        string
+	lastConnected    time.Time
+	lastPublished    time.Time
+	failures         int
+	overrideDuration time.Duration
 }
 
 type MQTTConnectionStatus struct {
@@ -90,7 +98,7 @@ type pageHealth struct {
 
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
 	_ = cfg.Snapshot()
-	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled"}
+	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled", overrideDuration: time.Hour}
 }
 
 func (s *MQTTService) ConnectionStatus() MQTTConnectionStatus {
@@ -326,6 +334,11 @@ func (s *MQTTService) commands(ctx context.Context) {
 		s.root() + "/next/execute",
 		s.root() + "/previous/execute",
 		s.root() + "/reset_session/execute",
+		s.root() + "/recovery/execute",
+		s.root() + "/override/page/set",
+		s.root() + "/override/duration/set",
+		s.root() + "/override/clear",
+		s.root() + "/telemetry/reset",
 		s.root() + "/shutdown/execute",
 		s.root() + "/reboot/execute",
 		s.root() + "/restart_service/execute",
@@ -408,6 +421,49 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		err = s.browser.Previous(actionCtx)
 	case strings.HasSuffix(topic, "/reset_session/execute"):
 		err = s.browser.ResetSession(actionCtx)
+	case strings.HasSuffix(topic, "/recovery/execute"):
+		if runtime, ok := s.browser.(runtimeBrowser); ok {
+			err = runtime.Recover(actionCtx, "requested from Home Assistant")
+		} else {
+			err = errors.New("runtime recovery unavailable")
+		}
+	case strings.HasSuffix(topic, "/override/duration/set"):
+		minutes := atoi(command)
+		if minutes < 1 {
+			minutes = 1
+		}
+		if minutes > 1440 {
+			minutes = 1440
+		}
+		s.mu.Lock()
+		s.overrideDuration = time.Duration(minutes) * time.Minute
+		s.mu.Unlock()
+	case strings.HasSuffix(topic, "/override/page/set"):
+		if runtime, ok := s.browser.(runtimeBrowser); ok {
+			page := s.pageIndex(command)
+			if page < 0 {
+				err = fmt.Errorf("unknown kiosk page %q", command)
+			} else {
+				s.mu.Lock()
+				duration := s.overrideDuration
+				s.mu.Unlock()
+				err = runtime.SetOverride(actionCtx, page, duration, "home_assistant")
+			}
+		} else {
+			err = errors.New("page overrides unavailable")
+		}
+	case strings.HasSuffix(topic, "/override/clear"):
+		if runtime, ok := s.browser.(runtimeBrowser); ok {
+			err = runtime.ClearOverride()
+		} else {
+			err = errors.New("page overrides unavailable")
+		}
+	case strings.HasSuffix(topic, "/telemetry/reset"):
+		if runtime, ok := s.browser.(runtimeBrowser); ok {
+			err = runtime.ResetTelemetry()
+		} else {
+			err = errors.New("runtime telemetry unavailable")
+		}
 	case strings.HasSuffix(topic, "/shutdown/execute"):
 		_, err = s.actions.Start(actionCtx, "shutdown")
 	case strings.HasSuffix(topic, "/reboot/execute"):
@@ -595,6 +651,9 @@ func (s *MQTTService) publishAll() error {
 		"page_url":      status.URL,
 		"scheduler":     status.Scheduler,
 		"watchdog":      status.Watchdog,
+		"recovery":      status.Recovery,
+		"telemetry":     status.Telemetry,
+		"override":      status.Override,
 		"version":       s.version,
 		"mqtt_version":  cfg.MQTT.Version,
 		"updated":       time.Now().UTC().Format(time.RFC3339),
@@ -637,6 +696,33 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
 	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
 	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
+	_ = s.publishState(client, "browser_process_count", fmt.Sprintf("%d", len(status.Stats.PIDs)), false)
+	_ = s.publishState(client, "recovery_state", firstString(status.Recovery.State, "idle"), true)
+	_ = s.publishState(client, "recovery_stage", firstString(status.Recovery.Stage, "none"), true)
+	_ = s.publishState(client, "recovery_reason", firstString(status.Recovery.Reason, "none"), true)
+	_ = s.publishState(client, "recovery_result", firstString(status.Recovery.LastResult, "none"), true)
+	_ = s.publishState(client, "recovery_attempts", fmt.Sprintf("%d", status.Recovery.Attempts), true)
+	if status.Recovery.BackoffUntil != nil {
+		_ = s.publishState(client, "recovery_backoff_until", status.Recovery.BackoffUntil.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "recovery_backoff_until", "none", true)
+	}
+	_ = s.publishState(client, "telemetry_samples", fmt.Sprintf("%d", status.Telemetry.Samples), true)
+	_ = s.publishState(client, "telemetry_cpu_average", fmt.Sprintf("%.1f", status.Telemetry.CPUAverage), true)
+	_ = s.publishState(client, "telemetry_cpu_maximum", fmt.Sprintf("%.1f", status.Telemetry.CPUMaximum), true)
+	_ = s.publishState(client, "telemetry_rss_average", fmt.Sprintf("%.1f", status.Telemetry.RSSAverageMB), true)
+	_ = s.publishState(client, "telemetry_rss_maximum", fmt.Sprintf("%d", status.Telemetry.RSSMaximumMB), true)
+	_ = s.publishState(client, "override_active", boolState(status.Override.Active), true)
+	_ = s.publishState(client, "override_page", fmt.Sprintf("%d", status.Override.Page+1), true)
+	s.mu.Lock()
+	overrideMinutes := int(s.overrideDuration / time.Minute)
+	s.mu.Unlock()
+	_ = s.publishState(client, "override_duration", fmt.Sprintf("%d", overrideMinutes), true)
+	if status.Override.Until != nil {
+		_ = s.publishState(client, "override_until", status.Override.Until.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "override_until", "none", true)
+	}
 	if status.Started != nil {
 		_ = s.publishState(client, "browser_started", status.Started.Format(time.RFC3339), false)
 	} else {
@@ -647,6 +733,8 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "browser_devtools", boolState(status.DevTools), false)
 	_ = s.publishState(client, "auth_guard", boolState(status.AuthGuard.Tripped), true)
 	_ = s.publishState(client, "auth_guard_reason", firstString(status.AuthGuard.Reason, "none"), true)
+	_ = s.publishState(client, "auth_guard_kind", firstString(status.AuthGuard.Kind, "none"), true)
+	_ = s.publishState(client, "auth_guard_kiosk_ip", firstString(status.AuthGuard.KioskIP, "none"), true)
 	if status.AuthGuard.At != nil {
 		_ = s.publishState(client, "auth_guard_at", status.AuthGuard.At.Format(time.RFC3339), true)
 	} else {
@@ -1260,6 +1348,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		},
 	}
 	items = append(items, s.pageDiscoveryItems(device)...)
+	items = append(items, s.runtimeDiscoveryItems(device)...)
 	items = append(items,
 		discoveryItem{
 			Topic: s.discoveryTopic("binary_sensor", "browser_devtools"),
@@ -1326,6 +1415,52 @@ func (s *MQTTService) diagnosticSensor(device map[string]any, id string, name st
 		delete(item.Data, "state_class")
 	}
 	return item
+}
+
+func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryItem {
+	button := func(id, name, topic, icon string) discoveryItem {
+		return discoveryItem{Topic: s.discoveryTopic("button", id), Data: map[string]any{
+			"name": name, "unique_id": s.cfg.Snapshot().MQTT.Node + "_" + id,
+			"command_topic": s.root() + topic, "payload_press": "PRESS", "icon": icon,
+			"entity_category": "diagnostic", "device": device,
+		}}
+	}
+	items := []discoveryItem{
+		button("browser_recovery", "Browser Recovery", "/recovery/execute", "mdi:lifebuoy"),
+		button("override_clear", "Clear Page Override", "/override/clear", "mdi:timeline-remove"),
+		button("telemetry_reset", "Reset Runtime Telemetry", "/telemetry/reset", "mdi:chart-timeline-variant-shimmer"),
+		{Topic: s.discoveryTopic("select", "override_page"), Data: map[string]any{
+			"name": "Temporary Page Override", "unique_id": s.cfg.Snapshot().MQTT.Node + "_override_page",
+			"command_topic": s.root() + "/override/page/set", "state_topic": s.root() + "/page_name/state",
+			"options": s.pageNames(), "icon": "mdi:page-next-outline", "device": device,
+		}},
+		{Topic: s.discoveryTopic("number", "override_duration"), Data: map[string]any{
+			"name": "Page Override Duration", "unique_id": s.cfg.Snapshot().MQTT.Node + "_override_duration",
+			"command_topic": s.root() + "/override/duration/set", "state_topic": s.root() + "/override_duration/state",
+			"min": 1, "max": 1440, "step": 1, "unit_of_measurement": "min", "icon": "mdi:timer-sand", "device": device,
+		}},
+		{Topic: s.discoveryTopic("binary_sensor", "override_active"), Data: map[string]any{
+			"name": "Page Override Active", "unique_id": s.cfg.Snapshot().MQTT.Node + "_override_active",
+			"state_topic": s.root() + "/override_active/state", "payload_on": "ON", "payload_off": "OFF",
+			"icon": "mdi:timeline-alert", "device": device,
+		}},
+		s.diagnosticSensor(device, "override_until", "Page Override Until", "mdi:clock-end", ""),
+		s.diagnosticSensor(device, "recovery_state", "Browser Recovery State", "mdi:lifebuoy", ""),
+		s.diagnosticSensor(device, "recovery_stage", "Browser Recovery Stage", "mdi:state-machine", ""),
+		s.diagnosticSensor(device, "recovery_reason", "Browser Recovery Reason", "mdi:alert-decagram", ""),
+		s.diagnosticSensor(device, "recovery_result", "Browser Recovery Result", "mdi:check-decagram", ""),
+		s.diagnosticSensor(device, "recovery_attempts", "Browser Recovery Attempts", "mdi:counter", ""),
+		s.diagnosticSensor(device, "recovery_backoff_until", "Browser Recovery Backoff Until", "mdi:timer-lock", ""),
+		s.diagnosticSensor(device, "browser_process_count", "Browser Process Count", "mdi:family-tree", ""),
+		s.diagnosticSensor(device, "telemetry_samples", "Telemetry Samples", "mdi:chart-dots-scatter", ""),
+		s.diagnosticSensor(device, "telemetry_cpu_average", "Browser CPU 24h Average", "mdi:cpu-64-bit", "%"),
+		s.diagnosticSensor(device, "telemetry_cpu_maximum", "Browser CPU 24h Maximum", "mdi:cpu-64-bit", "%"),
+		s.diagnosticSensor(device, "telemetry_rss_average", "Browser Memory 24h Average", "mdi:memory", "MB"),
+		s.diagnosticSensor(device, "telemetry_rss_maximum", "Browser Memory 24h Maximum", "mdi:memory", "MB"),
+		s.diagnosticSensor(device, "auth_guard_kind", "HA Authentication Guard Type", "mdi:shield-key", ""),
+		s.diagnosticSensor(device, "auth_guard_kiosk_ip", "Kiosk IP For HA", "mdi:ip-network", ""),
+	}
+	return items
 }
 
 func (s *MQTTService) cleanupLegacyDiscovery(client *mqttclient.Client, current []discoveryItem) error {
@@ -1681,6 +1816,19 @@ func (s *MQTTService) pageNames() []string {
 		return []string{"Home Assistant"}
 	}
 	return names
+}
+
+func (s *MQTTService) pageIndex(value string) int {
+	value = strings.TrimSpace(value)
+	if number, err := strconv.Atoi(value); err == nil && number >= 1 && number <= len(s.pageNames()) {
+		return number - 1
+	}
+	for index, candidate := range s.pageNames() {
+		if strings.EqualFold(candidate, value) {
+			return index
+		}
+	}
+	return -1
 }
 
 func (s *MQTTService) setPageByName(ctx context.Context, name string) error {

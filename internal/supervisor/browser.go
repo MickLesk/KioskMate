@@ -21,8 +21,9 @@ import (
 )
 
 type Browser struct {
-	cfg    *config.Config
-	logger *slog.Logger
+	cfg       *config.Config
+	logger    *slog.Logger
+	persistMu sync.Mutex
 
 	mu            sync.Mutex
 	cmd           *exec.Cmd
@@ -44,6 +45,9 @@ type Browser struct {
 	devTools      bool
 	themeStatus   ThemeStatus
 	authGuard     AuthGuardStatus
+	recovery      RecoveryStatus
+	telemetry     []TelemetrySample
+	override      ManualOverride
 }
 
 type Status struct {
@@ -65,6 +69,9 @@ type Status struct {
 	DevTools   bool                    `json:"devtools"`
 	Theme      ThemeStatus             `json:"theme_status"`
 	AuthGuard  AuthGuardStatus         `json:"auth_guard"`
+	Recovery   RecoveryStatus          `json:"recovery"`
+	Telemetry  TelemetrySummary        `json:"telemetry"`
+	Override   ManualOverride          `json:"override"`
 }
 
 type ThemeStatus struct {
@@ -80,9 +87,12 @@ type ThemeStatus struct {
 }
 
 type AuthGuardStatus struct {
-	Tripped bool       `json:"tripped"`
-	Reason  string     `json:"reason,omitempty"`
-	At      *time.Time `json:"at,omitempty"`
+	Tripped         bool       `json:"tripped"`
+	Reason          string     `json:"reason,omitempty"`
+	Kind            string     `json:"kind,omitempty"`
+	SuggestedAction string     `json:"suggested_action,omitempty"`
+	KioskIP         string     `json:"kiosk_ip,omitempty"`
+	At              *time.Time `json:"at,omitempty"`
 }
 
 type WatchdogStatus struct {
@@ -119,6 +129,7 @@ type SchedulerStatus struct {
 func NewBrowser(cfg *config.Config, logger *slog.Logger) *Browser {
 	browser := &Browser{cfg: cfg, logger: logger}
 	browser.loadAuthGuard()
+	browser.loadRuntimeState()
 	return browser
 }
 
@@ -138,6 +149,8 @@ func (b *Browser) Start(ctx context.Context) error {
 	command, args, err := b.command()
 	if err != nil {
 		b.lastError = err.Error()
+		b.setStartFailureLocked(err)
+		go b.persistRuntimeState()
 		return err
 	}
 	// The browser lifetime belongs to the supervisor, not to the HTTP/MQTT
@@ -162,6 +175,8 @@ func (b *Browser) Start(ctx context.Context) error {
 			_ = logFile.Close()
 		}
 		b.lastError = err.Error()
+		b.setStartFailureLocked(err)
+		go b.persistRuntimeState()
 		return err
 	}
 	b.cmd = cmd
@@ -175,6 +190,12 @@ func (b *Browser) Start(ctx context.Context) error {
 	configuredTheme := b.cfg.Snapshot().Kiosk.Theme
 	b.themeStatus = ThemeStatus{State: "pending", Configured: configuredTheme}
 	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command, "args", args)
+	b.recovery.State = "healthy"
+	b.recovery.Stage = "running"
+	b.recovery.LastResult = "browser started"
+	now := time.Now()
+	b.recovery.LastAt = &now
+	go b.persistRuntimeState()
 	if logFile != nil {
 		_, _ = fmt.Fprintf(logFile, "started pid: %d\n", cmd.Process.Pid)
 	}
@@ -253,6 +274,7 @@ func (b *Browser) Restart(ctx context.Context) error {
 	b.mu.Lock()
 	b.restartCount++
 	b.mu.Unlock()
+	go b.persistRuntimeState()
 	if err := b.Stop(ctx); err != nil {
 		return err
 	}
@@ -352,7 +374,7 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: activeURL(cfg, b.active), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard}
+	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: activeURL(cfg, b.active), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override}
 	if !b.lastExit.IsZero() {
 		lastExit := b.lastExit
 		status.LastExit = &lastExit
@@ -424,6 +446,11 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	if expected {
 		b.lastError = ""
 		b.stopping = false
+		now := time.Now()
+		b.recovery.State = "stopped"
+		b.recovery.Stage = "stopped"
+		b.recovery.LastResult = "browser stopped normally"
+		b.recovery.LastAt = &now
 	} else if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		b.lastError = err.Error()
 		if runtime > 0 && runtime < 5*time.Second {
@@ -433,7 +460,11 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		b.lastError = fmt.Sprintf("browser exited after %s without error", runtime.Round(time.Millisecond))
 	}
 	lastError := b.lastError
+	if !expected {
+		b.prepareUnexpectedExitRecoveryLocked(runtime, lastError)
+	}
 	b.mu.Unlock()
+	b.persistRuntimeState()
 	if done != nil {
 		close(done)
 	}
@@ -452,10 +483,17 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	}
 	if err != nil && !expected && !errors.Is(err, os.ErrProcessDone) {
 		b.logger.Warn("browser exited", "error", err, "runtime", runtime)
+		b.scheduleUnexpectedExitRecovery()
 		return
 	}
 	if !expected && lastError != "" {
 		b.logger.Warn("browser exited unexpectedly", "error", lastError, "runtime", runtime)
+		b.scheduleUnexpectedExitRecovery()
+		return
+	}
+	if !expected {
+		b.logger.Warn("browser exited unexpectedly without process error", "runtime", runtime)
+		b.scheduleUnexpectedExitRecovery()
 		return
 	}
 	b.logger.Info("browser exited", "runtime", runtime)
@@ -498,11 +536,11 @@ func (b *Browser) writeCrashDiagnostic(cmd *exec.Cmd, runtime time.Duration, las
 }
 
 func (b *Browser) watch(pid int, done <-chan struct{}) {
-	cfg := b.cfg.Snapshot()
-	if !cfg.Watchdog.Enabled {
-		return
+	interval := b.cfg.Snapshot().Watchdog.CheckInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
 	}
-	ticker := time.NewTicker(cfg.Watchdog.CheckInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -515,6 +553,19 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 			}
 			b.mu.Lock()
 			b.lastStat = stats
+			if !b.started.IsZero() && time.Since(b.started) >= stableRuntime && b.recovery.Attempts > 0 {
+				b.recovery.Attempts = 0
+				b.recovery.BackoffUntil = nil
+			}
+			persist := b.recordTelemetryLocked(stats)
+			cfg := b.cfg.Snapshot()
+			if !cfg.Watchdog.Enabled {
+				b.mu.Unlock()
+				if persist {
+					b.persistRuntimeState()
+				}
+				continue
+			}
 			restart, reason := b.shouldRestart(stats)
 			if reason != "" {
 				b.watchdog.LastReason = reason
@@ -532,11 +583,14 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 				b.watchdog.LastAction = "restart"
 			}
 			b.mu.Unlock()
+			if persist {
+				b.persistRuntimeState()
+			}
 			if restart {
 				current := b.cfg.Snapshot()
 				b.logger.Warn("browser watchdog restart", "reason", reason, "rss_mb", stats.RSSMB, "rss_limit_mb", current.Watchdog.MaxRSSMB, "cpu", stats.CPUPercent, "cpu_limit", current.Watchdog.MaxCPUPercent)
 				restartCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				_ = b.Restart(restartCtx)
+				_ = b.recover(restartCtx, "watchdog: "+reason, true)
 				cancel()
 				return
 			}
@@ -653,6 +707,18 @@ func activeURL(cfg *config.Config, active int) string {
 }
 
 func (b *Browser) schedulerTarget(now time.Time) (int, SchedulerStatus) {
+	b.mu.Lock()
+	override := b.override
+	if override.Active && override.Until != nil && !now.Before(*override.Until) {
+		b.override = ManualOverride{}
+		override = ManualOverride{}
+		go b.persistRuntimeState()
+	}
+	b.mu.Unlock()
+	if override.Active {
+		status := SchedulerStatus{Enabled: true, Mode: "override", Reason: "manual override", NextSwitch: override.Until}
+		return override.Page, status
+	}
 	cfg := b.cfg.Snapshot().Kiosk
 	status := SchedulerStatus{Enabled: cfg.Scheduler.Enabled, Mode: cfg.Scheduler.Mode}
 	if !cfg.Scheduler.Enabled || cfg.PageCount() == 0 {
@@ -943,7 +1009,9 @@ func (b *Browser) tripAuthGuard(reason string) {
 		return
 	}
 	now := time.Now()
-	b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, At: &now}
+	kind, action := classifyAuthGuard(reason)
+	b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, Kind: kind, SuggestedAction: action, KioskIP: localKioskIP(), At: &now}
+	b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: action, LastAt: &now}
 	b.lastError = "authentication guard: " + reason
 	b.mu.Unlock()
 	b.persistAuthGuard()

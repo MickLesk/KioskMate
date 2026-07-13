@@ -79,6 +79,7 @@
         update: null,
         updateHistory: { entries: [], rollback_available: false, rollback_target: "" },
         updatePreflight: null,
+		telemetry: null,
         diagnostics: null,
         repair: null,
         pageFilter: "",
@@ -769,6 +770,9 @@
         const mqtt = state.status?.mqtt || {};
         const stats = browser.stats || {};
         const watchdog = browser.watchdog || {};
+		const recovery = browser.recovery || {};
+		const telemetry = browser.telemetry || {};
+		const override = browser.override || {};
         const pages = normalizePages(cfg.kiosk?.pages, cfg.kiosk?.urls);
         const activeIndex = Number(browser.active || 0);
         const activePage = pages[activeIndex] || {};
@@ -780,13 +784,14 @@
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
+			${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
             ${stateBanner(browser.running ? "ok" : "bad", browser.running ? t("displayReady") : t("displayNeedsAttention"), browserMessage, browser.running
               ? `<button data-view="kiosk-pages">${esc(t("managePages"))}</button>`
               : button("startBrowser", "browser-start", "primary"))}
             <section class="status-strip" aria-label="${esc(t("status"))}">
               ${statusTile(t("displayStatus"), browser.running ? t("running") : t("stopped"), browser.running ? "ok" : "bad", browser.pid ? `PID ${browser.pid}` : t("noProcess"))}
               ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
-              ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", formatValue(stats.rss_mb, " MB RAM"))}
+			  ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", `${formatValue(stats.rss_mb, " MB RAM")} · ${(stats.pids || []).length} ${t("processes")}`)}
               ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-"))}
             </section>
             <div class="dashboard-layout">
@@ -811,6 +816,7 @@
                       <summary>${esc(t("troubleshooting"))}</summary>
                       <div class="disclosure-body action-matrix">
                         ${button("restartBrowser", "browser-restart")}
+						${button("recoverNow", "browser-auto-recover")}
                         ${button("checkPage", "dashboard-page-check")}
                         ${button("renderCheck", "dashboard-render-check")}
                         ${button("repairHA", "browser-repair-ha")}
@@ -830,7 +836,12 @@
                     ${healthRow(t("browserControl"), browser.devtools ? t("connected") : t("notConnected"), browser.devtools ? "ok" : "warn")}
                     ${healthRow(t("haThemeSync"), formatThemeStatus(browser.theme_status), browser.theme_status?.state === "applied" ? "ok" : browser.theme_status?.state === "failed" ? "bad" : "")}
                     ${healthRow(t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready"), browser.auth_guard?.tripped ? "bad" : "ok")}
+					${browser.auth_guard?.tripped && browser.auth_guard?.kiosk_ip ? healthRow(t("kioskIPAddress"), browser.auth_guard.kiosk_ip, "warn") : ""}
+					${healthRow(t("recoveryState"), recovery.state || t("idle"), recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : recovery.state === "backoff" ? "warn" : "ok")}
+					${recovery.backoff_until ? healthRow(t("backoffUntil"), formatDate(recovery.backoff_until), "warn") : ""}
                     ${healthRow(t("watchdog"), watchdog.pressure || t("normal"), watchdog.pressure && watchdog.pressure !== "normal" ? "warn" : "ok")}
+					${healthRow(t("runtimeAverage"), `${formatValue(telemetry.cpu_average, "% CPU")} · ${formatValue(telemetry.rss_average_mb, " MB RAM")}`, "")}
+					${override.active ? healthRow(t("temporaryOverride"), `${pages[override.page]?.name || override.page + 1} · ${formatDate(override.until)}`, "warn") : ""}
                     ${browser.last_error ? healthRow(t("lastError"), browser.last_error, "bad") : ""}
                     ${renderActionLog()}
                   </div>
@@ -872,6 +883,7 @@
         const enabledPages = pages.filter((page) => !page.disabled && page.url).length;
         const selected = selectedKioskPageIndex(pages);
         const current = pages[selected] || {};
+		const override = browser.override || {};
         return `
           <div class="page-stack kiosk-workspace">
             <section class="kiosk-commandbar">
@@ -892,6 +904,7 @@
               <div><span>${esc(t("scheduler"))}</span><strong class="${kiosk.scheduler?.enabled ? "ok-text" : ""}">${esc(kiosk.scheduler?.enabled ? t("active") : t("disabled"))}</strong></div>
               <div><span>${esc(t("currentPage"))}</span><strong>${esc(browser.page_name || current.name || "-")}</strong></div>
               <div><span>${esc(t("nextSwitch"))}</span><strong>${esc(formatDate(browser.scheduler?.next_switch))}</strong></div>
+			  <div><span>${esc(t("temporaryOverride"))}</span><strong class="${override.active ? "warn-text" : ""}">${esc(override.active ? `${pages[override.page]?.name || override.page + 1} · ${formatDate(override.until)}` : t("inactive"))}</strong></div>
             </section>
             <section class="sequence-canvas ${state.kioskEditorMode === "flow" ? "flow-mode" : "storybook-mode"}">
               <div class="sequence-canvas-head">
@@ -913,6 +926,12 @@
               </div>
             </section>
             <div id="page-check-output" class="action-feedback">${esc(current.url || browser.url || "-")}</div>
+			<section class="override-bar">
+			  <div><strong>${esc(t("temporaryOverride"))}</strong><span>${esc(t("temporaryOverrideHint"))}</span></div>
+			  <label><span>${esc(t("durationMinutes"))}</span><input id="override-duration" type="number" min="1" max="1440" value="60"></label>
+			  <button class="primary" data-action="override-apply" ${pages.length ? "" : "disabled"}>${esc(t("showSelectedTemporarily"))}</button>
+			  ${override.active ? `<button data-action="override-clear">${esc(t("endOverride"))}</button>` : ""}
+			</section>
             <details class="card disclosure advanced-settings">
               <summary>${esc(t("sequenceAdvanced"))}</summary>
               <div class="disclosure-body advanced-sequence-grid">
@@ -1266,6 +1285,8 @@
         const kiosk = cfg.kiosk || {};
         const perf = cfg.performance || {};
         const watchdog = cfg.watchdog || {};
+		const recommendation = state.status?.profile_recommendation || {};
+		const telemetry = state.telemetry?.summary || state.status?.browser?.telemetry || {};
         return `
           <div class="page-stack">
             <div class="settings-columns">
@@ -1284,9 +1305,19 @@
                   ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "low-power", [["low-power", t("lowPower")], ["raspberry", t("raspberry")], ["minimal", t("minimal")], ["balanced", t("balanced")], ["quality", t("quality")], ["conservative", t("conservative")]])}
                   ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
                   <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
+				  ${recommendation.profile ? `<div class="notice span-2 recommendation"><div><strong>${esc(t("recommendedProfile"))}: ${esc(recommendation.profile)} / ${esc(recommendation.gpu_mode)}</strong><span>${esc(recommendation.reason_key ? t(recommendation.reason_key) : recommendation.reason || "")}</span></div><button data-action="profile-recommendation-apply">${esc(t("applyRecommendation"))}</button></div>` : ""}
                 </div>
               </div>
             </div>
+			<div class="card">
+			  <div class="head"><div><h3>${esc(t("runtimeTelemetry"))}</h3><span class="section-kicker">${esc(t("last24Hours"))}</span></div><button data-action="telemetry-reset">${esc(t("resetTelemetry"))}</button></div>
+			  <div class="body telemetry-panel">
+				${statusTile(t("averageCpu"), formatValue(telemetry.cpu_average, "%"), "", `${t("maximum")}: ${formatValue(telemetry.cpu_maximum, "%")}`)}
+				${statusTile(t("averageMemory"), formatValue(telemetry.rss_average_mb, " MB"), "", `${t("maximum")}: ${formatValue(telemetry.rss_maximum_mb, " MB")}`)}
+				${statusTile(t("samples"), telemetry.samples || 0, "", `${t("processes")}: ${telemetry.process_maximum || 0}`)}
+				${renderTelemetryChart(state.telemetry?.samples || [])}
+			  </div>
+			</div>
             <div class="card">
               <div class="head"><div><h3>${esc(t("watchdog"))}</h3><span class="section-kicker">${esc(t("browserProtection"))}</span></div>${switchHtml("watchdog-enabled", t("enabled"), watchdog.enabled !== false)}</div>
               <div class="body form-grid four-fields">
@@ -1406,6 +1437,7 @@
         document.querySelector('[data-action="dashboard-snapshot-refresh"]')?.addEventListener("click", refreshDashboardSnapshot);
         document.querySelector('[data-action="browser-doctor"]')?.addEventListener("click", loadBrowserDoctor);
         document.querySelector('[data-action="browser-recover"]')?.addEventListener("click", recoverBrowser);
+		document.querySelector('[data-action="browser-auto-recover"]')?.addEventListener("click", recoverBrowserQuick);
         document.querySelector('[data-action="hardware-refresh"]')?.addEventListener("click", async () => {
           state.hardware = await getJSON("/api/hardware");
           renderApp();
@@ -1579,6 +1611,15 @@
         }, t("recoveryWorkflow"));
       }
 
+	  async function recoverBrowserQuick() {
+		await runAction("browser-auto-recover", async () => {
+		  await postJSON("/api/browser/recovery", { reason: "requested from Admin UI" });
+		  clearSnapshot();
+		  await refreshCore();
+		  renderApp();
+		}, t("recoveryStarted"));
+	  }
+
       function bindKiosk() {
         bindBrowserButtons();
         document.querySelectorAll("[data-kiosk-mode]").forEach((button) => button.addEventListener("click", () => {
@@ -1612,6 +1653,8 @@
         document.querySelector('[data-action="pages-import"]')?.addEventListener("click", () => document.getElementById("pages-import-file")?.click());
         document.getElementById("pages-import-file")?.addEventListener("change", importPages);
         document.querySelector('[data-action="page-activate"]')?.addEventListener("click", activateSelectedPage);
+		document.querySelector('[data-action="override-apply"]')?.addEventListener("click", applyPageOverride);
+		document.querySelector('[data-action="override-clear"]')?.addEventListener("click", clearPageOverride);
         document.querySelector('[data-action="preview-open"]')?.addEventListener("click", openPreview);
         document.getElementById("page-filter")?.addEventListener("input", (event) => {
           state.pageFilter = event.target.value || "";
@@ -2025,13 +2068,32 @@
       }
 
       async function activateSelectedPage() {
-        const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
+		const active = selectedKioskPageIndex(collectPages());
         await runAction("page-activate", async () => {
           await postJSON("/api/browser/page", { index: active });
           await refreshCore();
           renderApp();
         });
       }
+
+	  async function applyPageOverride() {
+		const page = selectedKioskPageIndex(collectPages());
+		const durationMinutes = Math.max(1, Math.min(1440, Number(val("override-duration") || 60)));
+		await runAction("override-apply", async () => {
+		  await postJSON("/api/browser/override", { page, duration_seconds: durationMinutes * 60, source: "admin" });
+		  clearSnapshot();
+		  await refreshCore();
+		  renderApp();
+		}, t("overrideApplied"));
+	  }
+
+	  async function clearPageOverride() {
+		await runAction("override-clear", async () => {
+		  await request("/api/browser/override", { method: "DELETE" });
+		  await refreshCore();
+		  renderApp();
+		}, t("overrideEnded"));
+	  }
 
       function openPreview() {
         const pages = collectPages();
@@ -2424,6 +2486,8 @@
         document.querySelector('[data-action="browser-settings-save"]')?.addEventListener("click", () => saveBrowserSettings(false));
         document.querySelector('[data-action="browser-settings-save-restart"]')?.addEventListener("click", () => saveBrowserSettings(true));
         document.querySelector('[data-action="safe-mode"]')?.addEventListener("click", applySafeMode);
+		document.querySelector('[data-action="profile-recommendation-apply"]')?.addEventListener("click", applyProfileRecommendation);
+		document.querySelector('[data-action="telemetry-reset"]')?.addEventListener("click", resetTelemetry);
         document.querySelector('[data-action="browser-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
         document.querySelector('[data-action="config-export"]')?.addEventListener("click", () => { window.location.href = "/api/config/export"; });
         document.querySelector('[data-action="config-import"]')?.addEventListener("click", () => document.getElementById("config-import-file").click());
@@ -2456,7 +2520,30 @@
           state.loaded.backups = true;
           loadBackups().catch(() => {});
         }
+		if (state.view === "kiosk-display" && !state.loaded.telemetry) {
+		  state.loaded.telemetry = true;
+		  getJSON("/api/browser/telemetry").then((data) => { state.telemetry = data; if (state.view === "kiosk-display") renderApp(); }).catch(() => { state.loaded.telemetry = false; });
+		}
       }
+
+	  async function applyProfileRecommendation() {
+		if (!confirm(t("confirmProfileRecommendation"))) return;
+		await runAction("profile-recommendation-apply", async () => {
+		  await postJSON("/api/browser/profile-recommendation", {});
+		  await refreshCore();
+		  renderApp();
+		}, t("recommendationApplied"));
+	  }
+
+	  async function resetTelemetry() {
+		if (!confirm(t("confirmTelemetryReset"))) return;
+		await runAction("telemetry-reset", async () => {
+		  await request("/api/browser/telemetry", { method: "DELETE" });
+		  state.telemetry = await getJSON("/api/browser/telemetry");
+		  await refreshCore();
+		  renderApp();
+		}, t("telemetryReset"));
+	  }
 
       async function saveAdminSettings() {
         await runAction("admin-save", async () => {
@@ -3025,6 +3112,17 @@
       function statusTile(title, value, stateClass = "", meta = "") {
         return `<div class="status-tile ${esc(stateClass)}"><span>${esc(title)}</span><strong>${esc(value)}</strong><small>${esc(meta)}</small></div>`;
       }
+
+	  function renderTelemetryChart(samples) {
+		const points = (samples || []).slice(-48);
+		if (!points.length) return `<div class="telemetry-empty">${esc(t("telemetryCollecting"))}</div>`;
+		const cpuMax = Math.max(1, ...points.map((item) => Number(item.cpu_percent || 0)));
+		const rssMax = Math.max(1, ...points.map((item) => Number(item.rss_mb || 0)));
+		return `<div class="telemetry-chart" role="img" aria-label="${esc(t("runtimeTelemetry"))}">${points.map((item) => {
+		  const level = Math.max(4, Math.round(Math.max(Number(item.cpu_percent || 0) / cpuMax, Number(item.rss_mb || 0) / rssMax) * 100));
+		  return `<i style="height:${level}%" title="${esc(`${formatDate(item.at)} · ${formatValue(item.cpu_percent, "% CPU")} · ${formatValue(item.rss_mb, " MB")}`)}"></i>`;
+		}).join("")}</div>`;
+	  }
 
       function stateBanner(tone, title, message, action = "") {
         return `<section class="state-banner ${esc(tone)}" role="status">

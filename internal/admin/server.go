@@ -58,6 +58,14 @@ type Browser interface {
 	Status() supervisor.Status
 }
 
+type runtimeBrowser interface {
+	Recover(context.Context, string) error
+	SetOverride(context.Context, int, time.Duration, string) error
+	ClearOverride() error
+	Telemetry() supervisor.TelemetryHistory
+	ResetTelemetry() error
+}
+
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
@@ -152,6 +160,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/snapshot", s.auth(s.browserSnapshot))
 	mux.HandleFunc("/api/browser/doctor", s.auth(s.browserDoctor))
 	mux.HandleFunc("/api/browser/recover", s.auth(s.browserRecover))
+	mux.HandleFunc("/api/browser/recovery", s.auth(s.browserRecovery))
+	mux.HandleFunc("/api/browser/override", s.auth(s.browserOverride))
+	mux.HandleFunc("/api/browser/telemetry", s.auth(s.browserTelemetry))
+	mux.HandleFunc("/api/browser/profile-recommendation", s.auth(s.browserProfileRecommendation))
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
@@ -536,11 +548,13 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if s.mqtt != nil {
 		mqttStatus = s.mqtt.ConnectionStatus()
 	}
+	hardwareStatus := s.hardware.Status(ctx)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"browser":  s.browser.Status(),
-		"hardware": s.hardware.Status(ctx),
-		"mqtt":     mqttStatus,
-		"update":   s.updater.Status(),
+		"browser":                s.browser.Status(),
+		"hardware":               hardwareStatus,
+		"mqtt":                   mqttStatus,
+		"update":                 s.updater.Status(),
+		"profile_recommendation": performanceRecommendation(hardwareStatus),
 		"config": map[string]any{
 			"path":                     s.cfg.Path,
 			"profile":                  s.cfg.Snapshot().Performance.Profile,
@@ -1521,6 +1535,152 @@ func (s *Server) browserRecover(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "steps": steps, "browser": s.browser.Status()})
+}
+
+func (s *Server) browserRecovery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	runtime, ok := s.browser.(runtimeBrowser)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "runtime recovery is unavailable"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if strings.TrimSpace(body.Reason) == "" {
+		body.Reason = "requested from Admin UI"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := runtime.Recover(ctx, body.Reason); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": err.Error(), "browser": s.browser.Status()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "browser": s.browser.Status()})
+}
+
+func (s *Server) browserOverride(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := s.browser.(runtimeBrowser)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "page overrides are unavailable"})
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var body struct {
+			Page            int    `json:"page"`
+			DurationSeconds int    `json:"duration_seconds"`
+			Source          string `json:"source"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := runtime.SetOverride(ctx, body.Page, time.Duration(body.DurationSeconds)*time.Second, body.Source); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "browser": s.browser.Status()})
+	case http.MethodDelete:
+		if err := runtime.ClearOverride(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "browser": s.browser.Status()})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) browserTelemetry(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := s.browser.(runtimeBrowser)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "runtime telemetry is unavailable"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, runtime.Telemetry())
+	case http.MethodDelete:
+		if err := runtime.ResetTelemetry(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) browserProfileRecommendation(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	recommendation := performanceRecommendation(s.hardware.Status(ctx))
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, recommendation)
+	case http.MethodPost:
+		profile, _ := recommendation["profile"].(string)
+		gpuMode, _ := recommendation["gpu_mode"].(string)
+		if err := s.cfg.Mutate(func(next *config.Config) error {
+			next.Performance.Profile = profile
+			next.Performance.GPUMode = gpuMode
+			return nil
+		}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := s.browser.Restart(ctx); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "recommendation": recommendation, "browser": s.browser.Status()})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func performanceRecommendation(status hardware.Status) map[string]any {
+	model := strings.ToLower(fmt.Sprint(status.Device["model"]))
+	memory := numberValue(status.System["memory_size_gib"])
+	session := strings.ToLower(status.Session["type"])
+	profile, gpuMode, reason, reasonKey := "balanced", "auto", "Balanced defaults match this device.", "profileReasonBalanced"
+	switch {
+	case strings.Contains(model, "raspberry pi 3") || (memory > 0 && memory <= 1.5):
+		profile, gpuMode, reason, reasonKey = "minimal", "software", "Low-memory hardware benefits from one renderer and conservative graphics.", "profileReasonLowMemory"
+	case strings.Contains(model, "raspberry pi 4") || strings.Contains(model, "raspberry pi 400") || (memory > 0 && memory <= 4.5):
+		profile, gpuMode, reason, reasonKey = "raspberry", "auto", "Raspberry Pi 4 class hardware benefits from the low-power raster profile.", "profileReasonPi4"
+	case strings.Contains(model, "raspberry pi 5"):
+		profile, gpuMode, reason, reasonKey = "balanced", "hardware", "Raspberry Pi 5 can use hardware acceleration with balanced process limits.", "profileReasonPi5"
+	case memory >= 8:
+		profile, gpuMode, reason, reasonKey = "quality", "hardware", "Available memory supports Chromium's normal rendering quality.", "profileReasonHighMemory"
+	}
+	return map[string]any{"profile": profile, "gpu_mode": gpuMode, "reason": reason, "reason_key": reasonKey, "model": status.Device["model"], "memory_gib": memory, "session": session}
+}
+
+func numberValue(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case json.Number:
+		result, _ := typed.Float64()
+		return result
+	default:
+		result, _ := strconv.ParseFloat(fmt.Sprint(value), 64)
+		return result
+	}
 }
 
 func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {

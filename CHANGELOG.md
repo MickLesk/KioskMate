@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.7.0
+
+- Added a persistent browser recovery state machine with reload-first recovery, controlled restart fallback, exponential crash-loop backoff and automatic recovery after unexpected browser exits.
+- Persisted browser start/restart counters, recovery state, temporary page overrides and rolling 24-hour runtime telemetry in the private KioskMate configuration directory.
+- Changed process monitoring to collect browser CPU, memory and process-count telemetry even when automatic watchdog restarts are disabled.
+- Added 24-hour CPU/RSS averages and maxima, process-count diagnostics, telemetry reset and a compact runtime history chart to the Admin UI.
+- Added device-aware browser profile recommendations for low-memory devices, Raspberry Pi 3/4/5 systems and larger installations, including one-click apply and restart.
+- Added temporary page overrides with a configurable duration that supersede the scheduler and automatically return to the configured workflow when they expire.
+- Hardened Home Assistant authentication handling with persistent failure classification, the detected kiosk IP address, explicit IP-ban recovery guidance and restart suppression while authentication is blocked.
+- Expanded Home Assistant MQTT discovery with browser recovery, page override and telemetry controls plus recovery, backoff, authentication and 24-hour performance entities.
+- Added Admin API endpoints for non-destructive browser recovery, runtime telemetry, temporary page overrides and device profile recommendations.
+- Fixed selected-page activation in the Storybook/Flow editor so the visible selection, temporary override and direct activation always target the same page.
+- Added English/German UI coverage for recovery, telemetry, recommendations and page overrides plus regression tests for persistence, expiry, backoff and hardware recommendations.
+
 ## v0.6.0
 
 - Reorganized the remaining Admin UI around consistent runtime banners, status summaries, focused primary actions and secondary diagnostic disclosures.

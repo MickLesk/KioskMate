@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.6.0` combines the visual page workflow from `0.5.0` with a consistent operational UI for Dashboard, MQTT, System, Logs and Admin access. Runtime banners explain what needs attention, primary actions stay focused, diagnostics remain available on demand, and mobile navigation no longer displaces the control surface.
+KioskMate `0.7.0` adds persistent browser recovery, 24-hour performance telemetry, adaptive Raspberry Pi profiles, temporary workflow overrides and expanded Home Assistant entities to the visual kiosk workflow and operational Admin UI.
 
 The Admin UI is organized by task:
 
@@ -77,8 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.6.0/kioskmate_0.6.0_arm64.deb
-sudo apt install ./kioskmate_0.6.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.7.0/kioskmate_0.7.0_arm64.deb
+sudo apt install ./kioskmate_0.7.0_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
@@ -205,14 +205,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.6.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.6.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.7.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.7.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.6.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.7.0 --arch arm64 --arch amd64
 ```
 
 The package installs:
