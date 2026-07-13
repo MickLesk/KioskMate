@@ -15,14 +15,22 @@ import (
 	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
+type panicStatusBrowser struct {
+	fakeActionBrowser
+}
+
+func (b *panicStatusBrowser) Status() supervisor.Status {
+	panic("runtime browser status must not be called during fast bootstrap")
+}
+
 func TestFastStatusSkipsHardwareAndStillBootstraps(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	actionService := actions.New(cfg)
-	browser := &fakeActionBrowser{status: supervisor.Status{PageName: "Home Assistant", URL: "http://ha.local"}}
-	server := NewServer(cfg, browser, nil, updater.New(cfg, "0.7.1", actionService), actionService, hardware.New(), "0.7.1", slog.Default())
+	browser := &panicStatusBrowser{}
+	server := NewServer(cfg, browser, nil, updater.New(cfg, "0.7.2", actionService), actionService, hardware.New(), "0.7.2", slog.Default())
 	req := httptest.NewRequest(http.MethodGet, "/api/status?fast=1", nil)
 	rec := httptest.NewRecorder()
 
@@ -35,14 +43,15 @@ func TestFastStatusSkipsHardwareAndStillBootstraps(t *testing.T) {
 		Browser               supervisor.Status `json:"browser"`
 		Hardware              hardware.Status   `json:"hardware"`
 		ProfileRecommendation map[string]any    `json:"profile_recommendation"`
+		Config                map[string]any    `json:"config"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Browser.PageName != "Home Assistant" {
-		t.Fatalf("browser status missing: %#v", body.Browser)
-	}
 	if len(body.Hardware.System) != 0 || len(body.ProfileRecommendation) != 0 {
 		t.Fatalf("fast status performed optional hardware work: %#v %#v", body.Hardware, body.ProfileRecommendation)
+	}
+	if body.Config["admin_addr"] == "" {
+		t.Fatalf("fast status is missing local configuration: %#v", body.Config)
 	}
 }

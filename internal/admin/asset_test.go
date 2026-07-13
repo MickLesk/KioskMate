@@ -72,7 +72,7 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "nav-mobile-toggle", "/api/status?fast=1", "Promise.allSettled", "renderFatal", "auth-error"} {
+	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "nav-mobile-toggle", "state.auth.config", "Promise.allSettled", "renderFatal", "auth-error"} {
 		if !strings.Contains(string(app), marker) {
 			t.Errorf("embedded app.js missing %q", marker)
 		}

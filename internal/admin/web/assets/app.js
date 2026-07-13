@@ -472,7 +472,8 @@
             renderLogin();
             return;
           }
-		  await refreshCore(true);
+		  if (state.auth.config) applyCoreState({ cfg: state.auth.config });
+		  else await refreshCore(true);
           renderApp();
           startUpdateStatusPolling();
 		  refreshCore(false).then(() => {
@@ -485,11 +486,8 @@
 
 	  async function refreshCore(fast = false) {
 		if (fast) {
-		  const [cfg, status] = await Promise.all([
-			getJSON("/api/config"),
-			getJSON("/api/status?fast=1"),
-		  ]);
-		  applyCoreState({ cfg, status });
+		  const cfg = await getJSON("/api/config");
+		  applyCoreState({ cfg });
 		  return;
 		}
 		const requests = await Promise.allSettled([
@@ -610,11 +608,13 @@
 		  const errorBox = document.getElementById("auth-error");
 		  if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
 		  try {
-			if (setup) await postJSON("/api/auth/setup", { token: val("setup-token"), password: val("auth-password") });
-			else await postJSON("/api/auth/login", { password: val("auth-password") });
-			state.auth = await getJSON("/api/auth/status");
+			const response = setup
+			  ? await postJSON("/api/auth/setup", { token: val("setup-token"), password: val("auth-password") })
+			  : await postJSON("/api/auth/login", { password: val("auth-password") });
+			state.auth = { ...response, authenticated: response.authenticated !== false };
 			if (!state.auth.authenticated) throw new Error(t("loginSessionFailed"));
-			await refreshCore(true);
+			if (response.config) applyCoreState({ cfg: response.config });
+			else await refreshCore(true);
 			renderApp();
 			toast(t("signedIn"), "", "ok");
 			startUpdateStatusPolling();

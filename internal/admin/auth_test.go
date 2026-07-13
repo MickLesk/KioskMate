@@ -1,10 +1,18 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MickLesk/KioskMate/internal/config"
 )
 
 func TestPasswordHashRoundTrip(t *testing.T) {
@@ -35,5 +43,67 @@ func TestLegacyPasswordHashStillVerifies(t *testing.T) {
 func TestPasswordHashRejectsInvalidFormat(t *testing.T) {
 	if VerifyPassword("password", "invalid") {
 		t.Fatal("invalid hash must not verify")
+	}
+}
+
+func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := HashPassword("test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Mutate(func(next *config.Config) error {
+		next.Admin.PasswordHash = hash
+		next.MQTT.Password = "secret"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(cfg, &panicStatusBrowser{}, nil, nil, nil, nil, "0.7.2", slog.Default())
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"password":"test-password"}`))
+	rec := httptest.NewRecorder()
+
+	server.authLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Authenticated bool          `json:"authenticated"`
+		Version       string        `json:"version"`
+		Config        config.Config `json:"config"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Authenticated || body.Version != "0.7.2" {
+		t.Fatalf("unexpected bootstrap response: %#v", body)
+	}
+	if body.Config.Admin.PasswordHash != "" || body.Config.MQTT.Password != "" {
+		t.Fatal("login response exposed private credentials")
+	}
+	if body.Config.Kiosk.ZoomPercent == 0 {
+		t.Fatal("login response is missing the public Admin configuration")
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("login response did not create an Admin session")
+	}
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	statusReq.AddCookie(cookies[0])
+	statusRec := httptest.NewRecorder()
+	server.authStatus(statusRec, statusReq)
+	var statusBody struct {
+		Authenticated bool           `json:"authenticated"`
+		Config        *config.Config `json:"config"`
+	}
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatal(err)
+	}
+	if !statusBody.Authenticated || statusBody.Config == nil || statusBody.Config.Kiosk.ZoomPercent == 0 {
+		t.Fatalf("session bootstrap is incomplete: %#v", statusBody)
 	}
 }

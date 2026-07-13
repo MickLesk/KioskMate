@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.2
+
+- Removed all browser, MQTT, hardware and updater runtime locks from the authenticated Admin bootstrap path.
+- Added the sanitized public configuration directly to login and authenticated-session responses so the Admin UI can render without a follow-up status request.
+- Changed the login flow to use its successful authentication response immediately instead of waiting for another session and runtime round trip.
+- Made the fast status endpoint strictly configuration-only so a stalled Chromium supervisor cannot block Admin access.
+- Added regression tests proving login and session reload work without calling browser runtime status and never expose stored credentials.
+
 ## v0.7.1
 
 - Fixed Admin sign-in stalls by loading only the required configuration and fast runtime status before rendering the authenticated UI.

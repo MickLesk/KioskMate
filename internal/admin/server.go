@@ -372,13 +372,19 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"authenticated": s.authenticated(r),
-		"setupRequired": s.cfg.Snapshot().Admin.PasswordHash == "",
-		"tokenRequired": s.cfg.Snapshot().Admin.PasswordHash == "",
+	snapshot := s.cfg.Snapshot()
+	authenticated := s.authenticated(r)
+	response := map[string]any{
+		"authenticated": authenticated,
+		"setupRequired": snapshot.Admin.PasswordHash == "",
+		"tokenRequired": snapshot.Admin.PasswordHash == "",
 		"configPath":    s.cfg.Path,
 		"version":       s.version,
-	})
+	}
+	if authenticated {
+		response["config"] = publicConfigSnapshot(snapshot)
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +431,12 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	s.createSession(w, r)
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":       true,
+		"authenticated": true,
+		"version":       s.version,
+		"config":        publicConfig(s.cfg),
+	})
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
@@ -466,7 +477,12 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	s.createSession(w, r)
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":       true,
+		"authenticated": true,
+		"version":       s.version,
+		"config":        publicConfig(s.cfg),
+	})
 }
 
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
@@ -546,43 +562,55 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Snapshot()
+	if r.URL.Query().Get("fast") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"browser":                supervisor.Status{},
+			"hardware":               hardware.Status{},
+			"mqtt":                   integration.MQTTConnectionStatus{State: "loading"},
+			"update":                 updater.ReleaseInfo{CurrentVersion: s.version},
+			"profile_recommendation": map[string]any{},
+			"config":                 statusConfig(cfg),
+		})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	mqttStatus := integration.MQTTConnectionStatus{State: "unavailable"}
 	if s.mqtt != nil {
 		mqttStatus = s.mqtt.ConnectionStatus()
 	}
-	hardwareStatus := hardware.Status{}
-	recommendation := map[string]any{}
-	if r.URL.Query().Get("fast") != "1" {
-		hardwareStatus = s.hardware.Status(ctx)
-		recommendation = performanceRecommendation(hardwareStatus)
-	}
+	hardwareStatus := s.hardware.Status(ctx)
+	recommendation := performanceRecommendation(hardwareStatus)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"browser":                s.browser.Status(),
 		"hardware":               hardwareStatus,
 		"mqtt":                   mqttStatus,
 		"update":                 s.updater.Status(),
 		"profile_recommendation": recommendation,
-		"config": map[string]any{
-			"path":                     s.cfg.Path,
-			"profile":                  s.cfg.Snapshot().Performance.Profile,
-			"gpu_mode":                 s.cfg.Snapshot().Performance.GPUMode,
-			"theme":                    s.cfg.Snapshot().Kiosk.Theme,
-			"zoom":                     s.cfg.Snapshot().Kiosk.ZoomPercent,
-			"widget":                   s.cfg.Snapshot().Kiosk.Widget,
-			"watchdog":                 s.cfg.Snapshot().Watchdog.Enabled,
-			"admin_addr":               s.cfg.Snapshot().Admin.Addr(),
-			"kiosk_urls":               s.cfg.Snapshot().Kiosk.URLs,
-			"kiosk_pages":              s.cfg.Snapshot().Kiosk.Pages,
-			"scheduler":                s.cfg.Snapshot().Kiosk.Scheduler,
-			"rotation":                 s.cfg.Snapshot().Kiosk.Rotation,
-			"time_rules":               s.cfg.Snapshot().Kiosk.TimeRules,
-			"browser_cmd":              s.cfg.Snapshot().Kiosk.BrowserCommand,
-			"mqtt":                     s.cfg.Snapshot().MQTT.Enabled,
-			"mqtt_password_configured": s.cfg.Snapshot().MQTT.Password != "",
-		},
+		"config":                 statusConfig(cfg),
 	})
+}
+
+func statusConfig(cfg *config.Config) map[string]any {
+	return map[string]any{
+		"path":                     cfg.Path,
+		"profile":                  cfg.Performance.Profile,
+		"gpu_mode":                 cfg.Performance.GPUMode,
+		"theme":                    cfg.Kiosk.Theme,
+		"zoom":                     cfg.Kiosk.ZoomPercent,
+		"widget":                   cfg.Kiosk.Widget,
+		"watchdog":                 cfg.Watchdog.Enabled,
+		"admin_addr":               cfg.Admin.Addr(),
+		"kiosk_urls":               cfg.Kiosk.URLs,
+		"kiosk_pages":              cfg.Kiosk.Pages,
+		"scheduler":                cfg.Kiosk.Scheduler,
+		"rotation":                 cfg.Kiosk.Rotation,
+		"time_rules":               cfg.Kiosk.TimeRules,
+		"browser_cmd":              cfg.Kiosk.BrowserCommand,
+		"mqtt":                     cfg.MQTT.Enabled,
+		"mqtt_password_configured": cfg.MQTT.Password != "",
+	}
 }
 
 func (s *Server) timeStatus(w http.ResponseWriter, r *http.Request) {
@@ -1720,7 +1748,10 @@ func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func publicConfig(cfg *config.Config) *config.Config {
-	out := cfg.Snapshot()
+	return publicConfigSnapshot(cfg.Snapshot())
+}
+
+func publicConfigSnapshot(out *config.Config) *config.Config {
 	out.Admin.Token = ""
 	out.Admin.PasswordHash = ""
 	out.MQTT.Password = ""
