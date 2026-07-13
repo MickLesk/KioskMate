@@ -23,6 +23,31 @@ func TestAssetServesEmbeddedJavaScript(t *testing.T) {
 	if rec.Body.Len() == 0 {
 		t.Fatal("expected embedded asset body")
 	}
+	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
+		t.Fatalf("cache-control = %q", got)
+	}
+}
+
+func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
+	server := NewServer(nil, nil, nil, nil, nil, nil, "0.7.1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.index(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, "app.js?v=0.7.1") {
+		t.Fatalf("index does not contain versioned assets: %s", body)
+	}
+	if !strings.Contains(body, "Loading control panel") {
+		t.Fatal("index is missing visible bootstrap state")
+	}
+	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
+		t.Fatalf("cache-control = %q", got)
+	}
 }
 
 func TestAssetRejectsNestedPaths(t *testing.T) {
@@ -47,7 +72,7 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "nav-mobile-toggle"} {
+	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "nav-mobile-toggle", "/api/status?fast=1", "Promise.allSettled", "renderFatal", "auth-error"} {
 		if !strings.Contains(string(app), marker) {
 			t.Errorf("embedded app.js missing %q", marker)
 		}

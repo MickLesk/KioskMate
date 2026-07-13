@@ -331,26 +331,33 @@
       }
 
       async function request(path, options = {}) {
-        const response = await fetch(path, {
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-          ...options,
-        });
-        const text = await response.text();
-        let data = {};
-        if (text) {
-          try {
-            data = JSON.parse(text);
-          } catch {
-            data = { error: text };
-          }
-        }
-        if (!response.ok) {
-          const error = new Error(data.error || response.statusText || "HTTP " + response.status);
-          error.data = data;
-          throw error;
-        }
-        return data;
+		const controller = options.signal ? null : new AbortController();
+		const timeout = controller ? setTimeout(() => controller.abort(), Number(options.timeout || 12000)) : null;
+		try {
+		  const response = await fetch(path, {
+			credentials: "same-origin",
+			headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+			...options,
+			signal: options.signal || controller?.signal,
+		  });
+		  const text = await response.text();
+		  let data = {};
+		  if (text) {
+			try { data = JSON.parse(text); }
+			catch { data = { error: text }; }
+		  }
+		  if (!response.ok) {
+			const error = new Error(data.error || response.statusText || "HTTP " + response.status);
+			error.data = data;
+			throw error;
+		  }
+		  return data;
+		} catch (error) {
+		  if (error?.name === "AbortError") throw new Error(t("requestTimeout"));
+		  throw error;
+		} finally {
+		  if (timeout) clearTimeout(timeout);
+		}
       }
 
       const getJSON = (path) => request(path);
@@ -465,36 +472,75 @@
             renderLogin();
             return;
           }
-          await refreshCore();
+		  await refreshCore(true);
           renderApp();
           startUpdateStatusPolling();
+		  refreshCore(false).then(() => {
+			if (state.auth?.authenticated) renderApp();
+		  }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
         } catch (err) {
-          root.innerHTML = `<div class="login"><div class="login-card"><div class="body"><h2>${esc(t("failed"))}</h2><p class="muted">${esc(err.message)}</p></div></div></div>`;
+		  renderFatal(err);
         }
       }
 
-      async function refreshCore() {
-        const [cfg, status, privilege, timeInfo, zones, jobs, updateHistory] = await Promise.all([
-          getJSON("/api/config"),
-          getJSON("/api/status"),
-          getJSON("/api/privilege"),
-          getJSON("/api/time"),
-          getJSON("/api/time/zones"),
-          getJSON("/api/jobs?limit=25"),
-          getJSON("/api/update/history"),
-        ]);
-        state.config = cfg;
-        state.persistedConfig = JSON.parse(JSON.stringify(cfg));
-        state.status = status;
-        state.update = status.update || state.update;
-        state.hardware = status.hardware || {};
-        state.privilege = privilege;
-        state.time = timeInfo;
-        state.timezones = zones.zones || [];
-        state.jobs = jobs.jobs || [];
-        state.updateHistory = updateHistory || state.updateHistory;
-        syncThemeFromConfig();
+	  async function refreshCore(fast = false) {
+		if (fast) {
+		  const [cfg, status] = await Promise.all([
+			getJSON("/api/config"),
+			getJSON("/api/status?fast=1"),
+		  ]);
+		  applyCoreState({ cfg, status });
+		  return;
+		}
+		const requests = await Promise.allSettled([
+		  getJSON("/api/config"), getJSON("/api/status"), getJSON("/api/privilege"),
+		  getJSON("/api/time"), getJSON("/api/time/zones"), getJSON("/api/jobs?limit=25"),
+		  getJSON("/api/update/history"),
+		]);
+		const value = (index) => requests[index].status === "fulfilled" ? requests[index].value : undefined;
+		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6) });
+		const failed = requests.filter((item) => item.status === "rejected");
+		if (failed.length === requests.length) throw failed[0].reason;
       }
+
+	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory }) {
+		if (cfg) {
+		  state.config = cfg;
+		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
+		}
+		if (status) {
+		  const previousHardware = state.hardware || {};
+		  state.status = { ...(state.status || {}), ...status };
+		  state.update = status.update || state.update;
+		  state.hardware = Object.keys(status.hardware || {}).length ? status.hardware : previousHardware;
+		}
+		if (privilege) state.privilege = privilege;
+		if (timeInfo) state.time = timeInfo;
+		if (zones) state.timezones = zones.zones || [];
+		if (jobs) state.jobs = jobs.jobs || [];
+		if (updateHistory) state.updateHistory = updateHistory;
+		syncThemeFromConfig();
+	  }
+
+	  function renderFatal(error) {
+		root.innerHTML = `<main class="fatal-shell"><section class="fatal-card" role="alert">
+		  <div class="mark">K</div><div><span class="eyebrow">KioskMate Admin</span><h1>${esc(t("adminLoadFailed"))}</h1><p>${esc(error?.message || t("unknownError"))}</p></div>
+		  <div class="actions"><button class="primary" data-action="fatal-retry">${esc(t("retry"))}</button><button data-action="fatal-login">${esc(t("backToLogin"))}</button></div>
+		</section></main>`;
+		document.querySelector('[data-action="fatal-retry"]')?.addEventListener("click", () => boot());
+		document.querySelector('[data-action="fatal-login"]')?.addEventListener("click", async () => {
+		  try { await postJSON("/api/auth/logout"); } catch (_) {}
+		  state.auth = { authenticated: false, setupRequired: false };
+		  renderLogin();
+		});
+	  }
+
+	  window.addEventListener("unhandledrejection", (event) => {
+		if (!root?.children?.length) renderFatal(event.reason || new Error(t("unknownError")));
+	  });
+	  window.addEventListener("error", (event) => {
+		if (!root?.children?.length) renderFatal(event.error || new Error(event.message || t("unknownError")));
+	  });
 
       async function refreshAndRender() {
         await runAction("refresh", async () => {
@@ -536,38 +582,57 @@
       function renderLogin() {
         const setup = !!state.auth?.setupRequired;
         root.innerHTML = `
-          <main class="login">
-            <form class="login-card" id="auth-form">
-              <div class="head">
-                <div class="login-brand">
-                  <div class="mark">K</div>
-                  <div>
-                    <h1>${esc(setup ? t("setupTitle") : t("signInTitle"))}</h1>
-                    <p class="muted">${esc(setup ? t("setupHint") : t("signInHint"))}</p>
-                  </div>
-                </div>
-              </div>
-              <div class="body grid">
-                <input class="hidden" autocomplete="username" value="admin" />
-                ${setup ? field("setup-token", t("setupToken"), "text", "one-time-code") : ""}
-                ${field("auth-password", t("password"), "password", "current-password")}
-                <button class="primary" data-busy="auth">${esc(setup ? t("createPassword") : t("signIn"))}</button>
-                <p class="muted">${esc(t("setupInfo"))}</p>
-                <div class="row">
-                  ${selectHtml("login-lang", t("language"), state.lang, [["en", "English"], ["de", "Deutsch"]])}
-                  ${selectHtml("login-theme", t("theme"), state.theme, [["dark", t("dark")], ["light", t("light")]])}
-                </div>
-              </div>
-            </form>
-          </main>`;
+		  <main class="login-shell">
+			<section class="login-frame">
+			  <header class="login-header"><div class="mark">K</div><div><strong>KioskMate</strong><span>${esc(t("appSubtitle"))}</span></div></header>
+			  <form class="login-card" id="auth-form">
+			  <div class="login-title"><span class="eyebrow">${esc(t("adminAccess"))}</span><h1>${esc(setup ? t("setupTitle") : t("signInTitle"))}</h1><p>${esc(setup ? t("setupHint") : t("signInHint"))}</p></div>
+			  <div class="login-fields">
+				<input class="hidden" autocomplete="username" value="admin" />
+				${setup ? field("setup-token", t("setupToken"), "text", "one-time-code") : ""}
+				<div class="password-field">${field("auth-password", t("password"), "password", "current-password")}<button type="button" class="password-toggle" data-action="password-toggle" aria-label="${esc(t("showPassword"))}" title="${esc(t("showPassword"))}">◉</button></div>
+				<div id="auth-error" class="login-error" role="alert" hidden></div>
+				<button class="primary login-submit" data-busy="auth">${esc(setup ? t("createPassword") : t("signIn"))}</button>
+			  </div>
+			  <footer class="login-footer">
+				<div class="login-selects">
+				  ${selectHtml("login-lang", t("language"), state.lang, [["en", "English"], ["de", "Deutsch"]])}
+				  ${selectHtml("login-theme", t("theme"), state.theme, [["dark", t("dark")], ["light", t("light")]])}
+				</div>
+				<p>${esc(t("setupInfo"))}</p>
+			  </footer>
+			  </form>
+			</section>
+		  </main>`;
         document.getElementById("auth-form").addEventListener("submit", async (event) => {
           event.preventDefault();
-          await runAction("auth", async () => {
-            if (setup) await postJSON("/api/auth/setup", { token: val("setup-token"), password: val("auth-password") });
-            else await postJSON("/api/auth/login", { password: val("auth-password") });
-            await boot();
-          }, t("success"));
+		  setBusy("auth", true);
+		  const errorBox = document.getElementById("auth-error");
+		  if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+		  try {
+			if (setup) await postJSON("/api/auth/setup", { token: val("setup-token"), password: val("auth-password") });
+			else await postJSON("/api/auth/login", { password: val("auth-password") });
+			state.auth = await getJSON("/api/auth/status");
+			if (!state.auth.authenticated) throw new Error(t("loginSessionFailed"));
+			await refreshCore(true);
+			renderApp();
+			toast(t("signedIn"), "", "ok");
+			startUpdateStatusPolling();
+			refreshCore(false).then(() => { if (state.auth?.authenticated) renderApp(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
+		  } catch (error) {
+			const currentError = document.getElementById("auth-error");
+			if (currentError) { currentError.hidden = false; currentError.textContent = error.message || t("loginFailed"); }
+			const password = document.getElementById("auth-password");
+			password?.focus();
+		  } finally {
+			setBusy("auth", false);
+		  }
         });
+		document.querySelector('[data-action="password-toggle"]')?.addEventListener("click", () => {
+		  const input = document.getElementById("auth-password");
+		  if (!input) return;
+		  input.type = input.type === "password" ? "text" : "password";
+		});
         document.getElementById("login-lang").addEventListener("change", (event) => setLanguage(event.target.value));
         document.getElementById("login-theme").addEventListener("change", (event) => setTheme(event.target.value));
       }

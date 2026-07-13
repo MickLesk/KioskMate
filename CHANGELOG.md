@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1
+
+- Fixed Admin sign-in stalls by loading only the required configuration and fast runtime status before rendering the authenticated UI.
+- Moved slower hardware, privilege, time, maintenance and update-history requests into a resilient background refresh so one unavailable subsystem can no longer block login.
+- Added bounded request timeouts, visible fatal-load recovery and explicit inline authentication errors instead of leaving the interface in a permanent busy state.
+- Added versioned, non-cacheable embedded Admin assets to prevent mixed frontend versions after package updates and browser reloads.
+- Added a server-rendered loading fallback so script or asset failures remain visible and recoverable instead of producing a black page.
+- Redesigned the sign-in screen with clearer hierarchy, password visibility control, responsive mobile layout and complete English/German feedback.
+- Added regression coverage for the fast status path, versioned assets, cache headers and the embedded authentication bootstrap contract.
+
 ## v0.7.0
 
 - Added a persistent browser recovery state machine with reload-first recovery, controlled restart fallback, exponential crash-loop backoff and automatic recovery after unexpected browser exits.

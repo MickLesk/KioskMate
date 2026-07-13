@@ -332,7 +332,10 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	data = []byte(strings.ReplaceAll(string(data), "__KIOSKMATE_ASSET_VERSION__", url.QueryEscape(s.version)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
 	_, _ = w.Write(data)
 }
 
@@ -360,7 +363,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
 	if r.Method == http.MethodHead {
 		return
 	}
@@ -548,13 +552,18 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if s.mqtt != nil {
 		mqttStatus = s.mqtt.ConnectionStatus()
 	}
-	hardwareStatus := s.hardware.Status(ctx)
+	hardwareStatus := hardware.Status{}
+	recommendation := map[string]any{}
+	if r.URL.Query().Get("fast") != "1" {
+		hardwareStatus = s.hardware.Status(ctx)
+		recommendation = performanceRecommendation(hardwareStatus)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"browser":                s.browser.Status(),
 		"hardware":               hardwareStatus,
 		"mqtt":                   mqttStatus,
 		"update":                 s.updater.Status(),
-		"profile_recommendation": performanceRecommendation(hardwareStatus),
+		"profile_recommendation": recommendation,
 		"config": map[string]any{
 			"path":                     s.cfg.Path,
 			"profile":                  s.cfg.Snapshot().Performance.Profile,
