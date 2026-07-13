@@ -9,8 +9,8 @@
           label: "kiosk",
           hint: "kioskStreaming",
           children: [
-            { id: "kiosk-pages", label: "kioskPages", hint: "pages" },
-            { id: "kiosk-schedule", label: "kioskSchedule", hint: "scheduler" },
+            { id: "kiosk-pages", label: "pagesAndWorkflow", hint: "kioskStreaming" },
+            { id: "kiosk-display", label: "displayRendering", hint: "performance" },
           ],
         },
         { id: "mqtt", label: "mqtt", hint: "mqttSettings" },
@@ -21,7 +21,6 @@
           children: [
             { id: "system-device", label: "deviceAndTime", hint: "hardwareStatus" },
             { id: "system-maintenance", label: "systemMaintenance", hint: "privilegedActions" },
-            { id: "system-terminal", label: "terminal", hint: "runCommand" },
             { id: "system-logs", label: "logs", hint: "refreshLogs" },
           ],
         },
@@ -30,7 +29,6 @@
           label: "settings",
           hint: "adminSettings",
           children: [
-            { id: "settings-browser", label: "browserPerformance", hint: "performance" },
             { id: "settings-admin", label: "adminAccess", hint: "adminSettings" },
             { id: "settings-config", label: "configData", hint: "configFile" },
             { id: "settings-updates", label: "updatesAndRepair", hint: "update" },
@@ -40,11 +38,13 @@
 
       const VIEW_ALIASES = {
         kiosk: "kiosk-pages",
-        scheduler: "kiosk-schedule",
+        scheduler: "kiosk-pages",
+        "kiosk-schedule": "kiosk-pages",
         system: "system-device",
         "system-actions": "system-maintenance",
         "system-hardware": "system-device",
-        settings: "settings-browser",
+        settings: "settings-admin",
+        "settings-browser": "kiosk-display",
         "settings-maintenance": "settings-updates",
       };
 
@@ -62,6 +62,8 @@
         persistedConfig: null,
         status: null,
         hardware: null,
+        time: null,
+        timezones: [],
         privilege: null,
         sessions: [],
         backups: [],
@@ -84,21 +86,18 @@
       };
 
       const DIRTY_PREFIXES = {
-        "kiosk-pages": ["page-name-", "page-url-", "page-disabled-"],
-        "kiosk-schedule": ["scheduler-", "rotation-", "rule-"],
+        "kiosk-pages": ["page-name-", "page-url-", "page-disabled-", "scheduler-", "rotation-", "rule-"],
+        "kiosk-display": ["kiosk-", "perf-", "watchdog-"],
         mqtt: ["mqtt-"],
         "system-device": ["time-"],
-        "settings-browser": ["kiosk-", "perf-", "watchdog-"],
         "settings-admin": ["admin-"],
         "settings-config": ["config-raw"],
       };
 
       const SAVE_ACTIONS = {
         "kiosk-pages": ["kiosk-save", "kiosk-save-restart"],
-        "kiosk-schedule": ["scheduler-save"],
+        "kiosk-display": ["browser-settings-save", "browser-settings-save-restart"],
         mqtt: ["mqtt-save"],
-        "system-device": ["time-save"],
-        "settings-browser": ["browser-settings-save", "browser-settings-save-restart"],
         "settings-admin": ["admin-save"],
         "settings-config": ["config-raw-save"],
       };
@@ -257,6 +256,34 @@
         if (!value) return t("never");
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+      }
+
+      function formatMQTTState(value) {
+        const key = {
+          connected: "connected",
+          connecting: "connecting",
+          auth_error: "authenticationFailed",
+          error: "failed",
+          disabled: "disabled",
+          unavailable: "notAvailable",
+        }[String(value || "disabled")];
+        return t(key || "notConnected");
+      }
+
+      function formatClock(value) {
+        const date = value ? new Date(value) : new Date();
+        return Number.isNaN(date.getTime()) ? "--:--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      }
+
+      let clockTimer = null;
+      function startHeaderClock() {
+        if (clockTimer) clearInterval(clockTimer);
+        const serverTime = new Date(state.time?.current_time || Date.now()).getTime();
+        const offset = Number.isFinite(serverTime) ? serverTime - Date.now() : 0;
+        clockTimer = setInterval(() => {
+          const clock = document.getElementById("kiosk-clock");
+          if (clock) clock.textContent = formatClock(Date.now() + offset);
+        }, 1000);
       }
 
       function secondsToDuration(value, fallback = 0) {
@@ -427,17 +454,22 @@
       }
 
       async function refreshCore() {
-        const [cfg, status, hardware, privilege] = await Promise.all([
+        const [cfg, status, privilege, timeInfo, zones, jobs] = await Promise.all([
           getJSON("/api/config"),
           getJSON("/api/status"),
-          getJSON("/api/hardware"),
           getJSON("/api/privilege"),
+          getJSON("/api/time"),
+          getJSON("/api/time/zones"),
+          getJSON("/api/jobs?limit=25"),
         ]);
         state.config = cfg;
         state.persistedConfig = JSON.parse(JSON.stringify(cfg));
         state.status = status;
-        state.hardware = hardware;
+        state.hardware = status.hardware || {};
         state.privilege = privilege;
+        state.time = timeInfo;
+        state.timezones = zones.zones || [];
+        state.jobs = jobs.jobs || [];
         syncThemeFromConfig();
       }
 
@@ -489,6 +521,8 @@
 
       function renderApp() {
         const browser = state.status?.browser || {};
+        const mqtt = state.status?.mqtt || {};
+        const timeInfo = state.time || {};
         root.innerHTML = `
           <div class="layout">
             <aside class="sidebar">
@@ -517,7 +551,9 @@
                   <p>${esc(t(activeNavItem().hint || "overview"))}</p>
                 </div>
                 <div class="chips">
-                  <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
+                  <span class="chip ${browser.running ? "ok" : "bad"}" title="${esc(t("displayStatus"))}">${esc(browser.running ? t("running") : t("stopped"))}</span>
+                  <span class="chip ${mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : ""}" title="${esc(mqtt.last_error || t("mqttService"))}">MQTT: ${esc(formatMQTTState(mqtt.state))}</span>
+                  <span class="chip ${timeInfo.synchronized ? "ok" : "warn"}" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></span>
                   <span class="chip">${esc(state.auth?.version || "dev")}</span>
                   <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">↻</button>
                 </div>
@@ -528,6 +564,7 @@
         bindShell();
         bindView();
         bindDirtyTracking();
+        startHeaderClock();
       }
 
       function renderNav() {
@@ -568,7 +605,9 @@
           case "kiosk-pages":
             return renderKiosk();
           case "kiosk-schedule":
-            return renderScheduler();
+            return renderKiosk();
+          case "kiosk-display":
+            return renderSettingsBrowser();
           case "mqtt":
             return renderMQTT();
           case "system":
@@ -582,7 +621,7 @@
             return renderLogs();
           case "settings":
           case "settings-browser":
-            return renderSettingsBrowser();
+            return renderSettingsAdmin();
           case "settings-admin":
             return renderSettingsAdmin();
           case "settings-config":
@@ -683,7 +722,7 @@
                     </div>
                     <div class="active-page-summary">
                       <div class="active-page-copy"><strong>${esc(activePage.name || browser.page_name || t("noData"))}</strong><span>${esc(activePage.url || browser.url || "-")}</span></div>
-                      <div class="actions">${button("previousPage", "browser-previous")}${button("nextPage", "browser-next")}</div>
+                      ${pages.filter((page) => !page.disabled && page.url).length > 1 ? `<div class="actions">${button("previousPage", "browser-previous")}${button("nextPage", "browser-next")}</div>` : ""}
                     </div>
                     <div id="page-check-output" class="action-feedback" aria-live="polite"></div>
                     <details class="disclosure">
@@ -750,8 +789,6 @@
               <div class="actions">
                 ${button("addPage", "page-add", "primary")}
                 ${button("addHomeAssistant", "page-add-ha")}
-                ${button("importPages", "pages-import")}
-                ${button("exportPages", "pages-export")}
               </div>
             </section>
             <div class="card">
@@ -760,8 +797,6 @@
                 <div class="actions">
                   ${button("activatePage", "page-activate", "primary")}
                   ${button("checkPage", "page-check")}
-                  ${button("renderCheck", "render-check")}
-                  ${button("openPreview", "preview-open")}
                 </div>
               </div>
               <div class="body">
@@ -771,11 +806,6 @@
             <section class="data-section">
               <div class="data-section-head">
                 <div><h3>${esc(t("pages"))}</h3><span class="section-kicker">${esc(t("pageOrderHint"))}</span></div>
-                <div class="actions">
-                  ${button("checkAllPages", "page-check-all")}
-                  ${button("enableAll", "page-enable-all")}
-                  ${button("disableAll", "page-disable-all")}
-                </div>
               </div>
               <div class="data-section-body">
                 <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
@@ -785,6 +815,40 @@
                 </div>
                 <div id="pages-list">${renderPages(pages)}</div>
                 <div id="page-check-all-output" class="check-panel"></div>
+                <details class="disclosure compact-disclosure">
+                  <summary>${esc(t("advancedActions"))}</summary>
+                  <div class="disclosure-body actions">
+                    ${button("renderCheck", "render-check")}
+                    ${button("openPreview", "preview-open")}
+                    ${button("checkAllPages", "page-check-all")}
+                    ${button("importPages", "pages-import")}
+                    ${button("exportPages", "pages-export")}
+                    ${button("enableAll", "page-enable-all")}
+                    ${button("disableAll", "page-disable-all")}
+                  </div>
+                </details>
+              </div>
+            </section>
+            <section class="data-section workflow-editor">
+              <div class="data-section-head">
+                <div><h3>${esc(t("workflow"))}</h3><span class="section-kicker">${esc(t("schedulerSaveHint"))}</span></div>
+                ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
+              </div>
+              <div class="data-section-body grid">
+                <div class="form-grid workflow-settings">
+                  ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
+                  ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
+                </div>
+                <div class="schedule-columns">
+                  <div>
+                    <div class="subsection-head"><strong>${esc(t("rotation"))}</strong><div class="actions">${button("buildRotation", "rotation-build")}${button("addRotation", "rotation-add", "primary")}</div></div>
+                    <div id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
+                  </div>
+                  <div>
+                    <div class="subsection-head"><strong>${esc(t("timeRules"))}</strong><div class="actions">${button("addRule", "rule-add", "primary")}</div></div>
+                    <div id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
+                  </div>
+                </div>
               </div>
             </section>
             <div class="save-bar">
@@ -831,12 +895,14 @@
 
       function renderMQTT() {
         const mqtt = state.config?.mqtt || {};
+        const runtime = state.status?.mqtt || {};
         return `
           <div class="page-stack">
             <section class="status-strip">
-              ${statusTile(t("mqttService"), mqtt.enabled ? t("enabled") : t("disabled"), mqtt.enabled ? "ok" : "", mqtt.version ? `MQTT ${mqtt.version}` : "-")}
+              ${statusTile(t("mqttService"), formatMQTTState(runtime.state), runtime.connected ? "ok" : runtime.state === "error" || runtime.state === "auth_error" ? "bad" : "", runtime.last_error || (mqtt.version ? `MQTT ${mqtt.version}` : "-"))}
               ${statusTile(t("broker"), mqtt.url || t("notConfigured"), mqtt.url ? "" : "warn", mqtt.username || t("anonymous"))}
               ${statusTile(t("homeAssistantDiscovery"), mqtt.discovery || "homeassistant", mqtt.enabled ? "ok" : "", `${mqtt.base_topic || "kioskmate"}/${mqtt.node || "kioskmate"}`)}
+              ${statusTile(t("lastPublished"), formatDate(runtime.last_published), runtime.connected ? "ok" : "", `${t("failures")}: ${runtime.consecutive_failures || 0}`)}
             </section>
             <div class="settings-columns">
               <div class="card">
@@ -845,7 +911,7 @@
                   ${field("mqtt-url", t("mqttUrl"), "text", "", mqtt.url || "")}
                   ${selectHtml("mqtt-version", t("mqttVersion"), mqtt.version || "3.1.1", [["3.1.1", "MQTT 3.1.1"], ["5.0", "MQTT 5.0"]])}
                   ${field("mqtt-user", t("username"), "text", "username", mqtt.username || "")}
-                  ${field("mqtt-password", t("password"), "password", "current-password", mqtt.password || "")}
+                  ${field("mqtt-password", state.status?.config?.mqtt_password_configured ? `${t("password")} (${t("configured")})` : t("password"), "password", "current-password", mqtt.password || "")}
                 </div>
               </div>
               <div class="card">
@@ -878,6 +944,10 @@
       function renderHardware() {
         const hw = state.hardware || {};
         const timeCfg = state.config?.time || {};
+        const support = hw.support || {};
+        const timeInfo = state.time || {};
+        const zone = timeInfo.timezone || timeCfg.timezone || "Europe/Berlin";
+        const zoneOptions = (state.timezones.length ? state.timezones : ["UTC", "Europe/Berlin"]).map((item) => [item, item]);
         return `
           <div class="page-stack">
             <section class="status-strip">
@@ -885,32 +955,25 @@
               ${statusTile("RAM", formatValue(hw.system?.memory_usage_percent, "%"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
               ${statusTile(t("storage"), formatValue(hw.system?.disk_usage?.percent, "%"), "", formatValue(hw.system?.disk_usage?.available_gb, " GB " + t("available")))}
               ${statusTile(t("display"), formatValue(hw.display?.power), String(hw.display?.power || "").toUpperCase() === "ON" ? "ok" : "", `${t("brightness")} ${formatValue(hw.display?.brightness, "%")}`)}
+              ${statusTile(t("time"), formatClock(timeInfo.current_time), timeInfo.synchronized ? "ok" : "warn", timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}
             </section>
             <div class="settings-columns">
               <div class="card">
                 <div class="head"><div><h3>${esc(t("displayAndInput"))}</h3><span class="section-kicker">${esc(hw.display?.command || t("unsupported"))}</span></div></div>
-                <div class="body form-grid">
-                  ${selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]])}
-                  ${field("display-brightness", t("brightness"), "number", "", hw.display?.brightness || 80)}
-                  <button data-action="display-apply" class="primary span-2">${esc(t("applyDisplay"))}</button>
-                </div>
+                <div class="body form-grid">${support.display_status ? selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]]) : unsupportedControl(t("display"))}${support.display_brightness ? field("display-brightness", t("brightness"), "number", "", hw.display?.brightness ?? 80) : unsupportedControl(t("brightness"))}${support.display_status || support.display_brightness ? `<button data-action="display-apply" class="primary span-2">${esc(t("applyDisplay"))}</button>` : ""}</div>
               </div>
               <div class="card">
                 <div class="head"><div><h3>${esc(t("audio"))}</h3><span class="section-kicker">${esc(t("volumeAndMicrophone"))}</span></div></div>
-                <div class="body form-grid">
-                  ${field("audio-volume", t("volume"), "number", "", hw.audio?.volume || 50)}
-                  ${field("audio-mic", t("microphone"), "number", "", hw.audio?.microphone || 50)}
-                  ${selectHtml("keyboard-power", t("keyboard"), "ON", [["ON", t("on")], ["OFF", t("off")]])}
-                  <button data-action="audio-apply" class="primary">${esc(t("applyAudio"))}</button>
-                </div>
+                <div class="body form-grid">${support.audio_volume ? field("audio-volume", t("volume"), "number", "", hw.audio?.volume ?? 50) : unsupportedControl(t("volume"))}${support.microphone_volume ? field("audio-mic", t("microphone"), "number", "", hw.audio?.microphone ?? 50) : unsupportedControl(t("microphone"))}${support.keyboard_visibility ? selectHtml("keyboard-power", t("keyboard"), "ON", [["ON", t("on")], ["OFF", t("off")]]) : unsupportedControl(t("keyboard"))}${support.audio_volume || support.microphone_volume || support.keyboard_visibility ? `<button data-action="audio-apply" class="primary">${esc(t("applyAudio"))}</button>` : ""}</div>
               </div>
             </div>
             <div class="settings-columns">
               <div class="card">
-                <div class="head"><div><h3>${esc(t("timeSettings"))}</h3><span class="section-kicker">${esc(t("timeAndTimezone"))}</span></div><button data-action="time-save" class="primary">${esc(t("save"))}</button></div>
+                <div class="head"><div><h3>${esc(t("timeSettings"))}</h3><span class="section-kicker">${esc(timeInfo.service || t("timeAndTimezone"))}</span></div><span class="chip ${timeInfo.synchronized ? "ok" : "warn"}">${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}</span></div>
                 <div class="body form-grid">
                   ${field("time-ntp", t("ntpServer"), "text", "", timeCfg.ntp_server || "pool.ntp.org")}
-                  ${field("time-zone", t("timezone"), "text", "", timeCfg.timezone || "")}
+                  ${selectHtml("time-zone", t("timezone"), zone, zoneOptions)}
+                  <button data-action="time-save" class="primary span-2">${esc(t("applyTimeSettings"))}</button>
                 </div>
               </div>
               <div class="card"><div class="head"><h3>${esc(t("device"))}</h3></div><div class="body">${kvTable(objectEntries(hw.device))}</div></div>
@@ -954,9 +1017,7 @@
             </div>
             <div class="card">
               <div class="head"><div><h3>${esc(t("jobs"))}</h3><span class="section-kicker">${esc(t("jobOutput"))}</span></div></div>
-              <div class="body">
-                <pre class="terminal compact-log" id="job-output">${esc(renderJobs())}</pre>
-              </div>
+              <div class="body job-list" id="job-output">${renderJobsHTML()}</div>
             </div>
           </div>`;
       }
@@ -1140,7 +1201,7 @@
 
       function bindView() {
         if (state.view === "dashboard") bindDashboard();
-        if (state.view === "kiosk" || state.view === "kiosk-pages") bindKiosk();
+        if (state.view === "kiosk" || state.view === "kiosk-pages") { bindKiosk(); bindScheduler(); }
         if (state.view === "kiosk-schedule") bindScheduler();
         if (state.view === "mqtt") bindMQTT();
         if (state.view === "system" || state.view === "system-maintenance") bindSystemMaintenance();
@@ -1150,7 +1211,7 @@
         }
         if (state.view === "system-terminal") bindTerminal();
         if (state.view === "system-logs") bindLogs();
-        if (state.view.startsWith("settings")) bindSettings();
+        if (state.view.startsWith("settings") || state.view === "kiosk-display") bindSettings();
       }
 
       function bindDashboard() {
@@ -1464,6 +1525,10 @@
           cfg.kiosk.pages = collectPages();
           validatePages(cfg.kiosk.pages);
           cfg.kiosk.urls = cfg.kiosk.pages.filter((p) => !p.disabled).map((p) => p.url);
+          cfg.kiosk.scheduler = { enabled: checked("scheduler-enabled"), mode: val("scheduler-mode") || "rotation", tick_interval: durationToNs(val("scheduler-tick") || 15) };
+          cfg.kiosk.rotation = collectRotation();
+          cfg.kiosk.time_rules = collectRules();
+          validateScheduler(cfg.kiosk);
           await postJSON("/api/config", cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
@@ -1570,7 +1635,7 @@
           .filter((item) => !item.page.disabled && item.page.url)
           .map((item) => ({ page: item.index, duration_seconds: 3600 }));
         state.config = cfg;
-        markDirty("kiosk-schedule");
+        markDirty("kiosk-pages");
         renderApp();
       }
 
@@ -1580,7 +1645,7 @@
         cfg.kiosk.pages = collectPages();
         cfg.kiosk[key] = [];
         state.config = cfg;
-        markDirty("kiosk-schedule");
+        markDirty("kiosk-pages");
         renderApp();
       }
 
@@ -1799,17 +1864,17 @@
       function bindHardware() {
         document.querySelector('[data-action="display-apply"]')?.addEventListener("click", async () => {
           await runAction("display-apply", async () => {
-            await postJSON("/api/hardware/display", { value: val("display-power") });
-            await postJSON("/api/hardware/brightness", { value: Number(val("display-brightness") || 80) });
+            if (state.hardware?.support?.display_status) await postJSON("/api/hardware/display", { value: val("display-power") });
+            if (state.hardware?.support?.display_brightness) await postJSON("/api/hardware/brightness", { value: Number(val("display-brightness") || 80) });
             state.hardware = await getJSON("/api/hardware");
             renderApp();
           });
         });
         document.querySelector('[data-action="audio-apply"]')?.addEventListener("click", async () => {
           await runAction("audio-apply", async () => {
-            await postJSON("/api/hardware/volume", { value: Number(val("audio-volume") || 50) });
-            await postJSON("/api/hardware/microphone", { value: Number(val("audio-mic") || 50) });
-            await postJSON("/api/hardware/keyboard", { value: val("keyboard-power") });
+            if (state.hardware?.support?.audio_volume) await postJSON("/api/hardware/volume", { value: Number(val("audio-volume") || 50) });
+            if (state.hardware?.support?.microphone_volume) await postJSON("/api/hardware/microphone", { value: Number(val("audio-mic") || 50) });
+            if (state.hardware?.support?.keyboard_visibility) await postJSON("/api/hardware/keyboard", { value: val("keyboard-power") });
             state.hardware = await getJSON("/api/hardware");
             renderApp();
           });
@@ -1859,11 +1924,15 @@
 
       async function saveTimeSettings() {
         await runAction("time-save", async () => {
-          const cfg = cloneConfig();
-          cfg.time = cfg.time || {};
-          cfg.time.ntp_server = val("time-ntp") || "pool.ntp.org";
-          cfg.time.timezone = val("time-zone");
-          await postJSON("/api/config", cfg);
+          const job = await postJSON("/api/time", {
+            ntp_server: val("time-ntp") || "pool.ntp.org",
+            timezone: val("time-zone") || "Europe/Berlin",
+            mode: val("priv-mode") || "sudo",
+            password: val("priv-password"),
+            remember: checked("priv-remember"),
+          });
+          state.jobs.unshift(job);
+          pollJob(job.id);
           await refreshCore();
           clearDirty("system-device");
           renderApp();
@@ -1879,7 +1948,7 @@
             if (index >= 0) state.jobs[index] = job;
             if (state.view === "system" || state.view === "system-maintenance") {
               const output = document.getElementById("job-output");
-              if (output) output.textContent = renderJobs();
+              if (output) output.innerHTML = renderJobsHTML();
             }
             if (job.finished) return;
           } catch {
@@ -2008,7 +2077,7 @@
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
           state.config = cfg;
-          clearDirty("settings-browser");
+          clearDirty("kiosk-display");
           renderApp();
         }, t("saved"));
       }
@@ -2259,6 +2328,18 @@
         return state.jobs.map((job) => `$ ${job.name} (${job.exit_code})\n${(job.output || []).join("\n")}`).join("\n\n");
       }
 
+      function renderJobsHTML() {
+        if (!state.jobs.length) return `<div class="empty">${esc(t("noData"))}</div>`;
+        return state.jobs.map((job) => {
+          const running = !job.finished;
+          const duration = Math.max(0, Math.round(((job.finished ? new Date(job.finished) : new Date()) - new Date(job.started)) / 1000));
+          return `<article class="job-item">
+            <div class="job-head"><div><strong>${esc(job.name || "-")}</strong><span>${esc(formatDate(job.started))} · ${esc(formatDuration(duration))}</span></div><span class="chip ${running ? "warn" : job.exit_code === 0 ? "ok" : "bad"}">${esc(running ? t("jobRunning") : job.exit_code === 0 ? t("success") : t("failed"))}</span></div>
+            <pre class="logbox compact-log">${esc((job.output || []).join("\n") || t("waitingForOutput"))}</pre>
+          </article>`;
+        }).join("");
+      }
+
       function validationError(id, message) {
         const input = document.getElementById(id);
         if (input) {
@@ -2412,6 +2493,10 @@
 
       function field(id, label, type = "text", autocomplete = "", value = "") {
         return `<div><label for="${esc(id)}">${esc(label)}</label><input id="${esc(id)}" type="${esc(type)}" ${autocomplete ? `autocomplete="${esc(autocomplete)}"` : ""} value="${esc(value)}" /></div>`;
+      }
+
+      function unsupportedControl(label) {
+        return `<div class="unsupported-control"><label>${esc(label)}</label><span>${esc(t("notSupportedOnDevice"))}</span></div>`;
       }
 
       function textarea(id, label, value = "") {

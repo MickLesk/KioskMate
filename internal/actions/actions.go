@@ -3,7 +3,10 @@ package actions
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +81,61 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 	return job, nil
 }
 
+func (s *Service) StartTimeConfig(ctx context.Context, timezone string, server string, mode string, password string) (*Job, error) {
+	timezone = strings.TrimSpace(timezone)
+	server = strings.TrimSpace(server)
+	if timezone == "" || server == "" {
+		return nil, fmt.Errorf("timezone and NTP server are required")
+	}
+	if strings.ContainsAny(timezone+server, "\r\n\x00") {
+		return nil, fmt.Errorf("invalid time configuration")
+	}
+	zonePath := "/usr/share/zoneinfo/" + timezone
+	if timezone != "UTC" {
+		if info, err := os.Stat(zonePath); err != nil || info.IsDir() {
+			return nil, fmt.Errorf("unknown timezone: %s", timezone)
+		}
+	}
+	command := "sudo"
+	args := []string{"-n", "sh", "-c", `set -eu
+timedatectl set-timezone "$1"
+mkdir -p /etc/systemd/timesyncd.conf.d
+printf '[Time]\nNTP=%s\n' "$2" > /etc/systemd/timesyncd.conf.d/kioskmate.conf
+timedatectl set-ntp true
+if systemctl list-unit-files systemd-timesyncd.service >/dev/null 2>&1; then systemctl restart systemd-timesyncd.service; fi`, "kioskmate-time", timezone, server}
+	input := ""
+	if password == "" {
+		if storedMode, storedPassword, ok := s.privilegeCredential(); ok {
+			mode, password = storedMode, storedPassword
+		}
+	}
+	if password != "" {
+		switch mode {
+		case "sudo":
+			command, args, input = sudoPasswordCommand(command, args, password)
+		case "su":
+			command, args, input = suPasswordCommand(command, args, password)
+		default:
+			return nil, fmt.Errorf("privilege mode must be sudo or su")
+		}
+	}
+	return s.startCommand(ctx, "time-config", command, args, input, 2*time.Minute), nil
+}
+
+func (s *Service) startCommand(ctx context.Context, name string, command string, args []string, input string, timeout time.Duration) *Job {
+	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: name, Started: time.Now(), ExitCode: -1}
+	s.mu.Lock()
+	s.jobs[job.ID] = job
+	s.pruneJobsLocked(100)
+	s.mu.Unlock()
+	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	go func() {
+		defer cancel()
+		run(jobCtx, job, command, args, input)
+	}()
+	return job
+}
+
 func (s *Service) RememberPrivilege(mode string, password string) error {
 	if password == "" {
 		return nil
@@ -150,12 +208,26 @@ func (s *Service) Job(id string) (*Job, bool) {
 	return job.snapshot(), true
 }
 
+func (s *Service) Jobs(limit int) []*Job {
+	s.mu.Lock()
+	jobs := make([]*Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		jobs = append(jobs, job.snapshot())
+	}
+	s.mu.Unlock()
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Started.After(jobs[j].Started) })
+	if limit > 0 && len(jobs) > limit {
+		jobs = jobs[:limit]
+	}
+	return jobs
+}
+
 func (s *Service) command(name string) (string, []string, bool) {
 	switch name {
 	case "apt-update":
-		return "sudo", []string{"-n", "apt-get", "update", "-qq"}, true
+		return "sudo", []string{"-n", "apt-get", "update"}, true
 	case "apt-upgrade":
-		return "sudo", []string{"-n", "apt-get", "upgrade", "-y", "-qq"}, true
+		return "sudo", []string{"-n", "apt-get", "upgrade", "-y"}, true
 	case "restart-service":
 		return "systemctl", []string{"--user", "restart", s.cfg.Snapshot().Update.Service}, true
 	case "reboot":
@@ -192,10 +264,11 @@ func run(ctx context.Context, job *Job, command string, args []string, input str
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
-	output, err := cmd.CombinedOutput()
-	if len(output) > 0 {
-		job.append(strings.TrimSpace(string(output)))
-	}
+	writer := &jobWriter{job: job}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	err := cmd.Run()
+	writer.flush()
 	if err != nil {
 		job.append("error: " + err.Error())
 		job.setExit(1)
@@ -203,6 +276,41 @@ func run(ctx context.Context, job *Job, command string, args []string, input str
 	}
 	job.setExit(0)
 }
+
+type jobWriter struct {
+	mu      sync.Mutex
+	job     *Job
+	pending string
+}
+
+func (w *jobWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pending += string(data)
+	for {
+		index := strings.IndexByte(w.pending, '\n')
+		if index < 0 {
+			break
+		}
+		line := strings.TrimSpace(w.pending[:index])
+		w.pending = w.pending[index+1:]
+		if line != "" {
+			w.job.append(line)
+		}
+	}
+	return len(data), nil
+}
+
+func (w *jobWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if line := strings.TrimSpace(w.pending); line != "" {
+		w.job.append(line)
+	}
+	w.pending = ""
+}
+
+var _ io.Writer = (*jobWriter)(nil)
 
 func shellJoin(args []string) string {
 	var out []string

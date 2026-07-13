@@ -19,6 +19,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
+	"github.com/MickLesk/KioskMate/internal/systemtime"
 	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
@@ -52,6 +53,20 @@ type MQTTService struct {
 	mu             sync.Mutex
 	healthNext     map[string]time.Time
 	healthFailures map[string]int
+	state          string
+	lastError      string
+	lastConnected  time.Time
+	lastPublished  time.Time
+	failures       int
+}
+
+type MQTTConnectionStatus struct {
+	State               string     `json:"state"`
+	Connected           bool       `json:"connected"`
+	LastError           string     `json:"last_error,omitempty"`
+	LastConnected       *time.Time `json:"last_connected,omitempty"`
+	LastPublished       *time.Time `json:"last_published,omitempty"`
+	ConsecutiveFailures int        `json:"consecutive_failures"`
 }
 
 type discoveryItem struct {
@@ -75,7 +90,60 @@ type pageHealth struct {
 
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
 	_ = cfg.Snapshot()
-	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}}
+	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled"}
+}
+
+func (s *MQTTService) ConnectionStatus() MQTTConnectionStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := MQTTConnectionStatus{
+		State:               firstNonEmpty(s.state, "disabled"),
+		Connected:           s.state == "connected",
+		LastError:           s.lastError,
+		ConsecutiveFailures: s.failures,
+	}
+	if !s.lastConnected.IsZero() {
+		value := s.lastConnected
+		status.LastConnected = &value
+	}
+	if !s.lastPublished.IsZero() {
+		value := s.lastPublished
+		status.LastPublished = &value
+	}
+	return status
+}
+
+func (s *MQTTService) setConnectionResult(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		now := time.Now()
+		if s.state != "connected" {
+			s.lastConnected = now
+		}
+		s.state = "connected"
+		s.lastPublished = now
+		s.lastError = ""
+		s.failures = 0
+		return
+	}
+	s.lastError = err.Error()
+	s.failures++
+	if strings.Contains(strings.ToLower(err.Error()), "not authorized") || strings.Contains(err.Error(), "0x87") {
+		s.state = "auth_error"
+	} else {
+		s.state = "error"
+	}
+}
+
+func (s *MQTTService) setConnectionState(state string) {
+	s.mu.Lock()
+	s.state = state
+	if state == "disabled" {
+		s.lastError = ""
+		s.failures = 0
+	}
+	s.mu.Unlock()
 }
 
 func (s *MQTTService) PublishNow() error {
@@ -126,6 +194,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 	for {
 		cfg := s.cfg.Snapshot()
 		if !cfg.MQTT.Enabled || cfg.MQTT.URL == "" {
+			s.setConnectionState("disabled")
 			if activeKey != "" {
 				s.closeClients()
 				if commandCancel != nil {
@@ -153,9 +222,11 @@ func (s *MQTTService) Run(ctx context.Context) {
 			s.cache = map[string]string{}
 			s.mu.Unlock()
 			go s.commands(commandCtx)
+			s.setConnectionState("connecting")
 			s.logger.Info("mqtt connection configured", "root", s.root(), "discovery", s.cfg.Snapshot().MQTT.Discovery, "version", s.cfg.Snapshot().MQTT.Version)
 		}
 		if err := s.publishAll(); err != nil {
+			s.setConnectionResult(err)
 			s.logger.Warn("mqtt publish failed", "error", err)
 			s.mu.Lock()
 			if s.client != nil {
@@ -164,6 +235,8 @@ func (s *MQTTService) Run(ctx context.Context) {
 			}
 			s.cache = map[string]string{}
 			s.mu.Unlock()
+		} else {
+			s.setConnectionResult(nil)
 		}
 		if !sleepContext(ctx, mqttInterval(s.cfg.Snapshot().MQTT.Interval)) {
 			s.publishOffline()
@@ -442,6 +515,7 @@ func (s *MQTTService) publishAll() error {
 	client := s.mqtt()
 	cfg := s.cfg.Snapshot()
 	hw := s.hardware.Status(context.Background())
+	timeStatus := systemtime.Read(context.Background(), cfg.Time.NTPServer)
 	if err := s.publishDiscovery(client, hw); err != nil {
 		return err
 	}
@@ -494,6 +568,11 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "update/title", "KioskMate "+s.version, true)
 	_ = s.publishState(client, "update/release_url", "", true)
 	_ = s.publishState(client, "mqtt_version", cfg.MQTT.Version, true)
+	_ = s.publishState(client, "mqtt_connection", "connected", false)
+	_ = s.publishState(client, "mqtt_last_published", time.Now().UTC().Format(time.RFC3339), false)
+	_ = s.publishState(client, "timezone", firstNonEmpty(timeStatus.Timezone, cfg.Time.Timezone, "UTC"), true)
+	_ = s.publishState(client, "ntp_server", cfg.Time.NTPServer, true)
+	_ = s.publishState(client, "ntp_synchronized", boolState(timeStatus.Synchronized), false)
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
 	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
 	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
@@ -774,6 +853,18 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		s.sensor(device, "disk_usage", "Disk Usage", "mdi:harddisk", "%"),
 		s.sensor(device, "heartbeat", "Heartbeat", "mdi:heart-flash", ""),
 		s.sensor(device, "mqtt_version", "MQTT Version", "mdi:protocol", ""),
+		s.diagnosticSensor(device, "mqtt_connection", "MQTT Connection", "mdi:lan-connect", ""),
+		s.diagnosticSensor(device, "mqtt_last_published", "MQTT Last Published", "mdi:clock-check", ""),
+		s.diagnosticSensor(device, "timezone", "Timezone", "mdi:map-clock", ""),
+		s.diagnosticSensor(device, "ntp_server", "NTP Server", "mdi:server-network", ""),
+		{
+			Topic: s.discoveryTopic("binary_sensor", "ntp_synchronized"),
+			Data: map[string]any{
+				"name": "Time Synchronized", "unique_id": s.cfg.Snapshot().MQTT.Node + "_ntp_synchronized",
+				"state_topic": s.root() + "/ntp_synchronized/state", "payload_on": "ON", "payload_off": "OFF",
+				"device_class": "connectivity", "entity_category": "diagnostic", "device": device,
+			},
+		},
 		s.sensor(device, "page_name", "Page Name", "mdi:card-text", ""),
 		s.sensor(device, "scheduler_state", "Scheduler State", "mdi:calendar-clock", ""),
 		s.sensor(device, "scheduler_mode", "Scheduler Mode", "mdi:timeline-clock", ""),
@@ -1223,6 +1314,11 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "browser_restart_count"},
 		[2]string{"sensor", "browser_command"},
 		[2]string{"sensor", "browser_last_error"},
+		[2]string{"sensor", "mqtt_connection"},
+		[2]string{"sensor", "mqtt_last_published"},
+		[2]string{"sensor", "timezone"},
+		[2]string{"sensor", "ntp_server"},
+		[2]string{"binary_sensor", "ntp_synchronized"},
 		[2]string{"sensor", "page_count"},
 		[2]string{"sensor", "page_name"},
 		[2]string{"sensor", "scheduler_state"},

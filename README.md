@@ -28,16 +28,16 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.2.1` refines the redesigned Admin UI with protected form changes, inline validation and simpler scheduler controls while preserving the existing config format, browser profiles and Home Assistant sessions.
+KioskMate `0.3.0` consolidates the main kiosk workflow, adds real MQTT and NTP runtime status, capability-driven hardware controls and persistent maintenance feedback while preserving the existing config format, browser profiles and Home Assistant sessions.
 
 The Admin UI is organized by task:
 
 - **Dashboard** for live status, quick display control and recovery.
-- **Kiosk -> Pages** for dashboard URLs and display order.
-- **Kiosk -> Schedule** for rotations and fixed time rules.
+- **Kiosk -> Pages and workflow** for dashboard URLs, display order, rotations and fixed time rules.
+- **Kiosk -> Display and rendering** for appearance, Home Assistant theme behavior, performance and watchdog settings.
 - **MQTT** for broker connectivity and Home Assistant discovery.
-- **System** for device controls, maintenance, terminal and logs.
-- **Settings** for browser behavior, access, backups and updates.
+- **System** for device/time controls, maintenance jobs and logs.
+- **Settings** for access, backups and updates.
 
 ## Requirements
 
@@ -77,9 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.2.1/kioskmate_0.2.1_arm64.deb
-sudo apt install ./kioskmate_0.2.1_arm64.deb
-systemctl --user daemon-reload
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.3.0/kioskmate_0.3.0_arm64.deb
+sudo apt install ./kioskmate_0.3.0_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
@@ -122,7 +121,7 @@ For amd64, use the `_amd64.deb` asset.
 
 Durations are currently stored as Go JSON durations in nanoseconds. The watchdog treats memory pressure as the main automatic restart signal. CPU-only pressure is tolerated for at least 10 minutes and automatic watchdog restarts are rate-limited to avoid restart loops on busy Raspberry Pi dashboards.
 
-For dashboards with sustained Chromium CPU/GPU load on Raspberry Pi hardware, use **Settings -> Browser and performance -> Performance profile -> Low power** or apply **Safe Mode**. Chromium will still show several processes for a single kiosk window; the low-power profile reduces renderer/raster parallelism and expensive GPU raster features.
+For dashboards with sustained Chromium CPU/GPU load on Raspberry Pi hardware, use **Kiosk -> Display and rendering -> Performance profile -> Low power** or apply **Safe Mode**. Chromium will still show several processes for a single kiosk window; the low-power profile reduces renderer/raster parallelism and expensive GPU raster features.
 
 ## MQTT
 
@@ -168,7 +167,7 @@ KioskMate also publishes per-page Home Assistant entities for:
 - last page-health error
 - last page-health check time
 
-Diagnostic entities also expose the Home Assistant authentication guard, its reason and timestamp, and whether Chromium DevTools control is connected.
+Diagnostic entities also expose the Home Assistant authentication guard, Chromium DevTools control, MQTT runtime state, last MQTT publish, timezone, NTP server and synchronization state.
 
 If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
 
@@ -182,7 +181,7 @@ Regular Home Assistant health checks use the unauthenticated `/manifest.json` en
 
 KioskMate **Kiosk theme** `dark` and `light` emulate the corresponding OS `prefers-color-scheme` value on Chromium's active rendering target. This matches TouchKio's Electron `nativeTheme` behavior and preserves the Home Assistant user's selected custom theme. Save the browser settings and restart the display after changing the mode. The Dashboard reports whether Home Assistant actually applied the requested mode. Use `force-dark` only for pages or custom cards that ignore `prefers-color-scheme`; it consumes more CPU/GPU.
 
-For multi-dashboard setups, enable **Settings -> Browser and performance -> Separate browser profile per page** when one broken Home Assistant session should not affect every page.
+For multi-dashboard setups, enable **Kiosk -> Display and rendering -> Advanced browser settings -> Separate browser profile per page** when one broken Home Assistant session should not affect every page.
 
 ## Diagnostics
 
@@ -194,14 +193,14 @@ The Logs page can show core logs, browser logs, systemd journal, service status 
 ## Packaging
 
 ```bash
-VERSION=0.2.1 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.2.1 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.3.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.3.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 Cross-platform packaging without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.2.1 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.3.0 --arch arm64 --arch amd64
 ```
 
 The package installs:

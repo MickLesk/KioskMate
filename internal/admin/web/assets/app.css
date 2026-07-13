@@ -1318,6 +1318,63 @@ tr:last-child td {
   }
 }
 
+.subsection-head,
+.job-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.unsupported-control {
+  min-height: 64px;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.unsupported-control label {
+  margin-bottom: 5px;
+}
+
+.job-list {
+  display: grid;
+  gap: 12px;
+}
+
+.job-item {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.job-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.job-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.job-head span:not(.chip) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compact-disclosure {
+  margin-top: 14px;
+}
+
+.workflow-settings {
+  max-width: 720px;
+}
+
 @media (max-width: 920px) {
   .layout {
     max-width: 100vw;

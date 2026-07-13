@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.0
+
+- Consolidated kiosk pages, rotation and time rules into one Pages and workflow workspace with a single save path.
+- Moved display appearance, Home Assistant theme behavior and browser performance controls directly under Kiosk.
+- Removed the limited command runner from the normal navigation; remote administration remains available through SSH and authenticated maintenance actions.
+- Added real MQTT runtime states for connecting, connected, authentication failure and transport errors in the Admin header and MQTT view.
+- Fixed MQTT connection tests and config saves so an existing stored password remains usable when the redacted password field is left blank.
+- Added live MQTT failure details, last connection and last publish timestamps, plus clearer Home Assistant discovery status.
+- Added real Linux time synchronization diagnostics, a timezone selector and privileged systemd-timesyncd configuration jobs.
+- Added the kiosk device clock and NTP synchronization state to the global header.
+- Made display, brightness, audio, microphone and on-screen keyboard controls capability-driven so unsupported controls are no longer presented as functional.
+- Added persistent maintenance job listing across Admin page reloads with streamed command output, state, duration and exit result.
+- Simplified single-page controls by hiding previous and next navigation when only one kiosk page is enabled.
+- Moved bulk page checks, import/export and render diagnostics into an advanced actions disclosure.
+- Added Home Assistant diagnostic entities for MQTT connection state, last publish time, timezone, NTP server and time synchronization.
+- Expanded English and German translations for the reorganized workflow and runtime states.
+
 ## v0.2.1
 
 - Added reliable unsaved-change tracking across kiosk pages, schedules, MQTT, device time, browser, access and raw configuration forms.

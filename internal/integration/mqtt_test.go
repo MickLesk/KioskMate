@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,25 @@ import (
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 )
+
+func TestMQTTConnectionStatusTracksSuccessAndAuthFailure(t *testing.T) {
+	service := NewMQTTService(mqttTestConfig(t), &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.setConnectionState("connecting")
+	service.setConnectionResult(context.DeadlineExceeded)
+	status := service.ConnectionStatus()
+	if status.State != "error" || status.ConsecutiveFailures != 1 || status.LastError == "" {
+		t.Fatalf("error status = %#v", status)
+	}
+	service.setConnectionResult(nil)
+	status = service.ConnectionStatus()
+	if status.State != "connected" || !status.Connected || status.LastConnected == nil || status.LastPublished == nil || status.ConsecutiveFailures != 0 {
+		t.Fatalf("connected status = %#v", status)
+	}
+	service.setConnectionResult(errors.New("mqtt connack failed: not authorized (reason=0x87)"))
+	if got := service.ConnectionStatus().State; got != "auth_error" {
+		t.Fatalf("auth status = %q", got)
+	}
+}
 
 type fakeBrowser struct {
 	active       int

@@ -840,3 +840,41 @@ window.KIOSKMATE_I18N = {
           setupInfo: "Führe `kioskmate --admin-info` auf dem Kiosk aus, wenn du das Setup-Token erneut brauchst.",
         },
       };
+
+Object.assign(window.KIOSKMATE_I18N.en, {
+  pagesAndWorkflow: "Pages and workflow",
+  displayRendering: "Display and rendering",
+  advancedActions: "Advanced actions",
+  connecting: "Connecting",
+  authenticationFailed: "Authentication failed",
+  notAvailable: "Unavailable",
+  time: "Time",
+  timeSynchronized: "Time synchronized",
+  timeNotSynchronized: "Time not synchronized",
+  applyTimeSettings: "Apply system time",
+  notSupportedOnDevice: "Not supported by this device",
+  waitingForOutput: "Waiting for output...",
+  lastPublished: "Last published",
+  failures: "Failures",
+  reloadBrowser: "Reload page",
+  reloadBrowserHint: "Reloads the active page in the existing browser session without clearing the Home Assistant login.",
+});
+
+Object.assign(window.KIOSKMATE_I18N.de, {
+  pagesAndWorkflow: "Seiten und Ablauf",
+  displayRendering: "Anzeige und Darstellung",
+  advancedActions: "Weitere Aktionen",
+  connecting: "Verbindung wird hergestellt",
+  authenticationFailed: "Anmeldung fehlgeschlagen",
+  notAvailable: "Nicht verfügbar",
+  time: "Zeit",
+  timeSynchronized: "Zeit synchronisiert",
+  timeNotSynchronized: "Zeit nicht synchronisiert",
+  applyTimeSettings: "Systemzeit anwenden",
+  notSupportedOnDevice: "Von diesem Gerät nicht unterstützt",
+  waitingForOutput: "Warte auf Ausgabe...",
+  lastPublished: "Zuletzt gesendet",
+  failures: "Fehler",
+  reloadBrowser: "Seite neu laden",
+  reloadBrowserHint: "Lädt die aktive Seite in der vorhandenen Browsersitzung neu, ohne die Home-Assistant-Anmeldung zu löschen.",
+});

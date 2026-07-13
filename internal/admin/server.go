@@ -31,8 +31,10 @@ import (
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/config"
 	"github.com/MickLesk/KioskMate/internal/hardware"
+	"github.com/MickLesk/KioskMate/internal/integration"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
+	"github.com/MickLesk/KioskMate/internal/systemtime"
 	"github.com/MickLesk/KioskMate/internal/updater"
 	"golang.org/x/crypto/argon2"
 )
@@ -59,6 +61,7 @@ type Browser interface {
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
+	ConnectionStatus() integration.MQTTConnectionStatus
 }
 
 type Server struct {
@@ -120,6 +123,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/auth/logout-all", s.auth(s.authLogoutAll))
 	mux.HandleFunc("/api/auth/password", s.auth(s.authPassword))
 	mux.HandleFunc("/api/status", s.auth(s.status))
+	mux.HandleFunc("/api/time", s.auth(s.timeStatus))
+	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
 	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
 	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
@@ -157,6 +162,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/privilege", s.auth(s.privilege))
 	mux.HandleFunc("/api/hardware", s.auth(s.hardwareStatus))
 	mux.HandleFunc("/api/hardware/", s.auth(s.hardwareAction))
+	mux.HandleFunc("/api/jobs", s.auth(s.jobs))
 	mux.HandleFunc("/api/jobs/", s.auth(s.job))
 
 	server := &http.Server{
@@ -287,6 +293,18 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 25
+	if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 100 {
+		limit = value
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": s.actions.Jobs(limit)})
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -511,27 +529,84 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	mqttStatus := integration.MQTTConnectionStatus{State: "unavailable"}
+	if s.mqtt != nil {
+		mqttStatus = s.mqtt.ConnectionStatus()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"browser":  s.browser.Status(),
 		"hardware": s.hardware.Status(ctx),
+		"mqtt":     mqttStatus,
 		"config": map[string]any{
-			"path":        s.cfg.Path,
-			"profile":     s.cfg.Snapshot().Performance.Profile,
-			"gpu_mode":    s.cfg.Snapshot().Performance.GPUMode,
-			"theme":       s.cfg.Snapshot().Kiosk.Theme,
-			"zoom":        s.cfg.Snapshot().Kiosk.ZoomPercent,
-			"widget":      s.cfg.Snapshot().Kiosk.Widget,
-			"watchdog":    s.cfg.Snapshot().Watchdog.Enabled,
-			"admin_addr":  s.cfg.Snapshot().Admin.Addr(),
-			"kiosk_urls":  s.cfg.Snapshot().Kiosk.URLs,
-			"kiosk_pages": s.cfg.Snapshot().Kiosk.Pages,
-			"scheduler":   s.cfg.Snapshot().Kiosk.Scheduler,
-			"rotation":    s.cfg.Snapshot().Kiosk.Rotation,
-			"time_rules":  s.cfg.Snapshot().Kiosk.TimeRules,
-			"browser_cmd": s.cfg.Snapshot().Kiosk.BrowserCommand,
-			"mqtt":        s.cfg.Snapshot().MQTT.Enabled,
+			"path":                     s.cfg.Path,
+			"profile":                  s.cfg.Snapshot().Performance.Profile,
+			"gpu_mode":                 s.cfg.Snapshot().Performance.GPUMode,
+			"theme":                    s.cfg.Snapshot().Kiosk.Theme,
+			"zoom":                     s.cfg.Snapshot().Kiosk.ZoomPercent,
+			"widget":                   s.cfg.Snapshot().Kiosk.Widget,
+			"watchdog":                 s.cfg.Snapshot().Watchdog.Enabled,
+			"admin_addr":               s.cfg.Snapshot().Admin.Addr(),
+			"kiosk_urls":               s.cfg.Snapshot().Kiosk.URLs,
+			"kiosk_pages":              s.cfg.Snapshot().Kiosk.Pages,
+			"scheduler":                s.cfg.Snapshot().Kiosk.Scheduler,
+			"rotation":                 s.cfg.Snapshot().Kiosk.Rotation,
+			"time_rules":               s.cfg.Snapshot().Kiosk.TimeRules,
+			"browser_cmd":              s.cfg.Snapshot().Kiosk.BrowserCommand,
+			"mqtt":                     s.cfg.Snapshot().MQTT.Enabled,
+			"mqtt_password_configured": s.cfg.Snapshot().MQTT.Password != "",
 		},
 	})
+}
+
+func (s *Server) timeStatus(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		writeJSON(w, http.StatusOK, systemtime.Read(ctx, s.cfg.Snapshot().Time.NTPServer))
+	case http.MethodPost:
+		var body struct {
+			Timezone  string `json:"timezone"`
+			NTPServer string `json:"ntp_server"`
+			Mode      string `json:"mode"`
+			Password  string `json:"password"`
+			Remember  bool   `json:"remember"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if body.Remember && body.Password != "" {
+			if err := s.actions.RememberPrivilege(body.Mode, body.Password); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		job, err := s.actions.StartTimeConfig(context.Background(), body.Timezone, body.NTPServer, body.Mode, body.Password)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := s.cfg.Mutate(func(next *config.Config) error {
+			next.Time.Timezone = body.Timezone
+			next.Time.NTPServer = body.NTPServer
+			return nil
+		}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, job)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) timeZones(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"zones": systemtime.Zones()})
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
@@ -1394,6 +1469,7 @@ func (s *Server) mqttTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.applyStoredMQTTPassword(&body)
 	writeJSON(w, http.StatusOK, runMQTTTest(body, nil))
 }
 
@@ -1407,6 +1483,7 @@ func (s *Server) mqttTestLive(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.applyStoredMQTTPassword(&body)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
@@ -1426,6 +1503,12 @@ func (s *Server) mqttTestLive(w http.ResponseWriter, r *http.Request) {
 		status = "ok"
 	}
 	emit(map[string]any{"step": "result", "status": status, "message": "MQTT test finished", "result": result})
+}
+
+func (s *Server) applyStoredMQTTPassword(body *mqttTestRequest) {
+	if body != nil && body.Password == "" {
+		body.Password = s.cfg.Snapshot().MQTT.Password
+	}
 }
 
 func (s *Server) mqttDiscovery(w http.ResponseWriter, r *http.Request) {
