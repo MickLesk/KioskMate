@@ -62,7 +62,7 @@ func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(cfg, &panicStatusBrowser{}, nil, nil, nil, nil, "0.7.2", slog.Default())
+	server := NewServer(cfg, &fakeActionBrowser{}, nil, nil, nil, nil, "0.7.2", slog.Default())
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"password":"test-password"}`))
 	rec := httptest.NewRecorder()
 
@@ -84,6 +84,9 @@ func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T
 	}
 	if body.Config.Admin.PasswordHash != "" || body.Config.MQTT.Password != "" {
 		t.Fatal("login response exposed private credentials")
+	}
+	if !body.Config.MQTT.PasswordConfigured {
+		t.Fatal("login response should indicate that an MQTT password is configured")
 	}
 	if body.Config.Kiosk.ZoomPercent == 0 {
 		t.Fatal("login response is missing the public Admin configuration")

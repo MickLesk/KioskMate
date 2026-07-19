@@ -145,6 +145,16 @@ func (b *Browser) SetDisplayPower(control displayPowerControl) {
 	b.display = control
 }
 
+func (b *Browser) NoteDisplayPower(power string) {
+	power = strings.ToUpper(strings.TrimSpace(power))
+	if power != "ON" && power != "OFF" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.displayPower = power
+}
+
 func (b *Browser) Start(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -311,6 +321,9 @@ func (b *Browser) Stop(ctx context.Context) error {
 }
 
 func (b *Browser) Restart(ctx context.Context) error {
+	if err := b.authenticationAllowed(); err != nil {
+		return err
+	}
 	b.mu.Lock()
 	b.restartCount++
 	b.mu.Unlock()
@@ -447,7 +460,7 @@ func (b *Browser) Status() Status {
 }
 
 func (b *Browser) RunScheduler(ctx context.Context) {
-	timer := time.NewTimer(b.schedulerInterval())
+	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
 		select {
@@ -502,21 +515,25 @@ func scheduleWantsDisplayOff(cfg config.KioskConfig, target int, status Schedule
 	if !cfg.Scheduler.Enabled || len(cfg.TimeRules) == 0 {
 		return false
 	}
-	mode := cfg.Scheduler.Mode
-	if mode == "" {
-		mode = "rotation"
+	if status.Reason == "manual override" || status.Mode == "override" {
+		return false
 	}
 	timeRuleActive := status.Reason == "time" && target >= 0
 	if timeRuleActive {
 		return false
 	}
-	if mode == "time" {
-		return true
+	mode := cfg.Scheduler.Mode
+	if mode == "" {
+		mode = "rotation"
 	}
-	if mode == "hybrid" && status.Reason == "no active time rule" {
+	switch mode {
+	case "time":
 		return true
+	case "hybrid":
+		return schedulePageWantsPowerOff(cfg) || len(cfg.Rotation) == 0
+	default:
+		return false
 	}
-	return schedulePageWantsPowerOff(cfg) && !timeRuleActive && (mode == "time" || mode == "hybrid")
 }
 
 func schedulePageWantsPowerOff(cfg config.KioskConfig) bool {

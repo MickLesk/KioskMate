@@ -122,19 +122,19 @@ type WatchdogConfig struct {
 }
 
 type MQTTConfig struct {
-	Enabled             bool          `json:"enabled"`
-	URL                 string        `json:"url"`
-	Version             string        `json:"version"`
-	Username            string        `json:"username"`
-	Password            string        `json:"password"`
-	PasswordConfigured  bool          `json:"password_configured,omitempty"`
-	Discovery           string        `json:"discovery"`
-	BaseTopic           string        `json:"base_topic"`
-	Node                string        `json:"node"`
-	ClientID            string        `json:"client_id"`
-	KeepAlive           time.Duration `json:"keepalive"`
-	ForceDisableRetain  bool          `json:"force_disable_retain"`
-	Interval            time.Duration `json:"interval"`
+	Enabled            bool          `json:"enabled"`
+	URL                string        `json:"url"`
+	Version            string        `json:"version"`
+	Username           string        `json:"username"`
+	Password           string        `json:"password"`
+	PasswordConfigured bool          `json:"password_configured,omitempty"`
+	Discovery          string        `json:"discovery"`
+	BaseTopic          string        `json:"base_topic"`
+	Node               string        `json:"node"`
+	ClientID           string        `json:"client_id"`
+	KeepAlive          time.Duration `json:"keepalive"`
+	ForceDisableRetain bool          `json:"force_disable_retain"`
+	Interval           time.Duration `json:"interval"`
 }
 
 type TimeConfig struct {

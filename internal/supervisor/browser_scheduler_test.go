@@ -209,6 +209,56 @@ func TestHybridWithPowerOffSkipsRotationOutsideSchedule(t *testing.T) {
 	}
 }
 
+func TestManualOverrideKeepsDisplayOnInTimeMode(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.Scheduler = config.KioskScheduler{Enabled: true, Mode: "time"}
+	cfg.Kiosk.TimeRules = []config.TimeRule{{
+		Name:  "Day",
+		Page:  0,
+		Start: "07:00",
+		End:   "23:00",
+	}}
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	fake := &fakeDisplayPower{}
+	browser.SetDisplayPower(fake)
+	until := time.Date(2026, 7, 7, 23, 45, 0, 0, time.Local)
+	browser.mu.Lock()
+	browser.override = ManualOverride{Active: true, Page: 1, Until: &until, Source: "test"}
+	browser.mu.Unlock()
+
+	page, status := browser.schedulerTarget(time.Date(2026, 7, 7, 23, 30, 0, 0, time.Local))
+	if page != 1 || status.Reason != "manual override" {
+		t.Fatalf("override = page %d, status %#v", page, status)
+	}
+	if scheduleWantsDisplayOff(cfg.Kiosk, page, status) {
+		t.Fatal("manual override must not force display off")
+	}
+	browser.applyScheduleDisplayPower(context.Background(), page, status)
+	if fake.last == "OFF" {
+		t.Fatal("manual override applied display OFF")
+	}
+}
+
+func TestHybridWithoutPowerOffFallsBackToRotation(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.Scheduler = config.KioskScheduler{Enabled: true, Mode: "hybrid"}
+	cfg.Kiosk.Rotation = []config.RotationItem{{Page: 1, DurationSeconds: 60}}
+	cfg.Kiosk.TimeRules = []config.TimeRule{{
+		Name:  "Day",
+		Page:  0,
+		Start: "07:00",
+		End:   "23:00",
+	}}
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	page, status := browser.schedulerTarget(time.Date(2026, 7, 7, 23, 30, 0, 0, time.Local))
+	if page != 1 || status.Reason != "rotation" {
+		t.Fatalf("hybrid without power-off = page %d, status %#v", page, status)
+	}
+	if scheduleWantsDisplayOff(cfg.Kiosk, page, status) {
+		t.Fatal("hybrid rotation fallback should keep display on")
+	}
+}
+
 type fakeDisplayPower struct {
 	last string
 	err  error

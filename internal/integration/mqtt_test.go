@@ -109,6 +109,8 @@ func (b *fakeBrowser) CaptureScreenshot(context.Context) ([]byte, error) {
 
 func (b *fakeBrowser) TripAuthGuard(string) {}
 
+func (b *fakeBrowser) NoteDisplayPower(string) {}
+
 func (b *fakeBrowser) Status() supervisor.Status {
 	return supervisor.Status{Active: b.active}
 }
@@ -196,6 +198,7 @@ func TestMQTTCommandsUpdateConfigControls(t *testing.T) {
 	service.handleCommand(context.Background(), service.root()+"/gpu_mode/set", "software")
 	service.handleCommand(context.Background(), service.root()+"/reduce_motion/set", "ON")
 	service.handleCommand(context.Background(), service.root()+"/isolate_page_sessions/set", "ON")
+	service.handleCommand(context.Background(), service.root()+"/kiosk_theme/set", "dark")
 	service.handleCommand(context.Background(), service.root()+"/watchdog_enabled/set", "OFF")
 
 	if cfg.Kiosk.Scheduler.TickInterval != 45*time.Second {
@@ -203,6 +206,35 @@ func TestMQTTCommandsUpdateConfigControls(t *testing.T) {
 	}
 	if cfg.Performance.Profile != "raspberry" || cfg.Performance.GPUMode != "software" || !cfg.Performance.ReduceMotion || !cfg.Kiosk.IsolateSessions || cfg.Watchdog.Enabled {
 		t.Fatalf("config controls not updated: %#v %#v", cfg.Performance, cfg.Watchdog)
+	}
+	if cfg.Kiosk.Theme != "dark" {
+		t.Fatalf("kiosk theme = %q, want dark", cfg.Kiosk.Theme)
+	}
+}
+
+func TestMQTTConnectionKeyTracksPageTriggers(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	before := service.connectionKey()
+	cfg.Kiosk.Pages = append(cfg.Kiosk.Pages, config.KioskPage{
+		Name:        "Trigger",
+		URL:         "http://ha.local/trigger",
+		DisplayMode: "mqtt",
+		Trigger:     config.KioskPageTrigger{Topic: "home/show", Payload: "ON"},
+	})
+	after := service.connectionKey()
+	if before == after {
+		t.Fatal("connection key should change when MQTT page triggers are added")
+	}
+}
+
+func TestMQTTInvalidPageURLReportsError(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	before := append([]config.KioskPage(nil), cfg.Kiosk.Pages...)
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.handleCommand(context.Background(), service.root()+"/page_url/set", "ftp://bad.example")
+	if len(cfg.Kiosk.Pages) != len(before) || cfg.Kiosk.Pages[0].URL != before[0].URL {
+		t.Fatalf("invalid page url mutated config: %#v", cfg.Kiosk.Pages)
 	}
 }
 

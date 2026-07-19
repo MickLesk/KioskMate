@@ -33,6 +33,7 @@ type Browser interface {
 	SetActive(context.Context, int) error
 	ResetSession(context.Context) error
 	TripAuthGuard(string)
+	NoteDisplayPower(string)
 	Status() supervisor.Status
 }
 
@@ -289,6 +290,17 @@ func mqttInterval(interval time.Duration) time.Duration {
 
 func (s *MQTTService) connectionKey() string {
 	cfg := s.cfg.Snapshot()
+	var pageSig strings.Builder
+	for _, page := range cfg.Kiosk.Pages {
+		pageSig.WriteString(page.PageID)
+		pageSig.WriteByte(0)
+		pageSig.WriteString(page.DisplayMode)
+		pageSig.WriteByte(0)
+		pageSig.WriteString(strings.TrimSpace(page.Trigger.Topic))
+		pageSig.WriteByte(0)
+		pageSig.WriteString(strings.TrimSpace(page.Trigger.Payload))
+		pageSig.WriteByte('|')
+	}
 	return strings.Join([]string{
 		cfg.MQTT.URL,
 		cfg.MQTT.Username,
@@ -300,6 +312,7 @@ func (s *MQTTService) connectionKey() string {
 		cfg.MQTT.Version,
 		cfg.MQTT.KeepAlive.String(),
 		fmt.Sprint(cfg.MQTT.ForceDisableRetain),
+		pageSig.String(),
 	}, "\x00")
 }
 
@@ -375,6 +388,7 @@ func (s *MQTTService) commands(ctx context.Context) {
 		s.root() + "/gpu_mode/set",
 		s.root() + "/reduce_motion/set",
 		s.root() + "/isolate_page_sessions/set",
+		s.root() + "/kiosk_theme/set",
 		s.root() + "/watchdog_enabled/set",
 	}
 	for _, page := range s.pageEntities() {
@@ -507,6 +521,9 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		_, err = s.updater.Rollback(context.Background(), "", "")
 	case strings.HasSuffix(topic, "/display/power/set"):
 		err = s.hardware.SetDisplay(actionCtx, command)
+		if err == nil {
+			s.noteBrowserDisplayPower(command)
+		}
 	case strings.HasSuffix(topic, "/display/brightness/set"):
 		err = s.hardware.SetBrightness(actionCtx, atoi(command))
 	case strings.HasSuffix(topic, "/volume/set"):
@@ -529,6 +546,8 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			if err == nil {
 				err = s.browser.SetActive(actionCtx, 0)
 			}
+		} else {
+			err = fmt.Errorf("page url must start with http:// or https://")
 		}
 	case strings.Contains(topic, "/pages/") && strings.HasSuffix(topic, "/activate"):
 		err = s.setPageByEntityTopic(actionCtx, topic)
@@ -584,9 +603,9 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			err = s.browser.Start(actionCtx)
 		case "stop":
 			err = s.browser.Stop(actionCtx)
-		case "restart", "reload":
+		case "restart":
 			err = s.browser.Restart(actionCtx)
-		case "refresh":
+		case "reload", "refresh":
 			err = s.browser.Reload(actionCtx)
 		case "next":
 			err = s.browser.Next(actionCtx)
@@ -727,9 +746,7 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "telemetry_rss_maximum", fmt.Sprintf("%d", status.Telemetry.RSSMaximumMB), true)
 	_ = s.publishState(client, "override_active", boolState(status.Override.Active), true)
 	_ = s.publishState(client, "override_page", fmt.Sprintf("%d", status.Override.Page+1), true)
-	s.mu.Lock()
 	overrideMinutes := int(s.overrideDuration / time.Minute)
-	s.mu.Unlock()
 	_ = s.publishState(client, "override_duration", fmt.Sprintf("%d", overrideMinutes), true)
 	if status.Override.Until != nil {
 		_ = s.publishState(client, "override_until", status.Override.Until.Format(time.RFC3339), true)
@@ -1844,6 +1861,12 @@ func (s *MQTTService) pageIndex(value string) int {
 	return -1
 }
 
+func (s *MQTTService) noteBrowserDisplayPower(power string) {
+	if s.browser != nil {
+		s.browser.NoteDisplayPower(power)
+	}
+}
+
 func (s *MQTTService) setPageByName(ctx context.Context, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -2090,7 +2113,9 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 		s.healthFailures[page.ID] = failures
 		s.healthNext[page.ID] = now.Add(minDuration(15*time.Minute, 30*time.Second*time.Duration(1<<(failures-1))))
 		if health.StatusCode == http.StatusForbidden && likelyHomeAssistantPage(page.URL) {
-			s.browser.TripAuthGuard("Home Assistant returned HTTP 403 during passive health check")
+			// Passive only — TripAuthGuard here falsely banned healthy kiosks when HA
+			// rate-limited /manifest.json or returned a transient proxy 403.
+			s.logger.Warn("home assistant health check returned 403", "page", page.Name, "url", page.URL)
 		}
 	}
 	s.healthIx = (s.healthIx + 1) % len(pages)

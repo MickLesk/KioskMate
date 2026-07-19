@@ -58,6 +58,8 @@ func (b *fakeActionBrowser) CaptureScreenshot(context.Context) ([]byte, error) {
 
 func (b *fakeActionBrowser) TripAuthGuard(string) {}
 
+func (b *fakeActionBrowser) NoteDisplayPower(string) {}
+
 func (b *fakeActionBrowser) Status() supervisor.Status {
 	return b.status
 }

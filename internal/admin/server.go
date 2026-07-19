@@ -55,6 +55,7 @@ type Browser interface {
 	SetActive(context.Context, int) error
 	CaptureScreenshot(context.Context) ([]byte, error)
 	TripAuthGuard(string)
+	NoteDisplayPower(string)
 	Status() supervisor.Status
 }
 
@@ -277,6 +278,9 @@ func (s *Server) hardwareAction(w http.ResponseWriter, r *http.Request) {
 	switch name {
 	case "display":
 		err = s.hardware.SetDisplay(ctx, fmt.Sprint(body.Value))
+		if err == nil {
+			s.browser.NoteDisplayPower(fmt.Sprint(body.Value))
+		}
 	case "brightness":
 		err = s.hardware.SetBrightness(ctx, intValue(body.Value))
 	case "volume":
@@ -567,12 +571,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if s.mqtt != nil {
 		mqttStatus = s.mqtt.ConnectionStatus()
 	}
+	updateStatus := updater.ReleaseInfo{CurrentVersion: s.version}
+	if s.updater != nil {
+		updateStatus = s.updater.Status()
+	}
 	if r.URL.Query().Get("fast") == "1" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"browser":                s.browser.Status(),
 			"hardware":               hardware.Status{},
 			"mqtt":                   mqttStatus,
-			"update":                 s.updater.Status(),
+			"update":                 updateStatus,
 			"profile_recommendation": map[string]any{},
 			"config":                 statusConfig(cfg),
 		})
@@ -586,7 +594,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"browser":                s.browser.Status(),
 		"hardware":               hardwareStatus,
 		"mqtt":                   mqttStatus,
-		"update":                 s.updater.Status(),
+		"update":                 updateStatus,
 		"profile_recommendation": recommendation,
 		"config":                 statusConfig(cfg),
 	})

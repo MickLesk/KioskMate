@@ -1755,8 +1755,8 @@
             const index = Number(button.dataset.pageDuplicate);
             cfg.kiosk.pages = collectPages();
             const source = cfg.kiosk.pages[index];
-            if (source) cfg.kiosk.pages.splice(index + 1, 0, { ...source, name: `${source.name || t("pages")} ${t("copy")}` });
-            syncKioskURLs(cfg.kiosk);
+            if (source) cfg.kiosk.pages.splice(index + 1, 0, { ...source, page_id: createPageID(), name: `${source.name || t("pages")} ${t("copy")}` });
+            synchronizeKioskWorkflow(cfg.kiosk);
             state.config = cfg;
             markDirty();
             renderApp();

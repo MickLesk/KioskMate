@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.4
+
+- Fixed a MQTT publish deadlock that blocked Home Assistant state updates, connection status and follow-up commands after the first successful publish.
+- Subscribed to `kiosk_theme/set`, refreshed MQTT command subscriptions when page/trigger configuration changes, and mapped generic `reload` to a page refresh instead of a full browser restart.
+- Stopped passive Home Assistant health checks from tripping the auth guard on transient `/manifest.json` 403 responses.
+- Wired schedule windows to display power: outside a pure time workflow the panel turns off, inside it turns back on, with an immediate first scheduler tick.
+- Kept manual page overrides from forcing the display off, synchronized Admin/MQTT display-power changes with the scheduler cache, and guarded browser restart while the auth guard is active.
+- Improved MQTT Admin UX (password retention signal, post-save runtime polling), Wayland display-env detection, sudo privilege probing for reboot/shutdown, and accurate browser status via the fast status endpoint.
+
 ## v0.7.3
 
 - Moved Home Assistant network authentication monitoring ahead of theme synchronization and onto a dedicated CDP connection so `auth_invalid` events cannot be consumed by unrelated DevTools commands.
