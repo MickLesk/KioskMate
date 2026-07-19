@@ -22,6 +22,7 @@ import (
 
 type displayPowerControl interface {
 	SetDisplay(ctx context.Context, power string) error
+	SetBrightness(ctx context.Context, percent int) error
 }
 
 type Browser struct {
@@ -54,6 +55,7 @@ type Browser struct {
 	telemetry     []TelemetrySample
 	override      ManualOverride
 	displayPower  string
+	idleBlanked   bool
 }
 
 type Status struct {
@@ -381,16 +383,46 @@ func (b *Browser) SetActive(ctx context.Context, index int) error {
 	target := activeURL(cfg, b.active)
 	running := b.cmd != nil && b.cmd.Process != nil
 	isolate := cfg.Kiosk.IsolateSessions
+	brightness := pageBrightness(cfg.Kiosk, index)
+	control := b.display
 	b.mu.Unlock()
+	var err error
 	if !running {
-		return b.Start(ctx)
-	}
-	if !isolate || previous == index {
-		if err := b.navigateDevTools(ctx, target); err == nil {
-			return nil
+		err = b.Start(ctx)
+	} else if !isolate || previous == index {
+		if navErr := b.navigateDevTools(ctx, target); navErr == nil {
+			err = nil
+		} else {
+			err = b.Restart(ctx)
 		}
+	} else {
+		err = b.Restart(ctx)
 	}
-	return b.Restart(ctx)
+	if err == nil && control != nil && brightness > 0 {
+		_ = control.SetBrightness(ctx, brightness)
+	}
+	return err
+}
+
+func pageBrightness(cfg config.KioskConfig, index int) int {
+	enabled := 0
+	for _, page := range cfg.Pages {
+		if page.Disabled || strings.TrimSpace(page.URL) == "" {
+			continue
+		}
+		if enabled == index {
+			if page.DisplayOptions.Brightness == nil {
+				return 0
+			}
+			value := *page.DisplayOptions.Brightness
+			if value < 1 || value > 100 {
+				return 0
+			}
+			return value
+		}
+		enabled++
+	}
+	return 0
 }
 
 func (b *Browser) ResetSession(ctx context.Context) error {
@@ -467,6 +499,8 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-timer.C:
+			snap := b.cfg.Snapshot()
+			now = nowInConfigTimezone(now, snap.Time.Timezone)
 			target, status := b.schedulerTarget(now)
 			b.mu.Lock()
 			current := b.active
@@ -478,9 +512,37 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 				_ = b.SetActive(switchCtx, target)
 				cancel()
 			}
+			wantOff := scheduleWantsDisplayOff(snap.Kiosk, target, status)
 			b.applyScheduleDisplayPower(ctx, target, status)
+			b.mu.Lock()
+			blanked := b.idleBlanked
+			b.mu.Unlock()
+			if wantOff && !blanked {
+				b.blankIdleDisplay(ctx)
+				b.mu.Lock()
+				b.idleBlanked = true
+				b.mu.Unlock()
+			} else if !wantOff && blanked {
+				b.mu.Lock()
+				b.idleBlanked = false
+				b.mu.Unlock()
+			}
 			timer.Reset(b.schedulerInterval())
 		}
+	}
+}
+
+func (b *Browser) blankIdleDisplay(ctx context.Context) {
+	b.mu.Lock()
+	running := b.cmd != nil && b.cmd.Process != nil
+	b.mu.Unlock()
+	if !running {
+		return
+	}
+	blankCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := b.navigateDevTools(blankCtx, "about:blank"); err != nil {
+		b.logger.Debug("scheduler idle blank skipped", "error", err)
 	}
 }
 
@@ -943,7 +1005,7 @@ func timeRuleTarget(cfg config.KioskConfig, now time.Time) (int, string, time.Ti
 
 func parseClock(value string) (int, bool) {
 	parts := strings.Split(strings.TrimSpace(value), ":")
-	if len(parts) != 2 {
+	if len(parts) < 2 || len(parts) > 3 {
 		return 0, false
 	}
 	hour, err1 := strconv.Atoi(parts[0])
@@ -952,6 +1014,18 @@ func parseClock(value string) (int, bool) {
 		return 0, false
 	}
 	return hour*60 + minute, true
+}
+
+func nowInConfigTimezone(now time.Time, timezone string) time.Time {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" || timezone == "Local" {
+		return now
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return now
+	}
+	return now.In(loc)
 }
 
 func dayMatches(days []string, weekday time.Weekday) bool {

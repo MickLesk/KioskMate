@@ -3,7 +3,7 @@ package mqttclient
 import "testing"
 
 func TestConnectPayloadMQTT5IncludesProperties(t *testing.T) {
-	payload := connectPayload("kioskmate", "", "", 30, "5.0")
+	payload := connectPayload("kioskmate", "", "", 30, "5.0", nil)
 	if len(payload) < 11 {
 		t.Fatalf("connect payload too short: %d", len(payload))
 	}

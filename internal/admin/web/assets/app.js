@@ -974,9 +974,10 @@
                 <button class="primary" data-action="page-wizard-new">+ ${esc(t("newPage"))}</button>
               </div>
             </section>
+            ${!kiosk.scheduler?.enabled && (kiosk.time_rules || []).length ? stateBanner("warn", t("scheduler"), t("scheduleNeedsEnable"), "") : ""}
             <section class="kiosk-overview" aria-label="${esc(t("workflowStatus"))}">
               <div><span>${esc(t("pages"))}</span><strong>${enabledPages} / ${pages.length}</strong></div>
-              <div><span>${esc(t("scheduler"))}</span><strong class="${kiosk.scheduler?.enabled ? "ok-text" : ""}">${esc(kiosk.scheduler?.enabled ? t("active") : t("disabled"))}</strong></div>
+              <div><span>${esc(t("scheduler"))}</span><strong class="${kiosk.scheduler?.enabled ? "ok-text" : "warn-text"}">${esc(kiosk.scheduler?.enabled ? t("active") : t("disabled"))}</strong></div>
               <div><span>${esc(t("currentPage"))}</span><strong>${esc(browser.page_name || current.name || "-")}</strong></div>
               <div><span>${esc(t("nextSwitch"))}</span><strong>${esc(formatDate(browser.scheduler?.next_switch))}</strong></div>
 			  <div><span>${esc(t("temporaryOverride"))}</span><strong class="${override.active ? "warn-text" : ""}">${esc(override.active ? `${pages[override.page]?.name || override.page + 1} · ${formatDate(override.until)}` : t("inactive"))}</strong></div>
@@ -2026,9 +2027,17 @@
           cfg.kiosk.pages = collectPages();
           validatePages(cfg.kiosk.pages);
           cfg.kiosk.scheduler = cfg.kiosk.scheduler || {};
-          cfg.kiosk.scheduler.enabled = checked("scheduler-enabled");
           cfg.kiosk.scheduler.tick_interval = durationToNs(val("scheduler-tick") || secondsToDuration(cfg.kiosk.scheduler.tick_interval, 15));
           synchronizeKioskWorkflow(cfg.kiosk);
+          // Honor an explicit disable only when the checkbox is present and unchecked
+          // after sync. Sync enables the scheduler whenever schedule/rotation pages exist,
+          // so first-save of a Zeitplan no longer leaves enabled=false.
+          const schedulerToggle = document.getElementById("scheduler-enabled");
+          if (schedulerToggle && !schedulerToggle.checked && !(cfg.kiosk.time_rules || []).length && !(cfg.kiosk.rotation || []).length) {
+            cfg.kiosk.scheduler.enabled = false;
+          } else if (schedulerToggle && !schedulerToggle.checked && state.persistedConfig?.kiosk?.scheduler?.enabled) {
+            cfg.kiosk.scheduler.enabled = false;
+          }
           validateScheduler(cfg.kiosk);
           await postJSON("/api/config", cfg);
           if (restart) await postJSON(state.status?.browser?.running ? "/api/browser/restart" : "/api/browser/start");
@@ -2149,7 +2158,8 @@
       async function activateSelectedPage() {
 		const active = selectedKioskPageIndex(collectPages());
         await runAction("page-activate", async () => {
-          await postJSON("/api/browser/page", { index: active });
+          // Temporary override so the scheduler does not immediately steal the page back.
+          await postJSON("/api/browser/override", { page: active, duration_seconds: 3600, source: "admin-activate" });
           await refreshCore();
           renderApp();
         });
@@ -2196,14 +2206,32 @@
         let enabledIndex = 0;
         kiosk.pages.forEach((page) => {
           if (page.disabled || !page.url) return;
+          if (page.display_mode === "schedule" && page.display_options?.power_off_after == null) {
+            page.display_options = { ...(page.display_options || {}), power_off_after: true };
+          }
           if ((page.display_mode || "duration") === "duration") rotation.push({ page: enabledIndex, duration_seconds: Math.max(5, Number(page.duration_seconds || 60)) });
-          if (page.display_mode === "schedule") rules.push({ name: page.name || `Page ${enabledIndex + 1}`, page: enabledIndex, start: page.schedule?.start || "08:00", end: page.schedule?.end || "18:00", days: [...(page.schedule?.days || [])], disabled: false });
+          if (page.display_mode === "schedule") rules.push({ name: page.name || `Page ${enabledIndex + 1}`, page: enabledIndex, start: normalizeClock(page.schedule?.start || "08:00"), end: normalizeClock(page.schedule?.end || "18:00"), days: [...(page.schedule?.days || [])], disabled: false });
           enabledIndex++;
         });
         kiosk.rotation = rotation;
         kiosk.time_rules = rules;
         kiosk.scheduler = kiosk.scheduler || {};
         kiosk.scheduler.mode = rules.length && rotation.length ? "hybrid" : rules.length ? "time" : "rotation";
+        // Schedule/rotation workflows are inert unless the scheduler is enabled.
+        if (rules.length > 0 || rotation.length > 0) {
+          kiosk.scheduler.enabled = true;
+        }
+        if (!kiosk.scheduler.tick_interval) {
+          kiosk.scheduler.tick_interval = durationToNs(15);
+        }
+      }
+
+      function normalizeClock(value) {
+        const parts = String(value || "").trim().split(":");
+        if (parts.length < 2) return "08:00";
+        const hour = Math.max(0, Math.min(23, Number(parts[0]) || 0));
+        const minute = Math.max(0, Math.min(59, Number(parts[1]) || 0));
+        return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
       }
 
       function movePage(kiosk, index, direction) {
@@ -3094,6 +3122,9 @@
           } catch {
             validationError(`page-url-${index}`, t("validationPageUrl"));
           }
+          if (page.display_mode === "mqtt" && !String(page.trigger?.topic || "").trim()) {
+            throw new Error(t("validationMQTTTopic"));
+          }
         });
       }
 
@@ -3181,7 +3212,13 @@
           duration_seconds: Number(p.duration_seconds || 3600),
           schedule: { start: p.schedule?.start || "08:00", end: p.schedule?.end || "18:00", days: [...(p.schedule?.days || [])] },
           trigger: { topic: p.trigger?.topic || "", payload: p.trigger?.payload || "ON" },
-          display_options: { power_off_after: !!p.display_options?.power_off_after, screensaver: !!p.display_options?.screensaver, brightness: Number(p.display_options?.brightness ?? 100) },
+          display_options: {
+            power_off_after: (p.display_mode || "duration") === "schedule"
+              ? p.display_options?.power_off_after !== false
+              : !!p.display_options?.power_off_after,
+            screensaver: !!p.display_options?.screensaver,
+            brightness: Number(p.display_options?.brightness ?? 100),
+          },
           disabled: !!p.disabled,
         }));
         return (urls || []).map((url, i) => ({ page_id: `page_${i + 1}`, name: `Page ${i + 1}`, url, source_type: String(url).includes(":8123") ? "home_assistant" : "url", display_mode: "duration", duration_seconds: 3600, schedule: { start: "08:00", end: "18:00", days: [] }, trigger: { topic: "", payload: "ON" }, display_options: { brightness: 100 }, disabled: false }));

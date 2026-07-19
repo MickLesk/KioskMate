@@ -459,6 +459,26 @@ func normalize(cfg *Config) {
 	if cfg.Version == 0 {
 		cfg.Version = 2
 	}
+	// v3: schedule workflows historically saved time_rules with scheduler.enabled=false,
+	// which made Zeitplan/display power a no-op until the user found "Run automatically".
+	if cfg.Version < 3 {
+		if len(cfg.Kiosk.TimeRules) > 0 {
+			cfg.Kiosk.Scheduler.Enabled = true
+			if cfg.Kiosk.Scheduler.Mode == "" || cfg.Kiosk.Scheduler.Mode == "rotation" {
+				if len(cfg.Kiosk.Rotation) == 0 {
+					cfg.Kiosk.Scheduler.Mode = "time"
+				} else {
+					cfg.Kiosk.Scheduler.Mode = "hybrid"
+				}
+			}
+		}
+		for i := range cfg.Kiosk.Pages {
+			if cfg.Kiosk.Pages[i].DisplayMode == "schedule" {
+				cfg.Kiosk.Pages[i].DisplayOptions.PowerOffAfter = true
+			}
+		}
+		cfg.Version = 3
+	}
 	if cfg.Admin.Bind == "127.0.0.1" || cfg.Admin.Bind == "localhost" {
 		cfg.Admin.Bind = "0.0.0.0"
 	}
@@ -501,7 +521,7 @@ func normalize(cfg *Config) {
 	if cfg.Kiosk.Scheduler.TickInterval == 0 {
 		cfg.Kiosk.Scheduler.TickInterval = 15 * time.Second
 	}
-	if len(cfg.Kiosk.Rotation) == 0 && len(cfg.Kiosk.PageURLs()) > 0 {
+	if len(cfg.Kiosk.Rotation) == 0 && len(cfg.Kiosk.PageURLs()) > 0 && cfg.Kiosk.Scheduler.Mode != "time" {
 		cfg.Kiosk.Rotation = []RotationItem{{Page: 0, DurationSeconds: 3600}}
 	}
 	if cfg.Performance.Profile == "" {

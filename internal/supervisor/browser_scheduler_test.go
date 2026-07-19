@@ -153,6 +153,21 @@ func TestSchedulerOvernightRule(t *testing.T) {
 	}
 }
 
+func TestParseClockAcceptsSeconds(t *testing.T) {
+	got, ok := parseClock("07:00:00")
+	if !ok || got != 7*60 {
+		t.Fatalf("parseClock(07:00:00) = %d %v", got, ok)
+	}
+}
+
+func TestSchedulerUsesConfiguredTimezone(t *testing.T) {
+	now := time.Date(2026, 7, 7, 21, 30, 0, 0, time.UTC) // 23:30 in Europe/Berlin (CEST)
+	converted := nowInConfigTimezone(now, "Europe/Berlin")
+	if converted.Hour() != 23 {
+		t.Fatalf("hour in Berlin = %d, want 23", converted.Hour())
+	}
+}
+
 func TestSchedulerTimeModeOutsideWindowPowersOff(t *testing.T) {
 	cfg := schedulerTestConfig()
 	cfg.Kiosk.Scheduler = config.KioskScheduler{Enabled: true, Mode: "time"}
@@ -260,12 +275,18 @@ func TestHybridWithoutPowerOffFallsBackToRotation(t *testing.T) {
 }
 
 type fakeDisplayPower struct {
-	last string
-	err  error
+	last       string
+	brightness int
+	err        error
 }
 
 func (f *fakeDisplayPower) SetDisplay(_ context.Context, power string) error {
 	f.last = power
+	return f.err
+}
+
+func (f *fakeDisplayPower) SetBrightness(_ context.Context, percent int) error {
+	f.brightness = percent
 	return f.err
 }
 

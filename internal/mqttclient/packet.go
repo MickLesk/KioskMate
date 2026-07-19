@@ -84,7 +84,13 @@ func mqttString(value string) []byte {
 	return buf.Bytes()
 }
 
-func connectPayload(clientID, username, password string, keepAlive uint16, version string) []byte {
+type Will struct {
+	Topic   string
+	Payload []byte
+	Retain  bool
+}
+
+func connectPayload(clientID, username, password string, keepAlive uint16, version string, will *Will) []byte {
 	var buf bytes.Buffer
 	buf.Write(mqttString("MQTT"))
 	if protocolLevel(version) == 5 {
@@ -93,6 +99,12 @@ func connectPayload(clientID, username, password string, keepAlive uint16, versi
 		buf.WriteByte(4)
 	}
 	flags := byte(0x02)
+	if will != nil && will.Topic != "" {
+		flags |= 0x04
+		if will.Retain {
+			flags |= 0x20
+		}
+	}
 	if username != "" {
 		flags |= 0x80
 	}
@@ -105,6 +117,11 @@ func connectPayload(clientID, username, password string, keepAlive uint16, versi
 		buf.WriteByte(0)
 	}
 	buf.Write(mqttString(clientID))
+	if will != nil && will.Topic != "" {
+		buf.Write(mqttString(will.Topic))
+		_ = binary.Write(&buf, binary.BigEndian, uint16(len(will.Payload)))
+		buf.Write(will.Payload)
+	}
 	if username != "" {
 		buf.Write(mqttString(username))
 	}

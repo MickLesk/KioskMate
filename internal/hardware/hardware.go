@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -138,6 +139,11 @@ func (s *Service) SetDisplay(ctx context.Context, power string) error {
 		err = run(ctx, "sudo", "ddcutil", "setvcp", "0xD6", value)
 	case "wlopm":
 		err = run(ctx, "wlopm", "--"+strings.ToLower(power), "*")
+		if err == nil {
+			if status, ok := lastFieldUpper(firstLine(runText(ctx, "wlopm"))).(string); ok && status != "" && status != power {
+				err = fmt.Errorf("wlopm reported %s after requesting %s", status, power)
+			}
+		}
 	case "kscreen-doctor":
 		err = run(ctx, "kscreen-doctor", "--dpms", strings.ToLower(power))
 	case "xset":

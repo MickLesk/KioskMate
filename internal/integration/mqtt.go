@@ -67,6 +67,7 @@ type MQTTService struct {
 	lastPublished    time.Time
 	failures         int
 	overrideDuration time.Duration
+	commandMu        sync.Mutex
 }
 
 type MQTTConnectionStatus struct {
@@ -339,6 +340,7 @@ func (s *MQTTService) commands(ctx context.Context) {
 		Password:  cfg.MQTT.Password,
 		Version:   cfg.MQTT.Version,
 		KeepAlive: cfg.MQTT.KeepAlive,
+		// Command client stays silent on crash; publisher LWT marks availability offline.
 	}
 	s.mu.Lock()
 	s.command = client
@@ -416,10 +418,17 @@ func (s *MQTTService) commands(ctx context.Context) {
 }
 
 func (s *MQTTService) handleCommand(ctx context.Context, topic string, command string) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	actionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if page, matched := s.triggeredPage(topic, command); matched {
-		err := s.browser.SetActive(actionCtx, page)
+		var err error
+		if runtime, ok := s.browser.(runtimeBrowser); ok {
+			err = runtime.SetOverride(actionCtx, page, s.overrideDuration, "mqtt-trigger")
+		} else {
+			err = s.browser.SetActive(actionCtx, page)
+		}
 		if err != nil {
 			s.logger.Warn("mqtt page trigger failed", "topic", topic, "page", page, "error", err)
 		}
@@ -533,18 +542,31 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	case strings.HasSuffix(topic, "/keyboard/set"):
 		err = s.hardware.SetKeyboard(actionCtx, command)
 	case strings.HasSuffix(topic, "/page_number/set"):
-		err = s.browser.SetActive(actionCtx, atoi(command)-1)
+		index := atoi(command) - 1
+		if index < 0 || index >= s.cfg.Snapshot().Kiosk.PageCount() {
+			err = fmt.Errorf("page number out of range")
+			break
+		}
+		err = s.browser.SetActive(actionCtx, index)
 	case strings.HasSuffix(topic, "/page_name/set"):
 		err = s.setPageByName(actionCtx, command)
 	case strings.HasSuffix(topic, "/page_url/set"):
 		if strings.HasPrefix(command, "http://") || strings.HasPrefix(command, "https://") {
 			err = s.cfg.Mutate(func(next *config.Config) error {
-				next.Kiosk.URLs = []string{command}
-				next.Kiosk.Pages = []config.KioskPage{{Name: "MQTT Page", URL: command}}
+				if len(next.Kiosk.Pages) == 0 {
+					next.Kiosk.Pages = []config.KioskPage{{Name: "MQTT Page", URL: command}}
+				} else {
+					active := s.browser.Status().Active
+					if active < 0 || active >= len(next.Kiosk.Pages) {
+						active = 0
+					}
+					next.Kiosk.Pages[active].URL = command
+				}
+				next.Kiosk.URLs = next.Kiosk.PageURLs()
 				return nil
 			})
 			if err == nil {
-				err = s.browser.SetActive(actionCtx, 0)
+				err = s.browser.SetActive(actionCtx, s.browser.Status().Active)
 			}
 		} else {
 			err = fmt.Errorf("page url must start with http:// or https://")
@@ -642,16 +664,21 @@ func (s *MQTTService) triggeredPage(topic, payload string) (int, bool) {
 }
 
 func (s *MQTTService) publishAll() error {
+	cfg := s.cfg.Snapshot()
+	hwCtx, hwCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	hw := s.hardware.Status(hwCtx)
+	hwCancel()
+	timeStatus := systemtime.Read(context.Background(), cfg.Time.NTPServer)
+	status := s.browser.Status()
+	pages := s.pageEntities()
+	s.refreshOnePageHealth(pages)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	client := s.mqtt()
-	cfg := s.cfg.Snapshot()
-	hw := s.hardware.Status(context.Background())
-	timeStatus := systemtime.Read(context.Background(), cfg.Time.NTPServer)
 	if err := s.publishDiscovery(client, hw); err != nil {
 		return err
 	}
-	status := s.browser.Status()
 	root := s.root()
 	schedulerReason := status.Scheduler.Reason
 	if schedulerReason == "" {
@@ -668,8 +695,6 @@ func (s *MQTTService) publishAll() error {
 	if err := s.publishState(client, "browser", boolState(status.Running), true); err != nil {
 		return err
 	}
-	pages := s.pageEntities()
-	s.refreshOnePageHealth(pages)
 	state := map[string]any{
 		"running":       status.Running,
 		"pid":           status.PID,
@@ -1801,12 +1826,15 @@ func (s *MQTTService) mqtt() *mqttclient.Client {
 	if s.client == nil {
 		cfg := s.cfg.Snapshot()
 		s.client = &mqttclient.Client{
-			URL:       cfg.MQTT.URL,
-			ClientID:  firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node),
-			Username:  cfg.MQTT.Username,
-			Password:  cfg.MQTT.Password,
-			Version:   cfg.MQTT.Version,
-			KeepAlive: cfg.MQTT.KeepAlive,
+			URL:         cfg.MQTT.URL,
+			ClientID:    firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node),
+			Username:    cfg.MQTT.Username,
+			Password:    cfg.MQTT.Password,
+			Version:     cfg.MQTT.Version,
+			KeepAlive:   cfg.MQTT.KeepAlive,
+			WillTopic:   s.root() + "/availability",
+			WillPayload: []byte("offline"),
+			WillRetain:  s.retained(true),
 		}
 	}
 	return s.client

@@ -7,18 +7,22 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Client struct {
-	URL       string
-	ClientID  string
-	Username  string
-	Password  string
-	Version   string
-	Timeout   time.Duration
-	KeepAlive time.Duration
+	URL         string
+	ClientID    string
+	Username    string
+	Password    string
+	Version     string
+	Timeout     time.Duration
+	KeepAlive   time.Duration
+	WillTopic   string
+	WillPayload []byte
+	WillRetain  bool
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -86,7 +90,11 @@ func (c *Client) connectLocked() error {
 		_ = c.closeLocked()
 		return err
 	}
-	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, c.keepAlive(), c.Version)); err != nil {
+	var will *Will
+	if strings.TrimSpace(c.WillTopic) != "" {
+		will = &Will{Topic: c.WillTopic, Payload: c.WillPayload, Retain: c.WillRetain}
+	}
+	if err := writePacket(conn, packetConnect, 0, connectPayload(c.ClientID, c.Username, c.Password, c.keepAlive(), c.Version, will)); err != nil {
 		_ = c.closeLocked()
 		return err
 	}
@@ -163,10 +171,31 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 		return err
 	}
 	_ = c.conn.SetWriteDeadline(time.Time{})
+	conn := c.conn
+	keepAlive := time.Duration(c.keepAlive()) * time.Second
+	if keepAlive <= 0 {
+		keepAlive = 30 * time.Second
+	}
 	c.mu.Unlock()
 	for {
-		packet, payload, err := readPacket(c.conn)
+		_ = conn.SetReadDeadline(time.Now().Add(keepAlive / 2))
+		packet, payload, err := readPacket(conn)
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				c.mu.Lock()
+				if c.conn == conn {
+					_ = conn.SetWriteDeadline(time.Now().Add(c.timeout()))
+					pingErr := writePacket(conn, packetPingReq, 0, nil)
+					_ = conn.SetWriteDeadline(time.Time{})
+					if pingErr != nil {
+						_ = c.closeLocked()
+						c.mu.Unlock()
+						return pingErr
+					}
+				}
+				c.mu.Unlock()
+				continue
+			}
 			_ = c.Close()
 			return err
 		}

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.5
+
+- Fixed Zeitplan no-ops: saving a schedule workflow now enables the scheduler; existing configs with `time_rules` are migrated (config v3) so display power follows the window without hunting for “Run automatically”.
+- Schedule pages default to `power_off_after`; pure `time` mode no longer gets a synthetic rotation injected; clocks accept `HH:MM:SS`; scheduler evaluates rules in the configured timezone.
+- Outside the schedule window the panel is powered off and the browser is blanked once; page brightness from display options is applied on switch.
+- MQTT: Last Will `availability=offline`, command-connection keepalive pings, serialized commands, page triggers use temporary overrides, `page_url/set` patches the active page only, and `page_number` is range-checked.
+- Publish loop no longer holds the MQTT mutex across hardware/health probes; Admin activate uses a temporary override so the scheduler cannot steal the page back immediately.
+
 ## v0.7.4
 
 - Fixed a MQTT publish deadlock that blocked Home Assistant state updates, connection status and follow-up commands after the first successful publish.

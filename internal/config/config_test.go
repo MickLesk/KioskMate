@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+func TestNormalizeV3EnablesSchedulerForTimeRules(t *testing.T) {
+	cfg := &Config{
+		Version: 2,
+		Kiosk: KioskConfig{
+			Scheduler: KioskScheduler{Enabled: false, Mode: "rotation"},
+			TimeRules: []TimeRule{{Name: "Day", Page: 0, Start: "07:00", End: "23:00"}},
+			Pages:     []KioskPage{{Name: "Main", URL: "http://ha.local", DisplayMode: "schedule"}},
+		},
+	}
+	normalize(cfg)
+	if cfg.Version != 3 {
+		t.Fatalf("version = %d, want 3", cfg.Version)
+	}
+	if !cfg.Kiosk.Scheduler.Enabled {
+		t.Fatal("scheduler should be enabled for existing time rules")
+	}
+	if cfg.Kiosk.Scheduler.Mode != "time" {
+		t.Fatalf("mode = %q, want time", cfg.Kiosk.Scheduler.Mode)
+	}
+	if !cfg.Kiosk.Pages[0].DisplayOptions.PowerOffAfter {
+		t.Fatal("schedule page should default power_off_after")
+	}
+}
+
 func TestLoadCreatesKioskMateConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")
