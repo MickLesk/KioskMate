@@ -118,6 +118,9 @@ func connectPayload(clientID, username, password string, keepAlive uint16, versi
 	}
 	buf.Write(mqttString(clientID))
 	if will != nil && will.Topic != "" {
+		if protocolLevel(version) == 5 {
+			buf.WriteByte(0) // will properties length (none)
+		}
 		buf.Write(mqttString(will.Topic))
 		_ = binary.Write(&buf, binary.BigEndian, uint16(len(will.Payload)))
 		buf.Write(will.Payload)

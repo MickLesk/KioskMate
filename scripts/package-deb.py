@@ -71,6 +71,8 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
     write_text(pkg / "DEBIAN/control", control_file(version, arch))
     write_text(pkg / "DEBIAN/preinst", maintainer_preinst())
     write_text(pkg / "DEBIAN/postinst", maintainer_postinst())
+    write_text(pkg / "DEBIAN/prerm", maintainer_prerm())
+    write_text(pkg / "DEBIAN/postrm", maintainer_postrm())
 
     control_tar = make_tar_gz(pkg / "DEBIAN", ".")
     data_tar = make_tar_gz(pkg / "usr", "./usr")
@@ -99,7 +101,8 @@ Priority: optional
 Architecture: {arch}
 Maintainer: MickLesk
 Depends: chromium | chromium-browser | google-chrome-stable, fonts-noto-color-emoji
-Recommends: wlopm | kscreen, pipewire-pulse | pulseaudio
+Recommends: wlopm, pipewire-pulse | pulseaudio
+Suggests: kscreen
 Description: KioskMate browser supervisor for Home Assistant kiosks
  Go-based supervisor, Admin API and watchdog for an external kiosk browser.
 """
@@ -145,11 +148,56 @@ reload_user_units() {
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
     XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+    # prerm stops the user service during upgrades; bring enabled instances back up.
+    if XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user --quiet is-enabled kioskmate.service >/dev/null 2>&1; then
+      XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user start kioskmate.service >/dev/null 2>&1 || true
+    fi
   done
 }
 if command -v systemctl >/dev/null 2>&1; then
   systemctl --global enable kioskmate.service >/dev/null 2>&1 || true
   reload_user_units
+fi
+exit 0
+"""
+
+
+def maintainer_prerm() -> str:
+    return """#!/usr/bin/env bash
+set -e
+stop_user_units() {
+  for RUNTIME in /run/user/*; do
+    [ -d "$RUNTIME" ] || continue
+    UID_NAME="$(basename "$RUNTIME")"
+    USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
+    [ -n "$USER_NAME" ] || continue
+    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user stop kioskmate.service >/dev/null 2>&1 || true
+  done
+}
+if command -v systemctl >/dev/null 2>&1; then
+  stop_user_units
+fi
+exit 0
+"""
+
+
+def maintainer_postrm() -> str:
+    return """#!/usr/bin/env bash
+set -e
+reload_user_units() {
+  for RUNTIME in /run/user/*; do
+    [ -d "$RUNTIME" ] || continue
+    UID_NAME="$(basename "$RUNTIME")"
+    USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
+    [ -n "$USER_NAME" ] || continue
+    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+  done
+}
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --global disable kioskmate.service >/dev/null 2>&1 || true
+    reload_user_units
+  fi
 fi
 exit 0
 """
@@ -204,7 +252,7 @@ def add_file(tar: tarfile.TarFile, path: Path, name: str, rel: str) -> None:
     info.uid = info.gid = 0
     info.uname = info.gname = "root"
     info.mtime = 0
-    if rel in ("preinst", "postinst") or rel == "bin/kioskmate":
+    if rel in ("preinst", "postinst", "prerm", "postrm") or rel == "bin/kioskmate":
         info.mode = 0o755
     else:
         info.mode = 0o644

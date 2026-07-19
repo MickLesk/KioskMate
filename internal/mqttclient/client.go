@@ -194,6 +194,10 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 					}
 				}
 				c.mu.Unlock()
+				if pongErr := c.awaitPingResp(conn, handler); pongErr != nil {
+					_ = c.Close()
+					return pongErr
+				}
 				continue
 			}
 			_ = c.Close()
@@ -206,6 +210,31 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 				handler(topic, body)
 			}
 		case packetSubAck, packetPingResp:
+		}
+	}
+}
+
+// awaitPingResp blocks until the broker answers a keepalive PINGREQ with a
+// PINGRESP (within a deadline), so a dead connection is detected instead of
+// silently looping on repeated timeouts. Any PUBLISH packets received while
+// waiting are still dispatched to handler.
+func (c *Client) awaitPingResp(conn net.Conn, handler func(topic string, payload []byte)) error {
+	deadline := time.Now().Add(c.timeout())
+	for {
+		_ = conn.SetReadDeadline(deadline)
+		packet, payload, err := readPacket(conn)
+		if err != nil {
+			return fmt.Errorf("mqtt keepalive: no PINGRESP received: %w", err)
+		}
+		switch packet {
+		case packetPingResp:
+			_ = conn.SetReadDeadline(time.Time{})
+			return nil
+		case packetPublish:
+			topic, body, perr := parsePublish(payload, c.Version)
+			if perr == nil {
+				handler(topic, body)
+			}
 		}
 	}
 }

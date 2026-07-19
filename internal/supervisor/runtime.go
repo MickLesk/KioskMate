@@ -230,6 +230,18 @@ func (b *Browser) ClearOverride() error {
 	b.rotationUntil = time.Time{}
 	b.mu.Unlock()
 	b.persistRuntimeState()
+
+	target, status := b.schedulerTarget(time.Now())
+	b.mu.Lock()
+	b.scheduler = status
+	b.mu.Unlock()
+	if target >= 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := b.SetActive(ctx, target); err != nil {
+			b.logger.Warn("clear override immediate switch failed", "error", err)
+		}
+	}
 	return nil
 }
 

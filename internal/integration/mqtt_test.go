@@ -44,11 +44,14 @@ func TestTriggeredPageUsesCustomTopicAndPayload(t *testing.T) {
 	}
 	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	if page, ok := service.triggeredPage("house/kiosk/weather", "SHOW"); !ok || page != 1 {
-		t.Fatalf("triggered page = %d, %v; want enabled page 1", page, ok)
+	if page, matched, topicIsTrigger := service.triggeredPage("house/kiosk/weather", "SHOW"); !matched || page != 1 || !topicIsTrigger {
+		t.Fatalf("triggered page = %d, matched=%v, topicIsTrigger=%v; want enabled page 1 matched", page, matched, topicIsTrigger)
 	}
-	if _, ok := service.triggeredPage("house/kiosk/weather", "HIDE"); ok {
-		t.Fatal("unexpected trigger match for different payload")
+	if _, matched, topicIsTrigger := service.triggeredPage("house/kiosk/weather", "HIDE"); matched || !topicIsTrigger {
+		t.Fatalf("payload mismatch should not match but must still report topicIsTrigger: matched=%v, topicIsTrigger=%v", matched, topicIsTrigger)
+	}
+	if _, matched, topicIsTrigger := service.triggeredPage("house/kiosk/other", "SHOW"); matched || topicIsTrigger {
+		t.Fatalf("unrelated topic should not match or be flagged as a trigger topic: matched=%v, topicIsTrigger=%v", matched, topicIsTrigger)
 	}
 }
 
@@ -235,6 +238,40 @@ func TestMQTTInvalidPageURLReportsError(t *testing.T) {
 	service.handleCommand(context.Background(), service.root()+"/page_url/set", "ftp://bad.example")
 	if len(cfg.Kiosk.Pages) != len(before) || cfg.Kiosk.Pages[0].URL != before[0].URL {
 		t.Fatalf("invalid page url mutated config: %#v", cfg.Kiosk.Pages)
+	}
+}
+
+func TestAbsolutePageIndexSkipsDisabled(t *testing.T) {
+	pages := []config.KioskPage{
+		{Name: "Disabled", URL: "https://disabled.test", Disabled: true},
+		{Name: "Main", URL: "https://main.test"},
+		{Name: "Weather", URL: "https://weather.test"},
+	}
+	if got := absolutePageIndex(pages, 0); got != 1 {
+		t.Fatalf("enabled 0 -> absolute %d, want 1", got)
+	}
+	if got := absolutePageIndex(pages, 1); got != 2 {
+		t.Fatalf("enabled 1 -> absolute %d, want 2", got)
+	}
+	if got := absolutePageIndex(pages, 2); got != -1 {
+		t.Fatalf("enabled 2 -> absolute %d, want -1", got)
+	}
+}
+
+func TestMQTTPageURLUpdatesEnabledPageNotDisabled(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	cfg.Kiosk.Pages = []config.KioskPage{
+		{Name: "Disabled", URL: "https://disabled.test", Disabled: true},
+		{Name: "Main", URL: "https://main.test"},
+	}
+	browser := &fakeBrowser{active: 0}
+	service := NewMQTTService(cfg, browser, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.handleCommand(context.Background(), service.root()+"/page_url/set", "https://updated.test")
+	if cfg.Kiosk.Pages[0].URL != "https://disabled.test" {
+		t.Fatalf("disabled page mutated: %#v", cfg.Kiosk.Pages[0])
+	}
+	if cfg.Kiosk.Pages[1].URL != "https://updated.test" {
+		t.Fatalf("enabled page URL = %q, want updated", cfg.Kiosk.Pages[1].URL)
 	}
 }
 

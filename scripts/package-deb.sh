@@ -28,7 +28,8 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: MickLesk
 Depends: chromium | chromium-browser | google-chrome-stable, fonts-noto-color-emoji
-Recommends: wlopm | kscreen, pipewire-pulse | pulseaudio
+Recommends: wlopm, pipewire-pulse | pulseaudio
+Suggests: kscreen
 Description: KioskMate browser supervisor for Home Assistant kiosks
  Go-based supervisor, Admin API and watchdog for an external kiosk browser.
 CONTROL
@@ -73,6 +74,10 @@ reload_user_units() {
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
     XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+    # prerm stops the user service during upgrades; bring enabled instances back up.
+    if XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user --quiet is-enabled kioskmate.service >/dev/null 2>&1; then
+      XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user start kioskmate.service >/dev/null 2>&1 || true
+    fi
   done
 }
 if command -v systemctl >/dev/null 2>&1; then

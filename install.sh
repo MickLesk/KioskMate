@@ -78,7 +78,6 @@ Wants=network-online.target
 
 [Service]
 Environment=DISPLAY=:0
-Environment=WAYLAND_DISPLAY=wayland-0
 Environment=XDG_RUNTIME_DIR=%t
 ExecStart=/usr/bin/kioskmate
 Restart=on-failure
@@ -130,11 +129,10 @@ else
     echo "DISPLAY is set to \"$DISPLAY\"."
 fi
 
-if [ -z "$WAYLAND_DISPLAY" ]; then
-    export WAYLAND_DISPLAY="wayland-0"
-    echo "WAYLAND_DISPLAY was not set, defaulting to \"$WAYLAND_DISPLAY\"."
-else
+if [ -n "$WAYLAND_DISPLAY" ]; then
     echo "WAYLAND_DISPLAY is set to \"$WAYLAND_DISPLAY\"."
+else
+    echo "WAYLAND_DISPLAY is not set; KioskMate detects the active Wayland socket at runtime."
 fi
 
 read -p $'\nStart kioskmate user service now? (Y/n) ' setup

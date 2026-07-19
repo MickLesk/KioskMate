@@ -55,7 +55,7 @@ func New() *Service {
 func (s *Service) Status(ctx context.Context) Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.cachedAt.IsZero() && time.Since(s.cachedAt) < 30*time.Second {
+	if !s.cachedAt.IsZero() && time.Since(s.cachedAt) < 5*time.Second {
 		return s.cached
 	}
 	status := collectStatus(ctx)
@@ -136,7 +136,7 @@ func (s *Service) SetDisplay(ctx context.Context, power string) error {
 		if power == "ON" {
 			value = "1"
 		}
-		err = run(ctx, "sudo", "ddcutil", "setvcp", "0xD6", value)
+		err = wrapDdcutilSudoError(run(ctx, "sudo", "ddcutil", "setvcp", "0xD6", value))
 	case "wlopm":
 		err = run(ctx, "wlopm", "--"+strings.ToLower(power), "*")
 		if err == nil {
@@ -146,10 +146,25 @@ func (s *Service) SetDisplay(ctx context.Context, power string) error {
 		}
 	case "kscreen-doctor":
 		err = run(ctx, "kscreen-doctor", "--dpms", strings.ToLower(power))
+	case "wlr-randr":
+		output := wlrRandrOutputName(ctx)
+		if output == "" {
+			err = errors.New("wlr-randr output not found")
+			break
+		}
+		flag := "--off"
+		if power == "ON" {
+			flag = "--on"
+		}
+		err = run(ctx, "wlr-randr", "--output", output, flag)
 	case "xset":
 		err = run(ctx, "xset", "dpms", "force", strings.ToLower(power))
 	default:
-		err = errors.New("display power control unsupported")
+		hint := "display power control unsupported"
+		if sessionType(ctx) == "wayland" || os.Getenv("WAYLAND_DISPLAY") != "" {
+			hint = "display power control unsupported: install wlopm for Wayland display power"
+		}
+		err = errors.New(hint)
 	}
 	if err == nil {
 		s.InvalidateCache()
@@ -162,7 +177,11 @@ func (s *Service) SetBrightness(ctx context.Context, percent int) error {
 		return errors.New("brightness must be between 1 and 100")
 	}
 	if commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: 10") {
-		return run(ctx, "sudo", "ddcutil", "setvcp", "0x10", strconv.Itoa(percent))
+		err := wrapDdcutilSudoError(run(ctx, "sudo", "ddcutil", "setvcp", "0x10", strconv.Itoa(percent)))
+		if err == nil {
+			s.InvalidateCache()
+		}
+		return err
 	}
 	dir := backlightPath()
 	if dir == "" || !sudoRights(ctx) {
@@ -184,6 +203,7 @@ func (s *Service) SetBrightness(ctx context.Context, percent int) error {
 	if err := cmd.Run(); err != nil {
 		return errors.New(strings.TrimSpace(stderr.String()))
 	}
+	s.InvalidateCache()
 	return nil
 }
 
@@ -202,7 +222,11 @@ func (s *Service) SetAudioVolume(ctx context.Context, percent int, microphone bo
 	if err := run(ctx, "pactl", setMute, target, boolInt(percent == 0)); err != nil {
 		return err
 	}
-	return run(ctx, "pactl", setVol, target, strconv.Itoa(percent)+"%")
+	if err := run(ctx, "pactl", setVol, target, strconv.Itoa(percent)+"%"); err != nil {
+		return err
+	}
+	s.InvalidateCache()
+	return nil
 }
 
 func (s *Service) SetKeyboard(ctx context.Context, power string) error {
@@ -248,6 +272,9 @@ func displayCommand(ctx context.Context) string {
 		if commandExists("kscreen-doctor") && runText(ctx, "kscreen-doctor", "--dpms", "show") != "" {
 			return "kscreen-doctor"
 		}
+		if commandExists("wlr-randr") && wlrRandrOutputName(ctx) != "" {
+			return "wlr-randr"
+		}
 		// xset over Xwayland often reports success without blanking the real Wayland output.
 		return ""
 	}
@@ -272,6 +299,13 @@ func displayStatus(ctx context.Context) any {
 		return lastFieldUpper(firstLine(runText(ctx, "wlopm")))
 	case "kscreen-doctor":
 		return lastFieldUpper(firstLine(runText(ctx, "kscreen-doctor", "--dpms", "show")))
+	case "wlr-randr":
+		if enabled, ok := wlrRandrEnabled(ctx); ok {
+			if enabled {
+				return "ON"
+			}
+			return "OFF"
+		}
 	case "xset":
 		out := runText(ctx, "xset", "-q")
 		if strings.Contains(out, "Monitor is On") {
@@ -336,12 +370,25 @@ func audioVolume(ctx context.Context, microphone bool) any {
 	return value
 }
 
+var (
+	packageUpgradeMu     sync.Mutex
+	packageUpgradeCached any
+	packageUpgradeAt     time.Time
+)
+
 func packageUpgradeCount(ctx context.Context) any {
 	if !commandExists("apt") {
 		return nil
 	}
+	packageUpgradeMu.Lock()
+	defer packageUpgradeMu.Unlock()
+	if !packageUpgradeAt.IsZero() && time.Since(packageUpgradeAt) < 10*time.Minute {
+		return packageUpgradeCached
+	}
 	out := runText(ctx, "apt", "list", "--upgradable")
 	if out == "" {
+		packageUpgradeCached = 0
+		packageUpgradeAt = time.Now()
 		return 0
 	}
 	count := 0
@@ -350,6 +397,8 @@ func packageUpgradeCount(ctx context.Context) any {
 			count++
 		}
 	}
+	packageUpgradeCached = count
+	packageUpgradeAt = time.Now()
 	return count
 }
 
@@ -592,6 +641,20 @@ func sudoRights(ctx context.Context) bool {
 	return run(ctx, "sudo", "-n", "true") == nil
 }
 
+// wrapDdcutilSudoError replaces cryptic sudo/ddcutil failures (missing
+// passwordless sudo, denied I2C access under sudo, etc.) with an actionable
+// message instead of surfacing raw sudo/ddcutil stderr to the Admin UI.
+func wrapDdcutilSudoError(err error) error {
+	if err == nil {
+		return nil
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "sudo") || strings.Contains(lower, "password is required") || strings.Contains(lower, "permission denied") {
+		return fmt.Errorf("sudo required for ddcutil: %s", err.Error())
+	}
+	return err
+}
+
 func processRuns(ctx context.Context, name string) bool {
 	return run(ctx, "pidof", name) == nil
 }
@@ -634,6 +697,45 @@ func ensureDisplayEnv() {
 			return
 		}
 	}
+}
+
+// wlrRandrOutputName returns the first output name reported by `wlr-randr`
+// (unindented lines like "HDMI-A-1 ..."), or "" if wlr-randr is unavailable or
+// reports no outputs.
+func wlrRandrOutputName(ctx context.Context) string {
+	for _, line := range strings.Split(runText(ctx, "wlr-randr"), "\n") {
+		if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			continue
+		}
+		if fields := strings.Fields(line); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+// wlrRandrEnabled reports whether the first wlr-randr output is currently
+// enabled. ok is false when the state could not be determined.
+func wlrRandrEnabled(ctx context.Context) (enabled bool, ok bool) {
+	out := runText(ctx, "wlr-randr")
+	inOutputBlock := false
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			if inOutputBlock {
+				break
+			}
+			inOutputBlock = true
+			continue
+		}
+		if !inOutputBlock {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Enabled:") {
+			return strings.Contains(strings.ToLower(trimmed), "yes"), true
+		}
+	}
+	return false, false
 }
 
 func commandEnv() []string {

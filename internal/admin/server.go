@@ -44,6 +44,8 @@ var content embed.FS
 
 const sessionCookieName = "kioskmate_session"
 
+var errSetupAlreadyCompleted = errors.New("setup already completed")
+
 type Browser interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -117,7 +119,70 @@ type mqttTestRequest struct {
 }
 
 func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger) *Server {
-	return &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
+	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
+	s.loadSessions()
+	return s
+}
+
+// sessionsFilePath returns the private, per-installation file used to persist
+// Admin sessions across restarts. Empty when no config path is known (e.g. tests).
+func (s *Server) sessionsFilePath() string {
+	if s.cfg == nil || s.cfg.Path == "" {
+		return ""
+	}
+	return filepath.Join(config.ConfigDir(s.cfg.Path), "sessions.json")
+}
+
+// persistSessions writes the current session table to disk so signed-in Admin
+// sessions survive a service restart or update instead of forcing a re-login.
+func (s *Server) persistSessions() {
+	path := s.sessionsFilePath()
+	if path == "" {
+		return
+	}
+	s.mu.Lock()
+	sessions := make(map[string]Session, len(s.sessions))
+	for id, session := range s.sessions {
+		sessions[id] = session
+	}
+	s.mu.Unlock()
+	data, err := json.MarshalIndent(sessions, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
+		return
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(path)
+		_ = os.Rename(temporary, path)
+	}
+}
+
+// loadSessions restores previously persisted Admin sessions on startup. Sessions
+// already expired by the normal 7-day/24h-inactivity rules are dropped immediately.
+func (s *Server) loadSessions() {
+	path := s.sessionsFilePath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var sessions map[string]Session
+	if json.Unmarshal(data, &sessions) != nil {
+		return
+	}
+	s.mu.Lock()
+	if sessions == nil {
+		sessions = map[string]Session{}
+	}
+	s.sessions = sessions
+	s.pruneSessionsLocked(time.Now())
+	s.mu.Unlock()
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -426,10 +491,20 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Re-check PasswordHash inside the Mutate callback (which holds the config lock for
+	// the whole read-modify-write) so two concurrent setup requests cannot race past the
+	// earlier, non-atomic check above and both "win" the one-time setup.
 	if err := s.cfg.Mutate(func(next *config.Config) error {
+		if next.Admin.PasswordHash != "" {
+			return errSetupAlreadyCompleted
+		}
 		next.Admin.PasswordHash = hash
 		return nil
 	}); err != nil {
+		if errors.Is(err, errSetupAlreadyCompleted) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "setup already completed"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -498,6 +573,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.sessions, cookie.Value)
 		s.mu.Unlock()
+		s.persistSessions()
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
@@ -526,6 +602,7 @@ func (s *Server) authLogoutAll(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.sessions = map[string]Session{}
 	s.mu.Unlock()
+	s.persistSessions()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -562,6 +639,12 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Invalidate every existing Admin session after a password change so a
+	// stolen cookie cannot keep working with the old credentials.
+	s.mu.Lock()
+	s.sessions = map[string]Session{}
+	s.mu.Unlock()
+	s.persistSessions()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -1474,6 +1557,15 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	} else {
 		add("display_env", "ok", "Display environment is present.", env)
 	}
+	if env["WAYLAND_DISPLAY"] != "" || env["XDG_SESSION_TYPE"] == "wayland" {
+		if _, err := exec.LookPath("wlopm"); err == nil {
+			add("display_power_wayland", "ok", "wlopm is installed for Wayland display power control.", "")
+		} else if _, err := exec.LookPath("wlr-randr"); err == nil {
+			add("display_power_wayland", "ok", "wlr-randr is installed for Wayland display power control.", "")
+		} else {
+			add("display_power_wayland", "warn", "No Wayland display power tool found. Install wlopm (recommended) or wlr-randr so the display can be switched on/off.", "")
+		}
+	}
 	if env["XDG_RUNTIME_DIR"] == "" {
 		add("runtime_dir", "warn", "XDG_RUNTIME_DIR is empty. User services may not reach the graphical session.", env)
 	} else if info, err := os.Stat(env["XDG_RUNTIME_DIR"]); err == nil && info.IsDir() {
@@ -2368,11 +2460,21 @@ func (s *Server) authenticated(r *http.Request) bool {
 	s.mu.Lock()
 	s.pruneSessionsLocked(time.Now())
 	session, ok := s.sessions[cookie.Value]
+	persist := false
 	if ok {
-		session.LastSeen = time.Now()
+		now := time.Now()
+		// Persist LastSeen at most every 5 minutes so active sessions keep a
+		// fresh inactivity clock across restarts without rewriting disk on every request.
+		if now.Sub(session.LastSeen) >= 5*time.Minute {
+			persist = true
+		}
+		session.LastSeen = now
 		s.sessions[cookie.Value] = session
 	}
 	s.mu.Unlock()
+	if persist {
+		s.persistSessions()
+	}
 	return ok
 }
 
@@ -2411,6 +2513,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		delete(s.sessions, oldestID)
 	}
 	s.mu.Unlock()
+	s.persistSessions()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    id,

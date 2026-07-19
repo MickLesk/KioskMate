@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.7.6
+
+Large hardening wave (~40 concrete fixes) for MQTT/HA, scheduler restore, Admin indexing, sessions and packaging.
+
+### Scheduler / workflow
+- Restore the real page after schedule idle-blank (`about:blank`) when the window becomes active again.
+- Only mark idle-blanked after a successful blank; ClearOverride immediately re-applies the scheduler target.
+- Reset rotation state on config changes; hybrid mode powers the display off outside schedule windows when any schedule page exists.
+- Admin activate/override now map absolute UI page indexes to enabled-page indexes; remaps after reorder/delete stay consistent.
+- `saveScheduler` mirrors edited time rules back onto page schedules (pages remain source of truth).
+- Dashboard surfaces critical scheduler reasons; wizard save reminds to persist; non-functional screensaver toggle removed from the wizard.
+
+### MQTT / Home Assistant
+- MQTT 5 Last Will properties byte; command keepalive waits for PINGRESP.
+- Page activate / page_number use temporary overrides; trigger topic mismatches no longer fall through into command handlers.
+- `page_url/set` captures the active index before mutate; discovery is capability-gated and clears unsupported retained entities.
+- Stale deleted page discovery/state topics are cleared; HA health 403 is classified as auth-required (not “down”).
+- `needs_restart` binary sensor after theme/GPU/profile MQTT changes; override select state tracks the override page name.
+- Availability publish errors propagate; discovery reset covers override/recovery/telemetry entities.
+
+### Hardware / packaging / Admin
+- `wlr-randr` Wayland fallback; clearer ddcutil sudo errors; brightness/volume invalidate status cache; shorter hardware cache TTL; apt upgrade count cached.
+- Persist Admin sessions across restarts (throttled LastSeen); password change invalidates all sessions; atomic setup PasswordHash race closed.
+- Remove hardcoded `WAYLAND_DISPLAY`; strengthen `wlopm` packaging recommends; prerm/postrm stop the user service; postinst restarts enabled user units after upgrade; Doctor warns when Wayland display power tools are missing.
+- MQTT `page_url/set` maps enabled→absolute page indexes; `page_name/set` uses scheduler override; per-page `auth_required` discovery; publish loop serialized against concurrent map races.
+
 ## v0.7.5
 
 - Fixed Zeitplan no-ops: saving a schedule workflow now enables the scheduler; existing configs with `time_rules` are migrated (config v3) so display power follows the window without hunting for “Run automatically”.

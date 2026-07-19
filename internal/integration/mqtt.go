@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MickLesk/KioskMate/internal/actions"
@@ -68,6 +69,9 @@ type MQTTService struct {
 	failures         int
 	overrideDuration time.Duration
 	commandMu        sync.Mutex
+	publishMu        sync.Mutex
+	knownPageIDs     []string
+	needsRestart     atomic.Bool
 }
 
 type MQTTConnectionStatus struct {
@@ -92,10 +96,11 @@ type pageEntity struct {
 }
 
 type pageHealth struct {
-	OK         bool
-	StatusCode int
-	Error      string
-	Checked    time.Time
+	OK           bool
+	AuthRequired bool
+	StatusCode   int
+	Error        string
+	Checked      time.Time
 }
 
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
@@ -422,17 +427,19 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	defer s.commandMu.Unlock()
 	actionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if page, matched := s.triggeredPage(topic, command); matched {
-		var err error
-		if runtime, ok := s.browser.(runtimeBrowser); ok {
-			err = runtime.SetOverride(actionCtx, page, s.overrideDuration, "mqtt-trigger")
-		} else {
-			err = s.browser.SetActive(actionCtx, page)
-		}
+	if page, matched, topicIsTrigger := s.triggeredPage(topic, command); matched {
+		err := s.activatePage(actionCtx, page, "mqtt-trigger")
 		if err != nil {
 			s.logger.Warn("mqtt page trigger failed", "topic", topic, "page", page, "error", err)
 		}
 		s.publishCommandResult(topic, command, err)
+		return
+	} else if topicIsTrigger {
+		// Topic matches a configured page trigger, but the payload does not
+		// match the expected value: ignore it instead of falling through to
+		// the generic command switch below (which could misinterpret the
+		// payload as an unrelated command).
+		s.logger.Debug("mqtt page trigger payload mismatch", "topic", topic, "payload", command)
 		return
 	}
 	var err error
@@ -547,26 +554,31 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			err = fmt.Errorf("page number out of range")
 			break
 		}
-		err = s.browser.SetActive(actionCtx, index)
+		err = s.activatePage(actionCtx, index, "mqtt-page-number")
 	case strings.HasSuffix(topic, "/page_name/set"):
 		err = s.setPageByName(actionCtx, command)
 	case strings.HasSuffix(topic, "/page_url/set"):
 		if strings.HasPrefix(command, "http://") || strings.HasPrefix(command, "https://") {
+			// Capture the enabled-page index before Mutate, then map it onto the
+			// absolute Pages slice index so disabled entries aren't overwritten.
+			activeEnabled := s.browser.Status().Active
 			err = s.cfg.Mutate(func(next *config.Config) error {
 				if len(next.Kiosk.Pages) == 0 {
 					next.Kiosk.Pages = []config.KioskPage{{Name: "MQTT Page", URL: command}}
-				} else {
-					active := s.browser.Status().Active
-					if active < 0 || active >= len(next.Kiosk.Pages) {
-						active = 0
-					}
-					next.Kiosk.Pages[active].URL = command
+					activeEnabled = 0
+					return nil
 				}
+				absolute := absolutePageIndex(next.Kiosk.Pages, activeEnabled)
+				if absolute < 0 {
+					absolute = 0
+					activeEnabled = 0
+				}
+				next.Kiosk.Pages[absolute].URL = command
 				next.Kiosk.URLs = next.Kiosk.PageURLs()
 				return nil
 			})
 			if err == nil {
-				err = s.browser.SetActive(actionCtx, s.browser.Status().Active)
+				err = s.browser.SetActive(actionCtx, activeEnabled)
 			}
 		} else {
 			err = fmt.Errorf("page url must start with http:// or https://")
@@ -604,6 +616,9 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			break
 		}
 		err = s.cfg.Mutate(func(next *config.Config) error { next.Performance.Profile = profile; return nil })
+		if err == nil {
+			s.markNeedsRestart()
+		}
 	case strings.HasSuffix(topic, "/gpu_mode/set"):
 		mode := strings.ToLower(strings.TrimSpace(command))
 		if mode != "auto" && mode != "software" {
@@ -611,12 +626,24 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			break
 		}
 		err = s.cfg.Mutate(func(next *config.Config) error { next.Performance.GPUMode = mode; return nil })
+		if err == nil {
+			s.markNeedsRestart()
+		}
 	case strings.HasSuffix(topic, "/reduce_motion/set"):
 		err = s.cfg.Mutate(func(next *config.Config) error { next.Performance.ReduceMotion = boolCommand(command); return nil })
+		if err == nil {
+			s.markNeedsRestart()
+		}
 	case strings.HasSuffix(topic, "/isolate_page_sessions/set"):
 		err = s.cfg.Mutate(func(next *config.Config) error { next.Kiosk.IsolateSessions = boolCommand(command); return nil })
+		if err == nil {
+			s.markNeedsRestart()
+		}
 	case strings.HasSuffix(topic, "/kiosk_theme/set"):
 		err = s.cfg.Mutate(func(next *config.Config) error { next.Kiosk.Theme = config.NormalizeKioskTheme(command); return nil })
+		if err == nil {
+			s.markNeedsRestart()
+		}
 	case strings.HasSuffix(topic, "/watchdog_enabled/set"):
 		err = s.cfg.Mutate(func(next *config.Config) error { next.Watchdog.Enabled = boolCommand(command); return nil })
 	default:
@@ -627,6 +654,9 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			err = s.browser.Stop(actionCtx)
 		case "restart":
 			err = s.browser.Restart(actionCtx)
+			if err == nil {
+				s.clearNeedsRestart()
+			}
 		case "reload", "refresh":
 			err = s.browser.Reload(actionCtx)
 		case "next":
@@ -646,24 +676,47 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	s.publishCommandResult(topic, command, err)
 }
 
-func (s *MQTTService) triggeredPage(topic, payload string) (int, bool) {
+// triggeredPage checks whether topic/payload matches a configured MQTT page
+// trigger. It returns matched=true only when both the topic and the payload
+// match. topicIsTrigger is true whenever the topic alone matches a configured
+// trigger topic, regardless of payload, so callers can distinguish "not a
+// trigger topic at all" from "trigger topic with the wrong payload".
+func (s *MQTTService) triggeredPage(topic, payload string) (page int, matched bool, topicIsTrigger bool) {
 	enabledIndex := 0
-	for _, page := range s.cfg.Snapshot().Kiosk.Pages {
-		if page.Disabled || strings.TrimSpace(page.URL) == "" {
+	for _, kioskPage := range s.cfg.Snapshot().Kiosk.Pages {
+		if kioskPage.Disabled || strings.TrimSpace(kioskPage.URL) == "" {
 			continue
 		}
-		if page.DisplayMode == "mqtt" && strings.TrimSpace(page.Trigger.Topic) == topic {
-			expected := strings.TrimSpace(page.Trigger.Payload)
+		if kioskPage.DisplayMode == "mqtt" && strings.TrimSpace(kioskPage.Trigger.Topic) == topic {
+			topicIsTrigger = true
+			expected := strings.TrimSpace(kioskPage.Trigger.Payload)
 			if expected == "" || expected == payload {
-				return enabledIndex, true
+				return enabledIndex, true, true
 			}
 		}
 		enabledIndex++
 	}
-	return -1, false
+	return -1, false, topicIsTrigger
+}
+
+// activatePage switches to the given page index, preferring a temporary
+// scheduler override (like MQTT page triggers) when the browser exposes
+// runtime override support, so manual/MQTT-driven page activation doesn't
+// get immediately reverted by the scheduler.
+func (s *MQTTService) activatePage(ctx context.Context, index int, source string) error {
+	if runtime, ok := s.browser.(runtimeBrowser); ok {
+		s.mu.Lock()
+		duration := s.overrideDuration
+		s.mu.Unlock()
+		return runtime.SetOverride(ctx, index, duration, source)
+	}
+	return s.browser.SetActive(ctx, index)
 }
 
 func (s *MQTTService) publishAll() error {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+
 	cfg := s.cfg.Snapshot()
 	hwCtx, hwCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	hw := s.hardware.Status(hwCtx)
@@ -719,7 +772,9 @@ func (s *MQTTService) publishAll() error {
 	if err := client.Publish(root+"/state", payload, false); err != nil {
 		return err
 	}
-	_ = client.Publish(root+"/availability", []byte("online"), s.retained(true))
+	if err := client.Publish(root+"/availability", []byte("online"), s.retained(true)); err != nil {
+		return err
+	}
 	_ = s.publishState(client, "rss", fmt.Sprintf("%d", status.Stats.RSSMB), false)
 	_ = s.publishState(client, "cpu", fmt.Sprintf("%.1f", status.Stats.CPUPercent), false)
 	_ = s.publishState(client, "version", s.version, true)
@@ -771,6 +826,11 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "telemetry_rss_maximum", fmt.Sprintf("%d", status.Telemetry.RSSMaximumMB), true)
 	_ = s.publishState(client, "override_active", boolState(status.Override.Active), true)
 	_ = s.publishState(client, "override_page", fmt.Sprintf("%d", status.Override.Page+1), true)
+	overrideName := "none"
+	if status.Override.Active {
+		overrideName = firstString(cfg.Kiosk.PageName(status.Override.Page), fmt.Sprintf("Page %d", status.Override.Page+1))
+	}
+	_ = s.publishState(client, "override_page_name", overrideName, true)
 	overrideMinutes := int(s.overrideDuration / time.Minute)
 	_ = s.publishState(client, "override_duration", fmt.Sprintf("%d", overrideMinutes), true)
 	if status.Override.Until != nil {
@@ -808,11 +868,14 @@ func (s *MQTTService) publishAll() error {
 		if health.Checked.IsZero() {
 			health = pageHealth{Checked: time.Now().UTC(), Error: "not checked yet"}
 		}
-		_ = s.publishState(client, "pages/"+page.ID+"/reachable", boolState(health.OK), false)
+		reachable := health.OK || health.AuthRequired
+		_ = s.publishState(client, "pages/"+page.ID+"/reachable", boolState(reachable), false)
+		_ = s.publishState(client, "pages/"+page.ID+"/auth_required", boolState(health.AuthRequired), false)
 		_ = s.publishState(client, "pages/"+page.ID+"/status_code", fmt.Sprintf("%d", health.StatusCode), false)
 		_ = s.publishState(client, "pages/"+page.ID+"/last_error", firstString(health.Error, "none"), false)
 		_ = s.publishState(client, "pages/"+page.ID+"/last_checked", health.Checked.Format(time.RFC3339), false)
 	}
+	_ = s.publishState(client, "needs_restart", boolState(s.needsRestart.Load()), true)
 	_ = s.publishState(client, "scheduler_enabled", boolState(cfg.Kiosk.Scheduler.Enabled), true)
 	_ = s.publishState(client, "scheduler_state", schedulerReason, true)
 	_ = s.publishState(client, "scheduler_mode", schedulerMode, true)
@@ -1120,6 +1183,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		s.diagnosticSensor(device, "mqtt_last_published", "MQTT Last Published", "mdi:clock-check", ""),
 		s.diagnosticSensor(device, "timezone", "Timezone", "mdi:map-clock", ""),
 		s.diagnosticSensor(device, "ntp_server", "NTP Server", "mdi:server-network", ""),
+		{
+			Topic: s.discoveryTopic("binary_sensor", "needs_restart"),
+			Data: map[string]any{
+				"name":            "Browser Restart Needed",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_needs_restart",
+				"state_topic":     s.root() + "/needs_restart/state",
+				"payload_on":      "ON",
+				"payload_off":     "OFF",
+				"icon":            "mdi:restart-alert",
+				"entity_category": "diagnostic",
+				"device":          device,
+			},
+		},
 		{
 			Topic: s.discoveryTopic("binary_sensor", "ntp_synchronized"),
 			Data: map[string]any{
@@ -1438,7 +1514,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		_ = s.cleanupLegacyDiscovery(client, items)
 		s.cleaned = true
 	}
+	if err := s.clearStalePageDiscovery(client); err != nil {
+		return err
+	}
+	unsupportedObjects := s.unsupportedDiscoveryObjects(status.Support)
 	for _, item := range items {
+		if _, object, ok := parseDiscoveryTopic(item.Topic); ok && unsupportedObjects[object] {
+			// Hardware doesn't support this entity: clear any previously
+			// retained discovery config instead of re-publishing it.
+			if err := client.Publish(item.Topic, []byte{}, s.retained(true)); err != nil {
+				return err
+			}
+			continue
+		}
 		s.decorateDiscovery(item.Data)
 		payload, _ := json.Marshal(item.Data)
 		if err := client.Publish(item.Topic, payload, s.retained(true)); err != nil {
@@ -1446,6 +1534,27 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		}
 	}
 	return nil
+}
+
+// unsupportedDiscoveryObjects returns the discovery object IDs that must not
+// be (re-)published because the underlying hardware capability isn't
+// supported on this device.
+func (s *MQTTService) unsupportedDiscoveryObjects(support hardware.Support) map[string]bool {
+	unsupported := map[string]bool{}
+	if !support.DisplayStatus {
+		unsupported["display_power"] = true
+		unsupported["display"] = true
+	}
+	if !support.AudioVolume {
+		unsupported["volume"] = true
+	}
+	if !support.MicrophoneVolume {
+		unsupported["microphone"] = true
+	}
+	if !support.KeyboardVisibility {
+		unsupported["keyboard"] = true
+	}
+	return unsupported
 }
 
 func (s *MQTTService) sensor(device map[string]any, id string, name string, icon string, unit string) discoveryItem {
@@ -1486,7 +1595,7 @@ func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryIt
 		button("telemetry_reset", "Reset Runtime Telemetry", "/telemetry/reset", "mdi:chart-timeline-variant-shimmer"),
 		{Topic: s.discoveryTopic("select", "override_page"), Data: map[string]any{
 			"name": "Temporary Page Override", "unique_id": s.cfg.Snapshot().MQTT.Node + "_override_page",
-			"command_topic": s.root() + "/override/page/set", "state_topic": s.root() + "/page_name/state",
+			"command_topic": s.root() + "/override/page/set", "state_topic": s.root() + "/override_page_name/state",
 			"options": s.pageNames(), "icon": "mdi:page-next-outline", "device": device,
 		}},
 		{Topic: s.discoveryTopic("number", "override_duration"), Data: map[string]any{
@@ -1658,6 +1767,27 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "last_command_status"},
 		[2]string{"sensor", "last_command_error"},
 		[2]string{"sensor", "last_command_json"},
+		[2]string{"button", "browser_recovery"},
+		[2]string{"button", "override_clear"},
+		[2]string{"button", "telemetry_reset"},
+		[2]string{"select", "override_page"},
+		[2]string{"number", "override_duration"},
+		[2]string{"binary_sensor", "override_active"},
+		[2]string{"sensor", "override_until"},
+		[2]string{"sensor", "recovery_state"},
+		[2]string{"sensor", "recovery_stage"},
+		[2]string{"sensor", "recovery_reason"},
+		[2]string{"sensor", "recovery_result"},
+		[2]string{"sensor", "recovery_attempts"},
+		[2]string{"sensor", "recovery_backoff_until"},
+		[2]string{"sensor", "browser_process_count"},
+		[2]string{"sensor", "telemetry_samples"},
+		[2]string{"sensor", "telemetry_cpu_average"},
+		[2]string{"sensor", "telemetry_cpu_maximum"},
+		[2]string{"sensor", "telemetry_rss_average"},
+		[2]string{"sensor", "telemetry_rss_maximum"},
+		[2]string{"sensor", "auth_guard_kind"},
+		[2]string{"sensor", "auth_guard_kiosk_ip"},
 	)
 	for _, page := range s.pageEntities() {
 		object := "page_" + page.ID
@@ -1665,6 +1795,7 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 			[2]string{"button", object},
 			[2]string{"binary_sensor", object + "_active"},
 			[2]string{"binary_sensor", object + "_reachable"},
+			[2]string{"binary_sensor", object + "_auth_required"},
 			[2]string{"sensor", object + "_status_code"},
 			[2]string{"sensor", object + "_last_error"},
 			[2]string{"sensor", object + "_last_checked"},
@@ -1902,10 +2033,29 @@ func (s *MQTTService) setPageByName(ctx context.Context, name string) error {
 	}
 	for index, candidate := range s.pageNames() {
 		if strings.EqualFold(candidate, name) {
-			return s.browser.SetActive(ctx, index)
+			return s.activatePage(ctx, index, "mqtt-page-name")
 		}
 	}
 	return fmt.Errorf("page %q not found", name)
+}
+
+// absolutePageIndex maps an enabled-page index onto the absolute Pages slice
+// index, skipping disabled/empty pages the same way PageURLs/PageCount do.
+func absolutePageIndex(pages []config.KioskPage, enabledIndex int) int {
+	if enabledIndex < 0 {
+		return -1
+	}
+	enabled := 0
+	for index, page := range pages {
+		if page.Disabled || strings.TrimSpace(page.URL) == "" {
+			continue
+		}
+		if enabled == enabledIndex {
+			return index
+		}
+		enabled++
+	}
+	return -1
 }
 
 func (s *MQTTService) setPageByEntityTopic(ctx context.Context, topic string) error {
@@ -1917,7 +2067,7 @@ func (s *MQTTService) setPageByEntityTopic(ctx context.Context, topic string) er
 	id := strings.TrimSuffix(strings.TrimPrefix(topic, prefix), suffix)
 	for _, page := range s.pageEntities() {
 		if page.ID == id {
-			return s.browser.SetActive(ctx, page.Index)
+			return s.activatePage(ctx, page.Index, "mqtt-page-activate")
 		}
 	}
 	return fmt.Errorf("page entity %q not found", id)
@@ -1997,6 +2147,19 @@ func (s *MQTTService) pageDiscoveryItems(device map[string]any) []discoveryItem 
 					"payload_on":      "ON",
 					"payload_off":     "OFF",
 					"icon":            "mdi:web-check",
+					"entity_category": "diagnostic",
+					"device":          device,
+				},
+			},
+			discoveryItem{
+				Topic: s.discoveryTopic("binary_sensor", object+"_auth_required"),
+				Data: map[string]any{
+					"name":            "Page " + page.Name + " Auth Required",
+					"unique_id":       s.cfg.Snapshot().MQTT.Node + "_" + object + "_auth_required",
+					"state_topic":     s.root() + "/pages/" + page.ID + "/auth_required/state",
+					"payload_on":      "ON",
+					"payload_off":     "OFF",
+					"icon":            "mdi:shield-key-outline",
 					"entity_category": "diagnostic",
 					"device":          device,
 				},
@@ -2109,10 +2272,68 @@ func checkPageHealth(target string) pageHealth {
 	defer resp.Body.Close()
 	health.StatusCode = resp.StatusCode
 	health.OK = resp.StatusCode >= 200 && resp.StatusCode < 400
+	if resp.StatusCode == http.StatusForbidden && likelyHomeAssistantPage(target) {
+		// HA often returns 403 for /manifest.json without a session; that is not "down".
+		health.AuthRequired = true
+		health.OK = false
+		health.Error = "authentication required"
+		return health
+	}
 	if !health.OK {
 		health.Error = resp.Status
 	}
 	return health
+}
+
+func (s *MQTTService) markNeedsRestart() {
+	s.needsRestart.Store(true)
+}
+
+func (s *MQTTService) clearNeedsRestart() {
+	s.needsRestart.Store(false)
+}
+
+func (s *MQTTService) clearStalePageDiscovery(client *mqttclient.Client) error {
+	current := map[string]bool{}
+	var ids []string
+	for _, page := range s.pageEntities() {
+		current[page.ID] = true
+		ids = append(ids, page.ID)
+	}
+	for _, old := range s.knownPageIDs {
+		if current[old] {
+			continue
+		}
+		object := "page_" + old
+		for _, topic := range []string{
+			s.discoveryTopic("button", object),
+			s.discoveryTopic("binary_sensor", object+"_active"),
+			s.discoveryTopic("binary_sensor", object+"_reachable"),
+			s.discoveryTopic("binary_sensor", object+"_auth_required"),
+			s.discoveryTopic("sensor", object+"_url"),
+			s.discoveryTopic("sensor", object+"_status_code"),
+			s.discoveryTopic("sensor", object+"_last_error"),
+		} {
+			if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
+				return err
+			}
+		}
+		for _, path := range []string{
+			"pages/" + old + "/active",
+			"pages/" + old + "/index",
+			"pages/" + old + "/name",
+			"pages/" + old + "/url",
+			"pages/" + old + "/reachable",
+			"pages/" + old + "/auth_required",
+			"pages/" + old + "/status_code",
+			"pages/" + old + "/last_error",
+			"pages/" + old + "/last_checked",
+		} {
+			_ = client.Publish(s.root()+"/"+path+"/state", []byte{}, s.retained(true))
+		}
+	}
+	s.knownPageIDs = ids
+	return nil
 }
 
 func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {

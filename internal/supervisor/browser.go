@@ -494,10 +494,25 @@ func (b *Browser) Status() Status {
 func (b *Browser) RunScheduler(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	changes := b.cfg.Changes()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-changes:
+			// A config change may have altered rotation items/order, so the
+			// previous rotation position is no longer meaningful.
+			b.mu.Lock()
+			b.rotationIndex = 0
+			b.rotationUntil = time.Time{}
+			b.mu.Unlock()
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(0)
 		case now := <-timer.C:
 			snap := b.cfg.Snapshot()
 			now = nowInConfigTimezone(now, snap.Time.Timezone)
@@ -518,32 +533,46 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 			blanked := b.idleBlanked
 			b.mu.Unlock()
 			if wantOff && !blanked {
-				b.blankIdleDisplay(ctx)
-				b.mu.Lock()
-				b.idleBlanked = true
-				b.mu.Unlock()
+				blankCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				err := b.blankIdleDisplay(blankCtx)
+				cancel()
+				if err == nil {
+					b.mu.Lock()
+					b.idleBlanked = true
+					b.mu.Unlock()
+				}
 			} else if !wantOff && blanked {
 				b.mu.Lock()
 				b.idleBlanked = false
+				restoreTarget := target
+				if restoreTarget < 0 {
+					restoreTarget = b.active
+				}
 				b.mu.Unlock()
+				b.logger.Info("scheduler idle restore", "page", restoreTarget, "reason", status.Reason)
+				restoreCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				if err := b.SetActive(restoreCtx, restoreTarget); err != nil {
+					b.logger.Warn("scheduler idle restore failed", "error", err)
+				}
+				cancel()
 			}
 			timer.Reset(b.schedulerInterval())
 		}
 	}
 }
 
-func (b *Browser) blankIdleDisplay(ctx context.Context) {
+func (b *Browser) blankIdleDisplay(ctx context.Context) error {
 	b.mu.Lock()
 	running := b.cmd != nil && b.cmd.Process != nil
 	b.mu.Unlock()
 	if !running {
-		return
+		return errors.New("browser is not running")
 	}
-	blankCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := b.navigateDevTools(blankCtx, "about:blank"); err != nil {
+	if err := b.navigateDevTools(ctx, "about:blank"); err != nil {
 		b.logger.Debug("scheduler idle blank skipped", "error", err)
+		return err
 	}
+	return nil
 }
 
 func (b *Browser) applyScheduleDisplayPower(ctx context.Context, target int, status SchedulerStatus) {
@@ -598,12 +627,17 @@ func scheduleWantsDisplayOff(cfg config.KioskConfig, target int, status Schedule
 	}
 }
 
+// schedulePageWantsPowerOff reports whether the hybrid scheduler should treat
+// "outside any schedule window" as display-off. Any enabled schedule page is
+// enough on its own (schedule pages are meant to own a window and blank the
+// panel the rest of the time), and PowerOffAfter still forces it for pages
+// that ask for it explicitly regardless of display mode.
 func schedulePageWantsPowerOff(cfg config.KioskConfig) bool {
 	for _, page := range cfg.Pages {
 		if page.Disabled || page.URL == "" {
 			continue
 		}
-		if page.DisplayMode == "schedule" && page.DisplayOptions.PowerOffAfter {
+		if page.DisplayMode == "schedule" || page.DisplayOptions.PowerOffAfter {
 			return true
 		}
 	}

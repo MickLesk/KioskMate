@@ -856,10 +856,14 @@
           : (browser.last_error ? `${t("displayStoppedErrorHint")}: ${browser.last_error}` : t("displayStoppedHint")));
         const runningLabel = !browserKnown ? t("loading") : (browser.running ? t("running") : t("stopped"));
         const runningTone = !browserKnown ? "" : (browser.running ? "ok" : "bad");
+        const schedulerReasonKey = String(browser.scheduler?.reason || "").toLowerCase();
+        const hasTimeRules = (cfg.kiosk?.time_rules || []).length > 0;
+        const schedulerNeedsAttention = schedulerReasonKey === "no active time rule" || (schedulerReasonKey === "disabled" && hasTimeRules);
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
 			${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
+            ${schedulerNeedsAttention ? stateBanner("warn", t("scheduler"), schedulerReasonKey === "disabled" ? t("schedulerDisabledWithRulesHint") : t("schedulerNoActiveRuleHint"), `<button data-view="kiosk-pages">${esc(t("manageFlow"))}</button>`) : ""}
             ${stateBanner(browserKnown ? (browser.running ? "ok" : "bad") : "warn", browserKnown ? (browser.running ? t("displayReady") : t("displayNeedsAttention")) : t("loading"), browserMessage, browser.running
               ? `<button data-view="kiosk-pages">${esc(t("managePages"))}</button>`
               : (browserKnown ? button("startBrowser", "browser-start", "primary") : ""))}
@@ -883,7 +887,7 @@
                       <button data-view="kiosk-pages">${esc(t("manageFlow"))}</button>
                     </div>
                     <div class="active-page-summary">
-                      <div class="active-page-copy"><strong>${esc(activePage.name || browser.page_name || t("noData"))}</strong><span>${esc(activePage.url || browser.url || "-")}</span><small>${esc(browser.scheduler?.next_switch ? `${t("nextSwitch")}: ${formatDate(browser.scheduler.next_switch)}` : t("manualPageControl"))}</small></div>
+                      <div class="active-page-copy"><strong>${esc(activePage.name || browser.page_name || t("noData"))}</strong><span>${esc(activePage.url || browser.url || "-")}</span><small>${esc(browser.scheduler?.next_switch ? `${t("nextSwitch")}: ${formatDate(browser.scheduler.next_switch)}` : (browser.scheduler?.reason ? formatSchedulerReason(browser.scheduler.reason) : t("manualPageControl")))}</small></div>
                       ${enabledPages.length > 1 ? `<div class="actions">${button("previousPage", "browser-previous")}${button("nextPage", "browser-next")}</div>` : ""}
                     </div>
                     <div id="page-check-output" class="action-feedback" aria-live="polite"></div>
@@ -1033,9 +1037,39 @@
       }
 
       function selectedKioskPageIndex(pages) {
-        const fallback = Number(state.status?.browser?.active || 0);
+        // state.status.browser.active is in enabled-page index space (matches backend
+        // SetActive/PageCount), so it must be converted to an absolute index before it
+        // can be used to index into the full (including disabled) pages array.
+        const fallback = absolutePageIndexFromEnabled(pages, Number(state.status?.browser?.active || 0));
         const selected = state.kioskSelectedPageIndex === null ? fallback : Number(state.kioskSelectedPageIndex);
         return Math.max(0, Math.min(pages.length - 1, Number.isFinite(selected) ? selected : 0));
+      }
+
+      // Converts an absolute index into `pages` (which includes disabled/url-less
+      // pages) into the enabled-page index space expected by /api/browser/page and
+      // /api/browser/override. Returns -1 if the page at absoluteIndex is not enabled.
+      function enabledPageIndexFromAbsolute(pages, absoluteIndex) {
+        let enabledIndex = 0;
+        for (let i = 0; i < pages.length; i++) {
+          const isEnabled = !pages[i].disabled && pages[i].url;
+          if (i === absoluteIndex) return isEnabled ? enabledIndex : -1;
+          if (isEnabled) enabledIndex++;
+        }
+        return -1;
+      }
+
+      // Converts an enabled-page index (as reported by the backend, e.g. browser.active)
+      // back into the absolute index used by the UI's pages array. Returns -1 if no such
+      // enabled page exists.
+      function absolutePageIndexFromEnabled(pages, enabledIndex) {
+        let counted = 0;
+        for (let i = 0; i < pages.length; i++) {
+          if (!pages[i].disabled && pages[i].url) {
+            if (counted === enabledIndex) return i;
+            counted++;
+          }
+        }
+        return -1;
       }
 
       function pageTimingLabel(page) {
@@ -1883,7 +1917,6 @@
             ${mode === "mqtt" ? `${field("wizard-trigger-topic", t("mqttTopic"), "text", "", page.trigger?.topic || "")}${field("wizard-trigger-payload", t("mqttPayload"), "text", "", page.trigger?.payload || "ON")}` : ""}
             <details class="span-2 wizard-options" open><summary>${esc(t("advancedDisplayActions"))}</summary><div class="wizard-option-grid">
               ${switchHtml("wizard-power-off", t("powerOffAfterExpiry"), mode === "schedule" ? page.display_options?.power_off_after !== false : !!page.display_options?.power_off_after)}
-              ${switchHtml("wizard-screensaver", t("activateScreensaver"), !!page.display_options?.screensaver)}
               <label class="range-field"><span>${esc(t("brightness"))}</span><input id="wizard-brightness" type="range" min="0" max="100" value="${esc(page.display_options?.brightness ?? 100)}"><strong id="wizard-brightness-value">${esc(page.display_options?.brightness ?? 100)}%</strong></label>
             </div></details>
           </div>`;
@@ -1925,7 +1958,7 @@
           page.trigger = { topic: val("wizard-trigger-topic") || page.trigger?.topic || "", payload: val("wizard-trigger-payload") || page.trigger?.payload || "ON" };
           page.display_options = {
             power_off_after: page.display_mode === "schedule" ? (document.getElementById("wizard-power-off") ? checked("wizard-power-off") : true) : checked("wizard-power-off"),
-            screensaver: checked("wizard-screensaver"),
+            screensaver: !!page.display_options?.screensaver,
             brightness: Number(val("wizard-brightness") || page.display_options?.brightness || 100),
           };
           if (validate && page.display_mode === "duration" && page.duration_seconds < 5) validationError("wizard-duration", t("validationDuration"));
@@ -1951,6 +1984,7 @@
           markDirty();
           renderApp();
           if (startKiosk) await saveKiosk(true, true);
+          else toast(t("unsavedChanges"), t("pageWizardSaveReminder"), "warn");
         } catch (error) {
           toast(t("validationFailed"), error.message, "error");
         }
@@ -2156,8 +2190,10 @@
       }
 
       async function activateSelectedPage() {
-		const active = selectedKioskPageIndex(collectPages());
+		const pages = collectPages();
+		const active = enabledPageIndexFromAbsolute(pages, selectedKioskPageIndex(pages));
         await runAction("page-activate", async () => {
+          if (active < 0) throw new Error(t("validationPageDisabledForActivation"));
           // Temporary override so the scheduler does not immediately steal the page back.
           await postJSON("/api/browser/override", { page: active, duration_seconds: 3600, source: "admin-activate" });
           await refreshCore();
@@ -2166,9 +2202,11 @@
       }
 
 	  async function applyPageOverride() {
-		const page = selectedKioskPageIndex(collectPages());
+		const pages = collectPages();
+		const page = enabledPageIndexFromAbsolute(pages, selectedKioskPageIndex(pages));
 		const durationMinutes = Math.max(1, Math.min(1440, Number(val("override-duration") || 60)));
 		await runAction("override-apply", async () => {
+		  if (page < 0) throw new Error(t("validationPageDisabledForActivation"));
 		  await postJSON("/api/browser/override", { page, duration_seconds: durationMinutes * 60, source: "admin" });
 		  clearSnapshot();
 		  await refreshCore();
@@ -2241,7 +2279,7 @@
         const order = pages.map((_, i) => i);
         [order[index], order[next]] = [order[next], order[index]];
         kiosk.pages = order.map((oldIndex) => pages[oldIndex]);
-        remapPageIndexes(kiosk, order);
+        remapPageIndexes(kiosk, order, pages);
         syncKioskURLs(kiosk);
       }
 
@@ -2249,13 +2287,40 @@
         const pages = kiosk.pages || [];
         const order = pages.map((_, i) => i).filter((oldIndex) => oldIndex !== index);
         kiosk.pages = order.map((oldIndex) => pages[oldIndex]);
-        remapPageIndexes(kiosk, order);
+        remapPageIndexes(kiosk, order, pages);
         syncKioskURLs(kiosk);
       }
 
-      function remapPageIndexes(kiosk, order) {
-        const map = new Map(order.map((oldIndex, newIndex) => [oldIndex, newIndex]));
-        const remap = (page) => map.has(Number(page)) ? map.get(Number(page)) : 0;
+      // rotation[].page and time_rules[].page are stored in enabled-page index space
+      // (see synchronizeKioskWorkflow), not absolute pages-array position. `order` maps
+      // new absolute position -> old absolute position; `previousPages` is the pages
+      // array as it was before the reorder/removal was applied. Rebuild an
+      // old-enabled-index -> new-enabled-index map from that before touching rotation
+      // or time_rules, otherwise moving/removing a page silently repoints unrelated rules.
+      function remapPageIndexes(kiosk, order, previousPages) {
+        const oldPages = previousPages || [];
+        const oldEnabledByAbsolute = new Map();
+        let oldEnabled = 0;
+        oldPages.forEach((page, absoluteIndex) => {
+          if (!page.disabled && page.url) {
+            oldEnabledByAbsolute.set(absoluteIndex, oldEnabled);
+            oldEnabled++;
+          }
+        });
+        const newPages = kiosk.pages || [];
+        let newEnabled = 0;
+        const enabledMap = new Map();
+        newPages.forEach((page, newAbsoluteIndex) => {
+          const oldAbsoluteIndex = order[newAbsoluteIndex];
+          const isEnabled = !page.disabled && page.url;
+          if (isEnabled) {
+            if (oldEnabledByAbsolute.has(oldAbsoluteIndex)) {
+              enabledMap.set(oldEnabledByAbsolute.get(oldAbsoluteIndex), newEnabled);
+            }
+            newEnabled++;
+          }
+        });
+        const remap = (page) => enabledMap.has(Number(page)) ? enabledMap.get(Number(page)) : 0;
         kiosk.rotation = (kiosk.rotation || []).map((item) => ({ ...item, page: remap(item.page) }));
         kiosk.time_rules = (kiosk.time_rules || []).map((rule) => ({ ...rule, page: remap(rule.page) }));
       }
@@ -2306,12 +2371,34 @@
           cfg.kiosk.scheduler = { enabled: checked("scheduler-enabled"), mode: val("scheduler-mode"), tick_interval: durationToNs(val("scheduler-tick")) };
           cfg.kiosk.rotation = collectRotation();
           cfg.kiosk.time_rules = collectRules();
+          // Pages stay the source of truth for schedule windows: mirror the edited
+          // rules back onto their matching pages instead of calling
+          // synchronizeKioskWorkflow (which would rebuild rotation/time_rules from the
+          // pages and wipe out any Zeitplan-only edits made here).
+          mirrorRulesToSchedulePages(cfg.kiosk);
           validateScheduler(cfg.kiosk);
           await postJSON("/api/config", cfg);
           await refreshCore();
           clearDirty("kiosk-schedule");
           renderApp();
         }, t("saved"));
+      }
+
+      // Applies each time_rules entry's start/end/days back onto the enabled kiosk page
+      // it targets, as long as that page is still in "schedule" display mode. Rules are
+      // keyed by enabled-page index; mirroring keeps Pages authoritative for schedule
+      // windows even when they were edited from the Zeitplan/scheduler view.
+      function mirrorRulesToSchedulePages(kiosk) {
+        const pages = normalizePages(kiosk.pages, kiosk.urls);
+        (kiosk.time_rules || []).forEach((rule) => {
+          const absoluteIndex = absolutePageIndexFromEnabled(pages, Number(rule.page));
+          const page = absoluteIndex >= 0 ? pages[absoluteIndex] : null;
+          if (page && page.display_mode === "schedule") {
+            page.schedule = { start: normalizeClock(rule.start), end: normalizeClock(rule.end), days: [...(rule.days || [])] };
+          }
+        });
+        kiosk.pages = pages;
+        syncKioskURLs(kiosk);
       }
 
       function bindMQTT() {
