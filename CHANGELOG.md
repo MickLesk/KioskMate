@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.7
+
+### Privileges / APT jobs
+- Privilege status no longer stays “Not configured” after typing a password: Activate verifies sudo/su and keeps a 15‑minute in-memory session; starting a job with a password does the same.
+- Explicit **Activate privileges** button; clearer session remaining time in the status tile.
+- APT job output flushes carriage-return progress (`Reading package lists...`); noninteractive apt env; UI polls until the job finishes (not only ~80s).
+
+### Telemetry
+- Memory uses Linux PSS (`smaps_rollup`) instead of summing per-process RSS, which heavily over-counted Chromium shared pages (~1.5 GB looked worse than reality).
+- CPU labels clarify that 100% = one core across the Chromium process tree (values above 100% are normal on multi-core).
+
 ## v0.7.6
 
 Large hardening wave (~40 concrete fixes) for MQTT/HA, scheduler restore, Admin indexing, sessions and packaging.

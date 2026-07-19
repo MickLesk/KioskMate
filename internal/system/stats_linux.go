@@ -22,20 +22,25 @@ func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats
 	if len(pids) == 0 {
 		return ProcessTreeStats{}, os.ErrProcessDone
 	}
-	var rssPages uint64
+	var rssKB uint64
 	var ticks uint64
 	for _, pid := range pids {
 		stat, err := readStat(pid)
 		if err != nil {
 			continue
 		}
-		rssPages += stat.rssPages
 		ticks += stat.ticks
+		// Prefer PSS so Chromium shared mappings aren't counted once per process.
+		if pss, ok := readPSSKB(pid); ok {
+			rssKB += pss
+			continue
+		}
+		rssKB += stat.rssPages * uint64(os.Getpagesize()) / 1024
 	}
 	now := time.Now()
 	stats := ProcessTreeStats{
 		PIDs:       pids,
-		RSSMB:      rssPages * uint64(os.Getpagesize()) / 1024 / 1024,
+		RSSMB:      rssKB / 1024,
 		Updated:    now,
 		UpdatedAt:  &now,
 		totalTicks: ticks,
@@ -110,4 +115,26 @@ func readStat(pid int) (procStat, error) {
 	stime, _ := strconv.ParseUint(fields[12], 10, 64)
 	rss, _ := strconv.ParseUint(fields[21], 10, 64)
 	return procStat{ppid: ppid, ticks: utime + stime, rssPages: rss}, nil
+}
+
+func readPSSKB(pid int) (uint64, bool) {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "smaps_rollup"))
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "Pss:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0, false
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return value, true
+	}
+	return 0, false
 }

@@ -290,17 +290,16 @@ func (s *Server) systemAction(w http.ResponseWriter, r *http.Request) {
 		Remember bool   `json:"remember"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Remember && body.Password != "" {
-		if err := s.actions.RememberPrivilege(body.Mode, body.Password); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-	}
 	name := strings.TrimPrefix(r.URL.Path, "/api/system/")
 	job, err := s.actions.StartPrivileged(context.Background(), name, body.Mode, body.Password)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	// StartPrivileged already verifies and remembers a supplied password.
+	// Keep explicit remember as a no-op alias for older clients.
+	if body.Remember && body.Password != "" {
+		_ = s.actions.RememberPrivilege(body.Mode, body.Password)
 	}
 	writeJSON(w, http.StatusOK, job)
 }
@@ -309,7 +308,28 @@ func (s *Server) privilege(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.actions.PrivilegeStatus())
-	case http.MethodDelete, http.MethodPost:
+	case http.MethodPost:
+		var body struct {
+			Mode     string `json:"mode"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if strings.TrimSpace(body.Password) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password required"})
+			return
+		}
+		if body.Mode == "" {
+			body.Mode = "sudo"
+		}
+		if err := s.actions.RememberPrivilege(body.Mode, body.Password); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.actions.PrivilegeStatus())
+	case http.MethodDelete:
 		s.actions.ClearPrivilege()
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	default:

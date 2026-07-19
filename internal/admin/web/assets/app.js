@@ -1255,6 +1255,13 @@
           </div>`;
       }
 
+      function privilegeRemainingLabel(privilege) {
+        const seconds = Number(privilege?.remaining_seconds || 0);
+        if (!privilege?.configured || seconds <= 0) return privilege?.mode || "sudo";
+        const minutes = Math.max(1, Math.ceil(seconds / 60));
+        return `${privilege.mode || "sudo"} · ${minutes} ${t("minutesLeft")}`;
+      }
+
       function renderSystemActions() {
         const privilege = state.privilege || {};
         const repairIssues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
@@ -1263,18 +1270,21 @@
           <div class="page-stack">
             ${stateBanner(privilege.configured ? "ok" : "warn", privilege.configured ? t("maintenanceReady") : t("privilegeRequired"), privilege.configured ? t("maintenanceReadyHint") : t("privilegeRequiredHint"))}
             <section class="status-strip">
-              ${statusTile(t("privilege"), privilege.configured ? t("configured") : t("notConfigured"), privilege.configured ? "ok" : "warn", privilege.mode || "sudo")}
+              ${statusTile(t("privilege"), privilege.configured ? t("sessionActive") : t("notConfigured"), privilege.configured ? "ok" : "warn", privilegeRemainingLabel(privilege))}
               ${statusTile(t("jobs"), String(activeJobs), activeJobs ? "warn" : "ok", activeJobs ? t("jobRunning") : t("noActiveJobs"))}
               ${statusTile(t("repairCenter"), repairIssues.length ? `${repairIssues.length} ${t("issues")}` : t("ready"), repairIssues.length ? "warn" : "ok", state.repair?.changed ? t("repairChanged") : t("noRepairIssues"))}
             </section>
             <div class="settings-columns">
               <div class="card">
-                <div class="head"><div><h3>${esc(t("privilege"))}</h3><span class="section-kicker">${esc(t("privilegeSession"))}</span></div><span class="chip ${privilege.configured ? "ok" : ""}">${esc(privilege.configured ? t("configured") : t("notConfigured"))}</span></div>
+                <div class="head"><div><h3>${esc(t("privilege"))}</h3><span class="section-kicker">${esc(t("privilegeSession"))}</span></div><span class="chip ${privilege.configured ? "ok" : ""}">${esc(privilege.configured ? t("sessionActive") : t("notConfigured"))}</span></div>
                 <div class="body form-grid">
                   ${selectHtml("priv-mode", t("privilegeMode"), privilege.mode || "sudo", [["sudo", "sudo"], ["su", "su / root"]])}
                   ${field("priv-password", t("password"), "password", "current-password", "")}
-                  <div class="span-2">${switchHtml("priv-remember", t("rememberPassword"), false)}</div>
-                  ${privilege.configured ? `<button data-action="priv-clear" class="span-2">${esc(t("clearPrivilege"))}</button>` : `<p class="hint span-2">${esc(t("privilegeStorageHint"))}</p>`}
+                  <p class="hint span-2">${esc(t("privilegeStorageHint"))}</p>
+                  <div class="actions span-2">
+                    <button data-action="priv-activate" class="primary">${esc(t("activatePrivilege"))}</button>
+                    ${privilege.configured ? `<button data-action="priv-clear">${esc(t("clearPrivilege"))}</button>` : ""}
+                  </div>
                 </div>
               </div>
               <div class="card">
@@ -1422,8 +1432,8 @@
 			<div class="card">
 			  <div class="head"><div><h3>${esc(t("runtimeTelemetry"))}</h3><span class="section-kicker">${esc(t("last24Hours"))}</span></div><button data-action="telemetry-reset">${esc(t("resetTelemetry"))}</button></div>
 			  <div class="body telemetry-panel">
-				${statusTile(t("averageCpu"), formatValue(telemetry.cpu_average, "%"), "", `${t("maximum")}: ${formatValue(telemetry.cpu_maximum, "%")}`)}
-				${statusTile(t("averageMemory"), formatValue(telemetry.rss_average_mb, " MB"), "", `${t("maximum")}: ${formatValue(telemetry.rss_maximum_mb, " MB")}`)}
+				${statusTile(t("averageCpu"), formatValue(telemetry.cpu_average, "%"), telemetry.cpu_average >= 200 ? "warn" : "", `${t("maximum")}: ${formatValue(telemetry.cpu_maximum, "%")} · ${t("cpuCoresHint")}`)}
+				${statusTile(t("averageMemory"), formatValue(telemetry.rss_average_mb, " MB"), telemetry.rss_average_mb >= 1200 ? "warn" : "", `${t("maximum")}: ${formatValue(telemetry.rss_maximum_mb, " MB")} · ${t("memoryPssHint")}`)}
 				${statusTile(t("samples"), telemetry.samples || 0, "", `${t("processes")}: ${telemetry.process_maximum || 0}`)}
 				${renderTelemetryChart(state.telemetry?.samples || [])}
 			  </div>
@@ -2566,6 +2576,16 @@
             startSystemJob(action, name);
           });
         }
+        document.querySelector('[data-action="priv-activate"]')?.addEventListener("click", async () => {
+          await runAction("priv-activate", async () => {
+            const password = val("priv-password");
+            if (!password) throw new Error(t("passwordRequired"));
+            state.privilege = await postJSON("/api/privilege", { mode: val("priv-mode") || "sudo", password });
+            const passwordField = document.getElementById("priv-password");
+            if (passwordField) passwordField.value = "";
+            renderApp();
+          }, t("privilegeActivated"));
+        });
         document.querySelector('[data-action="priv-clear"]')?.addEventListener("click", async () => {
           await deleteJSON("/api/privilege");
           state.privilege = await getJSON("/api/privilege");
@@ -2589,8 +2609,11 @@
 
       async function startSystemJob(action, name) {
         await runAction(action, async () => {
-          const job = await postJSON("/api/system/" + name, { mode: val("priv-mode"), password: val("priv-password"), remember: checked("priv-remember") });
+          const job = await postJSON("/api/system/" + name, { mode: val("priv-mode"), password: val("priv-password"), remember: true });
           state.jobs.unshift(job);
+          try { state.privilege = await getJSON("/api/privilege"); } catch {}
+          const passwordField = document.getElementById("priv-password");
+          if (passwordField && val("priv-password")) passwordField.value = "";
           renderApp();
           pollJob(job.id);
         }, t("actionStarted"));
@@ -2603,7 +2626,7 @@
             timezone: val("time-zone") || "Europe/Berlin",
             mode: val("priv-mode") || "sudo",
             password: val("priv-password"),
-            remember: checked("priv-remember"),
+            remember: true,
           });
           state.jobs.unshift(job);
           pollJob(job.id);
@@ -2614,7 +2637,9 @@
       }
 
       async function pollJob(id) {
-        for (let i = 0; i < 80; i++) {
+        // apt-update/upgrade can take several minutes on Pi hardware; keep
+        // polling until the job finishes instead of stopping after ~80s.
+        for (let i = 0; i < 7200; i++) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
           try {
             const job = await getJSON("/api/jobs/" + encodeURIComponent(id));

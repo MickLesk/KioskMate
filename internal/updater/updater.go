@@ -616,6 +616,8 @@ func (w *jobWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.pending += string(p)
+	w.pending = strings.ReplaceAll(w.pending, "\r\n", "\n")
+	w.pending = strings.ReplaceAll(w.pending, "\r", "\n")
 	for {
 		index := strings.IndexByte(w.pending, '\n')
 		if index < 0 {

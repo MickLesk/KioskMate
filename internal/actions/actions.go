@@ -35,8 +35,12 @@ type Credential struct {
 	Mode       string    `json:"mode"`
 	Configured bool      `json:"configured"`
 	Created    time.Time `json:"created"`
+	ExpiresAt  time.Time `json:"expires_at,omitempty"`
+	Remaining  int       `json:"remaining_seconds,omitempty"`
 	password   string
 }
+
+const privilegeTTL = 15 * time.Minute
 
 func New(cfg *config.Config) *Service {
 	return &Service{cfg: cfg, jobs: map[string]*Job{}}
@@ -51,6 +55,7 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 	if !ok {
 		return nil, fmt.Errorf("unknown action: %s", name)
 	}
+	rememberPassword := strings.TrimSpace(password) != ""
 	if password == "" {
 		if storedMode, storedPassword, ok := s.privilegeCredential(); ok {
 			mode = storedMode
@@ -66,6 +71,13 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 			command, args, input = suPasswordCommand(command, args, password)
 		default:
 			return nil, fmt.Errorf("privilege mode must be sudo or su")
+		}
+		// Persist a verified credential for this daemon session so the status
+		// tile flips to "configured" without requiring a separate checkbox.
+		if rememberPassword {
+			if err := s.RememberPrivilege(mode, password); err != nil {
+				return nil, err
+			}
 		}
 	} else if command == "sudo" {
 		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -144,14 +156,19 @@ func (s *Service) startCommand(ctx context.Context, name string, command string,
 }
 
 func (s *Service) RememberPrivilege(mode string, password string) error {
+	password = strings.TrimSpace(password)
 	if password == "" {
-		return nil
+		return fmt.Errorf("password required")
 	}
 	if mode != "sudo" && mode != "su" {
 		return fmt.Errorf("privilege mode must be sudo or su")
 	}
+	if err := verifyPrivilegeFn(mode, password); err != nil {
+		return err
+	}
+	now := time.Now()
 	s.mu.Lock()
-	s.credential = &Credential{Mode: mode, Configured: true, Created: time.Now(), password: password}
+	s.credential = &Credential{Mode: mode, Configured: true, Created: now, ExpiresAt: now.Add(privilegeTTL), password: password}
 	s.mu.Unlock()
 	return nil
 }
@@ -165,21 +182,68 @@ func (s *Service) ClearPrivilege() {
 func (s *Service) PrivilegeStatus() Credential {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.credential == nil || time.Since(s.credential.Created) > 15*time.Minute {
+	if s.credential == nil || time.Since(s.credential.Created) > privilegeTTL {
 		s.credential = nil
 		return Credential{}
 	}
-	return Credential{Mode: s.credential.Mode, Configured: true, Created: s.credential.Created}
+	remaining := int(time.Until(s.credential.ExpiresAt).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	return Credential{
+		Mode:       s.credential.Mode,
+		Configured: true,
+		Created:    s.credential.Created,
+		ExpiresAt:  s.credential.ExpiresAt,
+		Remaining:  remaining,
+	}
 }
 
 func (s *Service) privilegeCredential() (string, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.credential == nil || s.credential.password == "" || time.Since(s.credential.Created) > 15*time.Minute {
+	if s.credential == nil || s.credential.password == "" || time.Since(s.credential.Created) > privilegeTTL {
 		s.credential = nil
 		return "", "", false
 	}
 	return s.credential.Mode, s.credential.password, true
+}
+
+// verifyPrivilegeFn is replaced in unit tests so RememberPrivilege can be
+// exercised without a real sudo/su binary.
+var verifyPrivilegeFn = verifyPrivilege
+
+func verifyPrivilege(mode, password string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	switch mode {
+	case "sudo":
+		cmd := exec.CommandContext(ctx, "sudo", "-S", "-p", "", "-k", "true")
+		cmd.Stdin = strings.NewReader(password + "\n")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			msg := strings.TrimSpace(string(output))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return fmt.Errorf("sudo password rejected: %s", msg)
+		}
+		return nil
+	case "su":
+		cmd := exec.CommandContext(ctx, "su", "-", "root", "-c", "true")
+		cmd.Stdin = strings.NewReader(password + "\n")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			msg := strings.TrimSpace(string(output))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return fmt.Errorf("su password rejected: %s", msg)
+		}
+		return nil
+	default:
+		return fmt.Errorf("privilege mode must be sudo or su")
+	}
 }
 
 func (s *Service) ResolvePrivilege(mode string, password string) (string, string, bool) {
@@ -249,9 +313,9 @@ func (s *Service) Jobs(limit int) []*Job {
 func (s *Service) command(name string) (string, []string, bool) {
 	switch name {
 	case "apt-update":
-		return "sudo", []string{"-n", "apt-get", "update"}, true
+		return "sudo", []string{"-n", "apt-get", "-o", "APT::Color=0", "-o", "Dpkg::Progress-Fancy=0", "-o", "APT::Update::Error-Mode=any", "update"}, true
 	case "apt-upgrade":
-		return "sudo", []string{"-n", "apt-get", "upgrade", "-y"}, true
+		return "sudo", []string{"-n", "apt-get", "-o", "APT::Color=0", "-o", "Dpkg::Progress-Fancy=0", "-y", "upgrade"}, true
 	case "restart-service":
 		return "systemctl", []string{"--user", "restart", s.cfg.Snapshot().Update.Service}, true
 	case "reboot":
@@ -285,6 +349,11 @@ func run(ctx context.Context, job *Job, command string, args []string, input str
 	defer job.finishDefault(1)
 	job.append(command + " " + strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = append(os.Environ(),
+		"DEBIAN_FRONTEND=noninteractive",
+		"APT_LISTCHANGES_FRONTEND=none",
+		"NEEDRESTART_MODE=a",
+	)
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
@@ -311,6 +380,9 @@ func (w *jobWriter) Write(data []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.pending += string(data)
+	// apt progress often rewrites the same line with '\r' instead of '\n'.
+	w.pending = strings.ReplaceAll(w.pending, "\r\n", "\n")
+	w.pending = strings.ReplaceAll(w.pending, "\r", "\n")
 	for {
 		index := strings.IndexByte(w.pending, '\n')
 		if index < 0 {

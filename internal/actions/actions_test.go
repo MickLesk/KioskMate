@@ -28,6 +28,10 @@ func TestJobsReturnsNewestFirst(t *testing.T) {
 }
 
 func TestResolvePrivilegeUsesTemporaryCredential(t *testing.T) {
+	previous := verifyPrivilegeFn
+	verifyPrivilegeFn = func(mode, password string) error { return nil }
+	t.Cleanup(func() { verifyPrivilegeFn = previous })
+
 	service := &Service{}
 	if err := service.RememberPrivilege("sudo", "secret"); err != nil {
 		t.Fatal(err)
@@ -35,6 +39,20 @@ func TestResolvePrivilegeUsesTemporaryCredential(t *testing.T) {
 	mode, password, configured := service.ResolvePrivilege("", "")
 	if mode != "sudo" || password != "secret" || !configured {
 		t.Fatalf("mode = %q, password = %q, configured = %v", mode, password, configured)
+	}
+	status := service.PrivilegeStatus()
+	if !status.Configured || status.Remaining <= 0 || status.ExpiresAt.IsZero() {
+		t.Fatalf("privilege status = %#v", status)
+	}
+}
+
+func TestJobWriterHandlesCarriageReturnProgress(t *testing.T) {
+	job := &Job{ExitCode: -1}
+	writer := &jobWriter{job: job}
+	_, _ = writer.Write([]byte("Reading package lists...\rReading package lists... Done\n"))
+	writer.flush()
+	if len(job.Output) != 2 || job.Output[0] != "Reading package lists..." || job.Output[1] != "Reading package lists... Done" {
+		t.Fatalf("output = %#v", job.Output)
 	}
 }
 
