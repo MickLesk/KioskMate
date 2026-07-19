@@ -71,6 +71,7 @@ func main() {
 	actionService := actions.New(cfg)
 	updateService := updater.New(cfg, version, actionService)
 	hardwareService := hardware.New()
+	browser.SetDisplayPower(hardwareService)
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"))
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"))
 

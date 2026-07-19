@@ -13,10 +13,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-type Service struct{}
+type Service struct {
+	mu       sync.Mutex
+	cached   Status
+	cachedAt time.Time
+}
 
 type Status struct {
 	Support Support           `json:"support"`
@@ -47,6 +52,25 @@ func New() *Service {
 }
 
 func (s *Service) Status(ctx context.Context) Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.cachedAt.IsZero() && time.Since(s.cachedAt) < 30*time.Second {
+		return s.cached
+	}
+	status := collectStatus(ctx)
+	s.cached = status
+	s.cachedAt = time.Now()
+	return status
+}
+
+func (s *Service) InvalidateCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cachedAt = time.Time{}
+}
+
+func collectStatus(ctx context.Context) Status {
+	ensureDisplayEnv()
 	support := detectSupport(ctx)
 	return Status{
 		Support: support,
@@ -103,22 +127,28 @@ func (s *Service) SetDisplay(ctx context.Context, power string) error {
 	if power != "ON" && power != "OFF" {
 		return errors.New("display power must be ON or OFF")
 	}
+	ensureDisplayEnv()
+	var err error
 	switch displayCommand(ctx) {
 	case "ddcutil":
 		value := "4"
 		if power == "ON" {
 			value = "1"
 		}
-		return run(ctx, "sudo", "ddcutil", "setvcp", "0xD6", value)
+		err = run(ctx, "sudo", "ddcutil", "setvcp", "0xD6", value)
 	case "wlopm":
-		return run(ctx, "wlopm", "--"+strings.ToLower(power), "*")
+		err = run(ctx, "wlopm", "--"+strings.ToLower(power), "*")
 	case "kscreen-doctor":
-		return run(ctx, "kscreen-doctor", "--dpms", strings.ToLower(power))
+		err = run(ctx, "kscreen-doctor", "--dpms", strings.ToLower(power))
 	case "xset":
-		return run(ctx, "xset", "dpms", "force", strings.ToLower(power))
+		err = run(ctx, "xset", "dpms", "force", strings.ToLower(power))
 	default:
-		return errors.New("display power control unsupported")
+		err = errors.New("display power control unsupported")
 	}
+	if err == nil {
+		s.InvalidateCache()
+	}
+	return err
 }
 
 func (s *Service) SetBrightness(ctx context.Context, percent int) error {
@@ -197,20 +227,23 @@ func detectSupport(ctx context.Context) Support {
 }
 
 func displayCommand(ctx context.Context) string {
+	ensureDisplayEnv()
 	session := sessionType(ctx)
 	desktop := sessionDesktop()
 	if commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: D6") {
 		return "ddcutil"
 	}
-	if session == "wayland" {
-		if commandExists("wlopm") && (strings.Contains(desktop, "labwc") || strings.Contains(desktop, "wayfire") || desktop == "unknown") {
-			if runText(ctx, "wlopm") != "" {
+	if session == "wayland" || os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland" {
+		if commandExists("wlopm") {
+			if runText(ctx, "wlopm") != "" || strings.Contains(desktop, "labwc") || strings.Contains(desktop, "wayfire") || desktop == "unknown" {
 				return "wlopm"
 			}
 		}
 		if commandExists("kscreen-doctor") && runText(ctx, "kscreen-doctor", "--dpms", "show") != "" {
 			return "kscreen-doctor"
 		}
+		// xset over Xwayland often reports success without blanking the real Wayland output.
+		return ""
 	}
 	if commandExists("xset") && runText(ctx, "xset", "-q") != "" {
 		return "xset"
@@ -562,10 +595,52 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
+func ensureDisplayEnv() {
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		if uid := os.Getuid(); uid >= 0 {
+			runtimeDir = filepath.Join("/run/user", strconv.Itoa(uid))
+			if info, err := os.Stat(runtimeDir); err == nil && info.IsDir() {
+				_ = os.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+			}
+		}
+	}
+	if runtimeDir == "" {
+		return
+	}
+	current := os.Getenv("WAYLAND_DISPLAY")
+	if current != "" {
+		if _, err := os.Stat(filepath.Join(runtimeDir, current)); err == nil {
+			return
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(runtimeDir, "wayland-*"))
+	for _, match := range matches {
+		base := filepath.Base(match)
+		if strings.HasSuffix(base, ".lock") {
+			continue
+		}
+		if info, err := os.Stat(match); err == nil && !info.IsDir() {
+			_ = os.Setenv("WAYLAND_DISPLAY", base)
+			if os.Getenv("XDG_SESSION_TYPE") == "" {
+				_ = os.Setenv("XDG_SESSION_TYPE", "wayland")
+			}
+			return
+		}
+	}
+}
+
+func commandEnv() []string {
+	ensureDisplayEnv()
+	return os.Environ()
+}
+
 func runText(ctx context.Context, command string, args ...string) string {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, command, args...).CombinedOutput()
+	cmd := exec.CommandContext(cctx, command, args...)
+	cmd.Env = commandEnv()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}
@@ -575,7 +650,9 @@ func runText(ctx context.Context, command string, args ...string) string {
 func run(ctx context.Context, command string, args ...string) error {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, command, args...).CombinedOutput()
+	cmd := exec.CommandContext(cctx, command, args...)
+	cmd.Env = commandEnv()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {

@@ -153,6 +153,72 @@ func TestSchedulerOvernightRule(t *testing.T) {
 	}
 }
 
+func TestSchedulerTimeModeOutsideWindowPowersOff(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.Scheduler = config.KioskScheduler{Enabled: true, Mode: "time"}
+	cfg.Kiosk.TimeRules = []config.TimeRule{{
+		Name:  "Day",
+		Page:  0,
+		Start: "07:00",
+		End:   "23:00",
+	}}
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	fake := &fakeDisplayPower{}
+	browser.SetDisplayPower(fake)
+
+	outside := time.Date(2026, 7, 7, 23, 30, 0, 0, time.Local)
+	page, status := browser.schedulerTarget(outside)
+	if page != -1 || status.Reason != "no active time rule" {
+		t.Fatalf("outside window = page %d, status %#v", page, status)
+	}
+	if !scheduleWantsDisplayOff(cfg.Kiosk, page, status) {
+		t.Fatal("expected display off outside time window")
+	}
+	browser.applyScheduleDisplayPower(context.Background(), page, status)
+	if fake.last != "OFF" {
+		t.Fatalf("display power = %q, want OFF", fake.last)
+	}
+
+	inside := time.Date(2026, 7, 7, 10, 0, 0, 0, time.Local)
+	page, status = browser.schedulerTarget(inside)
+	if page != 0 || status.Reason != "time" {
+		t.Fatalf("inside window = page %d, status %#v", page, status)
+	}
+	browser.applyScheduleDisplayPower(context.Background(), page, status)
+	if fake.last != "ON" {
+		t.Fatalf("display power = %q, want ON", fake.last)
+	}
+}
+
+func TestHybridWithPowerOffSkipsRotationOutsideSchedule(t *testing.T) {
+	cfg := schedulerTestConfig()
+	cfg.Kiosk.Pages[0].DisplayMode = "schedule"
+	cfg.Kiosk.Pages[0].DisplayOptions.PowerOffAfter = true
+	cfg.Kiosk.Scheduler = config.KioskScheduler{Enabled: true, Mode: "hybrid"}
+	cfg.Kiosk.Rotation = []config.RotationItem{{Page: 1, DurationSeconds: 60}}
+	cfg.Kiosk.TimeRules = []config.TimeRule{{
+		Name:  "Day",
+		Page:  0,
+		Start: "07:00",
+		End:   "23:00",
+	}}
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	page, status := browser.schedulerTarget(time.Date(2026, 7, 7, 23, 30, 0, 0, time.Local))
+	if page != -1 || status.Reason != "no active time rule" {
+		t.Fatalf("hybrid power-off outside = page %d, status %#v", page, status)
+	}
+}
+
+type fakeDisplayPower struct {
+	last string
+	err  error
+}
+
+func (f *fakeDisplayPower) SetDisplay(_ context.Context, power string) error {
+	f.last = power
+	return f.err
+}
+
 func TestExpectedBrowserStopDoesNotRecordLastError(t *testing.T) {
 	cfg := schedulerTestConfig()
 	cfg.Kiosk.BrowserPreset = "custom"

@@ -67,6 +67,13 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 		default:
 			return nil, fmt.Errorf("privilege mode must be sudo or su")
 		}
+	} else if command == "sudo" {
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err := exec.CommandContext(probeCtx, "sudo", "-n", "true").Run()
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("sudo privileges required: enter the system password under Privileges, or configure passwordless sudo for reboot/shutdown")
+		}
 	}
 	job := &Job{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: name, Started: time.Now(), ExitCode: -1}
 	s.mu.Lock()

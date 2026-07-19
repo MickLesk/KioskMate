@@ -212,7 +212,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 				activeKey = ""
 				s.logger.Info("mqtt disabled")
 			}
-			if !sleepContext(ctx, 5*time.Second) {
+			if !s.sleepOrConfigChange(ctx, 5*time.Second) {
 				return
 			}
 			continue
@@ -246,10 +246,23 @@ func (s *MQTTService) Run(ctx context.Context) {
 		} else {
 			s.setConnectionResult(nil)
 		}
-		if !sleepContext(ctx, mqttInterval(s.cfg.Snapshot().MQTT.Interval)) {
+		if !s.sleepOrConfigChange(ctx, mqttInterval(s.cfg.Snapshot().MQTT.Interval)) {
 			s.publishOffline()
 			return
 		}
+	}
+}
+
+func (s *MQTTService) sleepOrConfigChange(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	case <-s.cfg.Changes():
+		return true
 	}
 }
 

@@ -331,14 +331,15 @@
       }
 
       async function request(path, options = {}) {
-		const controller = options.signal ? null : new AbortController();
-		const timeout = controller ? setTimeout(() => controller.abort(), Number(options.timeout || 12000)) : null;
+		const { timeout: timeoutMs, signal, headers, ...fetchOptions } = options;
+		const controller = signal ? null : new AbortController();
+		const timeout = controller ? setTimeout(() => controller.abort(), Number(timeoutMs || 12000)) : null;
 		try {
 		  const response = await fetch(path, {
 			credentials: "same-origin",
-			headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-			...options,
-			signal: options.signal || controller?.signal,
+			headers: { "Content-Type": "application/json", ...(headers || {}) },
+			...fetchOptions,
+			signal: signal || controller?.signal,
 		  });
 		  const text = await response.text();
 		  let data = {};
@@ -360,7 +361,7 @@
 		}
       }
 
-      const getJSON = (path) => request(path);
+      const getJSON = (path, options = {}) => request(path, options);
       const postJSON = (path, body = {}) => request(path, { method: "POST", body: JSON.stringify(body) });
       const deleteJSON = (path) => request(path, { method: "DELETE" });
 
@@ -490,8 +491,12 @@
 		  applyCoreState({ cfg });
 		  return;
 		}
+		try {
+		  const quick = await getJSON("/api/status?fast=1", { timeout: 8000 });
+		  applyCoreState({ status: quick });
+		} catch (_) {}
 		const requests = await Promise.allSettled([
-		  getJSON("/api/config"), getJSON("/api/status"), getJSON("/api/privilege"),
+		  getJSON("/api/config"), getJSON("/api/status", { timeout: 20000 }), getJSON("/api/privilege"),
 		  getJSON("/api/time"), getJSON("/api/time/zones"), getJSON("/api/jobs?limit=25"),
 		  getJSON("/api/update/history"),
 		]);
@@ -831,6 +836,7 @@
 
       function renderDashboard() {
         const browser = state.status?.browser || {};
+        const browserKnown = !!state.status?.browser;
         const cfg = state.config || {};
         const mqtt = state.status?.mqtt || {};
         const stats = browser.stats || {};
@@ -843,18 +849,22 @@
         const activePage = pages[activeIndex] || {};
         const watchdogReason = watchdog.last_reason || (browser.last_error === "signal: killed" ? t("watchdogKilledHint") : "");
         const enabledPages = pages.filter((page) => !page.disabled && page.url);
-        const browserMessage = browser.running
+        const browserMessage = !browserKnown
+          ? t("loading")
+          : (browser.running
           ? `${t("displayRunningHint")} ${browser.page_name || activePage.name || ""}`.trim()
-          : (browser.last_error ? `${t("displayStoppedErrorHint")}: ${browser.last_error}` : t("displayStoppedHint"));
+          : (browser.last_error ? `${t("displayStoppedErrorHint")}: ${browser.last_error}` : t("displayStoppedHint")));
+        const runningLabel = !browserKnown ? t("loading") : (browser.running ? t("running") : t("stopped"));
+        const runningTone = !browserKnown ? "" : (browser.running ? "ok" : "bad");
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
 			${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
-            ${stateBanner(browser.running ? "ok" : "bad", browser.running ? t("displayReady") : t("displayNeedsAttention"), browserMessage, browser.running
+            ${stateBanner(browserKnown ? (browser.running ? "ok" : "bad") : "warn", browserKnown ? (browser.running ? t("displayReady") : t("displayNeedsAttention")) : t("loading"), browserMessage, browser.running
               ? `<button data-view="kiosk-pages">${esc(t("managePages"))}</button>`
-              : button("startBrowser", "browser-start", "primary"))}
+              : (browserKnown ? button("startBrowser", "browser-start", "primary") : ""))}
             <section class="status-strip" aria-label="${esc(t("status"))}">
-              ${statusTile(t("displayStatus"), browser.running ? t("running") : t("stopped"), browser.running ? "ok" : "bad", browser.pid ? `PID ${browser.pid}` : t("noProcess"))}
+              ${statusTile(t("displayStatus"), runningLabel, runningTone, browser.pid ? `PID ${browser.pid}` : (browserKnown ? t("noProcess") : t("loading")))}
               ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
 			  ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", `${formatValue(stats.rss_mb, " MB RAM")} · ${(stats.pids || []).length} ${t("processes")}`)}
               ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-"))}
@@ -864,7 +874,7 @@
                 <div class="card">
                   <div class="head">
                     <div><h3>${esc(t("quickControl"))}</h3><span class="section-kicker">${esc(browser.page_name || activePage.name || t("noData"))}</span></div>
-                    <span class="chip ${browser.running ? "ok" : "bad"}">${esc(browser.running ? t("running") : t("stopped"))}</span>
+                    <span class="chip ${runningTone}">${esc(runningLabel)}</span>
                   </div>
                   <div class="body command-panel">
                     <div class="command-primary">
@@ -1115,8 +1125,8 @@
         const mqttTitle = runtime.connected ? t("mqttReady") : mqtt.enabled ? t("mqttNeedsAttention") : t("mqttDisabledTitle");
         const mqttMessage = runtime.connected
           ? `${t("mqttConnectedHint")} ${mqtt.url || ""}`.trim()
-          : (runtime.last_error || (mqtt.enabled ? t("mqttTestPrompt") : t("mqttEnablePrompt")));
-        const passwordConfigured = !!state.status?.config?.mqtt_password_configured;
+          : (runtime.last_error || (mqtt.enabled ? t("mqttSaveToApply") : t("mqttEnablePrompt")));
+        const passwordConfigured = !!mqtt.password_configured || !!state.status?.config?.mqtt_password_configured;
         return `
           <div class="page-stack">
             ${stateBanner(mqttTone, mqttTitle, mqttMessage, button("testConnection", "mqtt-test", runtime.connected ? "" : "primary"))}
@@ -1133,7 +1143,7 @@
                   ${field("mqtt-url", t("mqttUrl"), "text", "", mqtt.url || "")}
                   ${selectHtml("mqtt-version", t("mqttVersion"), mqtt.version || "3.1.1", [["3.1.1", "MQTT 3.1.1"], ["5.0", "MQTT 5.0"]])}
                   ${field("mqtt-user", t("username"), "text", "username", mqtt.username || "")}
-                  ${field("mqtt-password", state.status?.config?.mqtt_password_configured ? `${t("password")} (${t("configured")})` : t("password"), "password", "current-password", mqtt.password || "")}
+                  ${field("mqtt-password", passwordConfigured ? `${t("password")} (${t("configured")})` : t("password"), "password", "new-password", "", passwordConfigured ? "••••••••" : "")}
                 </div>
               </div>
               <div class="card">
@@ -1871,7 +1881,7 @@
             ${mode === "schedule" ? `${field("wizard-schedule-start", t("start"), "time", "", page.schedule?.start || "08:00")}${field("wizard-schedule-end", t("end"), "time", "", page.schedule?.end || "18:00")}<div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
             ${mode === "mqtt" ? `${field("wizard-trigger-topic", t("mqttTopic"), "text", "", page.trigger?.topic || "")}${field("wizard-trigger-payload", t("mqttPayload"), "text", "", page.trigger?.payload || "ON")}` : ""}
             <details class="span-2 wizard-options" open><summary>${esc(t("advancedDisplayActions"))}</summary><div class="wizard-option-grid">
-              ${switchHtml("wizard-power-off", t("powerOffAfterExpiry"), !!page.display_options?.power_off_after)}
+              ${switchHtml("wizard-power-off", t("powerOffAfterExpiry"), mode === "schedule" ? page.display_options?.power_off_after !== false : !!page.display_options?.power_off_after)}
               ${switchHtml("wizard-screensaver", t("activateScreensaver"), !!page.display_options?.screensaver)}
               <label class="range-field"><span>${esc(t("brightness"))}</span><input id="wizard-brightness" type="range" min="0" max="100" value="${esc(page.display_options?.brightness ?? 100)}"><strong id="wizard-brightness-value">${esc(page.display_options?.brightness ?? 100)}%</strong></label>
             </div></details>
@@ -1912,7 +1922,11 @@
           page.duration_seconds = Number(val("wizard-duration") || page.duration_seconds || 60);
           page.schedule = { start: val("wizard-schedule-start") || page.schedule?.start || "08:00", end: val("wizard-schedule-end") || page.schedule?.end || "18:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].filter((day) => checked(`wizard-day-${day}`)) };
           page.trigger = { topic: val("wizard-trigger-topic") || page.trigger?.topic || "", payload: val("wizard-trigger-payload") || page.trigger?.payload || "ON" };
-          page.display_options = { power_off_after: checked("wizard-power-off"), screensaver: checked("wizard-screensaver"), brightness: Number(val("wizard-brightness") || page.display_options?.brightness || 100) };
+          page.display_options = {
+            power_off_after: page.display_mode === "schedule" ? (document.getElementById("wizard-power-off") ? checked("wizard-power-off") : true) : checked("wizard-power-off"),
+            screensaver: checked("wizard-screensaver"),
+            brightness: Number(val("wizard-brightness") || page.display_options?.brightness || 100),
+          };
           if (validate && page.display_mode === "duration" && page.duration_seconds < 5) validationError("wizard-duration", t("validationDuration"));
           if (validate && page.display_mode === "schedule" && (!page.schedule.start || !page.schedule.end)) throw new Error(t("validationTime"));
           if (validate && page.display_mode === "mqtt" && !page.trigger.topic.trim()) validationError("wizard-trigger-topic", t("validationMQTTTopic"));
@@ -2287,12 +2301,11 @@
         await runAction("mqtt-save", async () => {
           const cfg = cloneConfig();
           cfg.mqtt = cfg.mqtt || {};
-          Object.assign(cfg.mqtt, {
+          const mqttUpdate = {
             enabled: checked("mqtt-enabled"),
             url: val("mqtt-url"),
             version: val("mqtt-version"),
             username: val("mqtt-user"),
-            password: val("mqtt-password"),
             discovery: val("mqtt-discovery") || "homeassistant",
             base_topic: val("mqtt-base-topic") || "kioskmate",
             node: val("mqtt-node") || "kioskmate",
@@ -2300,13 +2313,35 @@
             keepalive: durationToNs(val("mqtt-keepalive") || 60),
             force_disable_retain: checked("mqtt-disable-retain"),
             interval: durationToNs(val("mqtt-interval")),
-          });
+          };
+          const password = val("mqtt-password");
+          if (password) mqttUpdate.password = password;
+          Object.assign(cfg.mqtt, mqttUpdate);
+          delete cfg.mqtt.password_configured;
           validateMQTT(cfg.mqtt);
           await postJSON("/api/config", cfg);
           await refreshCore();
           clearDirty("mqtt");
           renderApp();
+          if (cfg.mqtt.enabled) await pollMQTTRuntime();
         }, t("saved"));
+      }
+
+      async function pollMQTTRuntime() {
+        for (let i = 0; i < 8; i++) {
+          await sleep(1000);
+          try {
+            const status = await getJSON("/api/status?fast=1", { timeout: 8000 });
+            if (status) {
+              applyCoreState({ status });
+              if (state.view === "mqtt") renderApp();
+              const stateName = status.mqtt?.state || "";
+              if (status.mqtt?.connected || stateName === "auth_error" || stateName === "error" || stateName === "disabled") {
+                return;
+              }
+            }
+          } catch (_) {}
+        }
       }
 
       async function testMQTT() {
@@ -2474,7 +2509,15 @@
               const output = document.getElementById("job-output");
               if (output) output.innerHTML = renderJobsHTML();
             }
-            if (job.finished) return;
+            if (job.finished) {
+              if (Number(job.exit_code) !== 0) {
+                const detail = (job.output || []).slice(-3).join("\n") || t("unknownError");
+                toast(t("actionFailed"), detail, "bad");
+              } else {
+                toast(t("actionDone"), job.name || "", "ok");
+              }
+              return;
+            }
           } catch {
             return;
           }
@@ -3218,8 +3261,8 @@
           .join("")}</tbody></table></div>`;
       }
 
-      function field(id, label, type = "text", autocomplete = "", value = "") {
-        return `<div><label for="${esc(id)}">${esc(label)}</label><input id="${esc(id)}" type="${esc(type)}" ${autocomplete ? `autocomplete="${esc(autocomplete)}"` : ""} value="${esc(value)}" /></div>`;
+      function field(id, label, type = "text", autocomplete = "", value = "", placeholder = "") {
+        return `<div><label for="${esc(id)}">${esc(label)}</label><input id="${esc(id)}" type="${esc(type)}" ${autocomplete ? `autocomplete="${esc(autocomplete)}"` : ""} ${placeholder ? `placeholder="${esc(placeholder)}"` : ""} value="${esc(value)}" /></div>`;
       }
 
       function unsupportedControl(label) {

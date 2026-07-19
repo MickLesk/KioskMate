@@ -15,21 +15,13 @@ import (
 	"github.com/MickLesk/KioskMate/internal/updater"
 )
 
-type panicStatusBrowser struct {
-	fakeActionBrowser
-}
-
-func (b *panicStatusBrowser) Status() supervisor.Status {
-	panic("runtime browser status must not be called during fast bootstrap")
-}
-
-func TestFastStatusSkipsHardwareAndStillBootstraps(t *testing.T) {
+func TestFastStatusReturnsBrowserWithoutHardware(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	actionService := actions.New(cfg)
-	browser := &panicStatusBrowser{}
+	browser := &fakeActionBrowser{status: supervisor.Status{Running: true, PID: 4242, Command: "chromium"}}
 	server := NewServer(cfg, browser, nil, updater.New(cfg, "0.7.2", actionService), actionService, hardware.New(), "0.7.2", slog.Default())
 	req := httptest.NewRequest(http.MethodGet, "/api/status?fast=1", nil)
 	rec := httptest.NewRecorder()
@@ -47,6 +39,9 @@ func TestFastStatusSkipsHardwareAndStillBootstraps(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
+	}
+	if !body.Browser.Running || body.Browser.PID != 4242 {
+		t.Fatalf("fast status missing browser runtime: %#v", body.Browser)
 	}
 	if len(body.Hardware.System) != 0 || len(body.ProfileRecommendation) != 0 {
 		t.Fatalf("fast status performed optional hardware work: %#v %#v", body.Hardware, body.ProfileRecommendation)

@@ -20,9 +20,14 @@ import (
 	"github.com/MickLesk/KioskMate/internal/system"
 )
 
+type displayPowerControl interface {
+	SetDisplay(ctx context.Context, power string) error
+}
+
 type Browser struct {
 	cfg       *config.Config
 	logger    *slog.Logger
+	display   displayPowerControl
 	persistMu sync.Mutex
 
 	mu            sync.Mutex
@@ -48,6 +53,7 @@ type Browser struct {
 	recovery      RecoveryStatus
 	telemetry     []TelemetrySample
 	override      ManualOverride
+	displayPower  string
 }
 
 type Status struct {
@@ -131,6 +137,12 @@ func NewBrowser(cfg *config.Config, logger *slog.Logger) *Browser {
 	browser.loadAuthGuard()
 	browser.loadRuntimeState()
 	return browser
+}
+
+func (b *Browser) SetDisplayPower(control displayPowerControl) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.display = control
 }
 
 func (b *Browser) Start(ctx context.Context) error {
@@ -453,9 +465,70 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 				_ = b.SetActive(switchCtx, target)
 				cancel()
 			}
+			b.applyScheduleDisplayPower(ctx, target, status)
 			timer.Reset(b.schedulerInterval())
 		}
 	}
+}
+
+func (b *Browser) applyScheduleDisplayPower(ctx context.Context, target int, status SchedulerStatus) {
+	cfg := b.cfg.Snapshot().Kiosk
+	wantOff := scheduleWantsDisplayOff(cfg, target, status)
+	want := "ON"
+	if wantOff {
+		want = "OFF"
+	}
+	b.mu.Lock()
+	control := b.display
+	current := b.displayPower
+	b.mu.Unlock()
+	if control == nil || current == want {
+		return
+	}
+	powerCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	err := control.SetDisplay(powerCtx, want)
+	cancel()
+	if err != nil {
+		b.logger.Warn("scheduler display power failed", "power", want, "error", err)
+		return
+	}
+	b.mu.Lock()
+	b.displayPower = want
+	b.mu.Unlock()
+	b.logger.Info("scheduler display power", "power", want, "reason", status.Reason)
+}
+
+func scheduleWantsDisplayOff(cfg config.KioskConfig, target int, status SchedulerStatus) bool {
+	if !cfg.Scheduler.Enabled || len(cfg.TimeRules) == 0 {
+		return false
+	}
+	mode := cfg.Scheduler.Mode
+	if mode == "" {
+		mode = "rotation"
+	}
+	timeRuleActive := status.Reason == "time" && target >= 0
+	if timeRuleActive {
+		return false
+	}
+	if mode == "time" {
+		return true
+	}
+	if mode == "hybrid" && status.Reason == "no active time rule" {
+		return true
+	}
+	return schedulePageWantsPowerOff(cfg) && !timeRuleActive && (mode == "time" || mode == "hybrid")
+}
+
+func schedulePageWantsPowerOff(cfg config.KioskConfig) bool {
+	for _, page := range cfg.Pages {
+		if page.Disabled || page.URL == "" {
+			continue
+		}
+		if page.DisplayMode == "schedule" && page.DisplayOptions.PowerOffAfter {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Browser) schedulerInterval() time.Duration {
@@ -780,7 +853,7 @@ func (b *Browser) schedulerTarget(now time.Time) (int, SchedulerStatus) {
 			status.NextSwitch = &next
 			return page, status
 		}
-		if mode == "time" {
+		if mode == "time" || schedulePageWantsPowerOff(cfg) || len(cfg.Rotation) == 0 {
 			status.Reason = "no active time rule"
 			return -1, status
 		}

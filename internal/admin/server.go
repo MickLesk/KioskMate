@@ -563,12 +563,16 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Snapshot()
+	mqttStatus := integration.MQTTConnectionStatus{State: "unavailable"}
+	if s.mqtt != nil {
+		mqttStatus = s.mqtt.ConnectionStatus()
+	}
 	if r.URL.Query().Get("fast") == "1" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"browser":                supervisor.Status{},
+			"browser":                s.browser.Status(),
 			"hardware":               hardware.Status{},
-			"mqtt":                   integration.MQTTConnectionStatus{State: "loading"},
-			"update":                 updater.ReleaseInfo{CurrentVersion: s.version},
+			"mqtt":                   mqttStatus,
+			"update":                 s.updater.Status(),
 			"profile_recommendation": map[string]any{},
 			"config":                 statusConfig(cfg),
 		})
@@ -576,10 +580,6 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	mqttStatus := integration.MQTTConnectionStatus{State: "unavailable"}
-	if s.mqtt != nil {
-		mqttStatus = s.mqtt.ConnectionStatus()
-	}
 	hardwareStatus := s.hardware.Status(ctx)
 	recommendation := performanceRecommendation(hardwareStatus)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1133,6 +1133,7 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 	if next.MQTT.Password == "" {
 		next.MQTT.Password = s.cfg.Snapshot().MQTT.Password
 	}
+	next.MQTT.PasswordConfigured = false
 	return &next, nil
 }
 
@@ -1752,6 +1753,7 @@ func publicConfig(cfg *config.Config) *config.Config {
 }
 
 func publicConfigSnapshot(out *config.Config) *config.Config {
+	out.MQTT.PasswordConfigured = out.MQTT.Password != ""
 	out.Admin.Token = ""
 	out.Admin.PasswordHash = ""
 	out.MQTT.Password = ""

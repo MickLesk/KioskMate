@@ -16,6 +16,7 @@ import (
 
 type Config struct {
 	mu          *sync.RWMutex  `json:"-"`
+	changeCh    chan struct{}  `json:"-"`
 	Path        string         `json:"-"`
 	Version     int            `json:"version"`
 	Admin       AdminConfig    `json:"admin"`
@@ -121,18 +122,19 @@ type WatchdogConfig struct {
 }
 
 type MQTTConfig struct {
-	Enabled            bool          `json:"enabled"`
-	URL                string        `json:"url"`
-	Version            string        `json:"version"`
-	Username           string        `json:"username"`
-	Password           string        `json:"password"`
-	Discovery          string        `json:"discovery"`
-	BaseTopic          string        `json:"base_topic"`
-	Node               string        `json:"node"`
-	ClientID           string        `json:"client_id"`
-	KeepAlive          time.Duration `json:"keepalive"`
-	ForceDisableRetain bool          `json:"force_disable_retain"`
-	Interval           time.Duration `json:"interval"`
+	Enabled             bool          `json:"enabled"`
+	URL                 string        `json:"url"`
+	Version             string        `json:"version"`
+	Username            string        `json:"username"`
+	Password            string        `json:"password"`
+	PasswordConfigured  bool          `json:"password_configured,omitempty"`
+	Discovery           string        `json:"discovery"`
+	BaseTopic           string        `json:"base_topic"`
+	Node                string        `json:"node"`
+	ClientID            string        `json:"client_id"`
+	KeepAlive           time.Duration `json:"keepalive"`
+	ForceDisableRetain  bool          `json:"force_disable_retain"`
+	Interval            time.Duration `json:"interval"`
 }
 
 type TimeConfig struct {
@@ -263,7 +265,28 @@ func (cfg *Config) Snapshot() *Config {
 	defer mu.RUnlock()
 	clone := *cfg
 	clone.mu = mu
+	clone.changeCh = nil
 	return &clone
+}
+
+func (cfg *Config) Changes() <-chan struct{} {
+	mu := cfg.mutex()
+	mu.Lock()
+	defer mu.Unlock()
+	if cfg.changeCh == nil {
+		cfg.changeCh = make(chan struct{}, 1)
+	}
+	return cfg.changeCh
+}
+
+func (cfg *Config) notifyChangedLocked() {
+	if cfg.changeCh == nil {
+		cfg.changeCh = make(chan struct{}, 1)
+	}
+	select {
+	case cfg.changeCh <- struct{}{}:
+	default:
+	}
 }
 
 func (cfg *Config) ReadLock() {
@@ -288,13 +311,19 @@ func (cfg *Config) Mutate(change func(*Config) error) error {
 	}
 	next.Path = cfg.Path
 	next.mu = mu
+	next.MQTT.PasswordConfigured = false
 	if err := change(&next); err != nil {
 		return err
 	}
+	next.MQTT.PasswordConfigured = false
 	if err := saveLocked(&next); err != nil {
 		return err
 	}
+	changeCh := cfg.changeCh
 	*cfg = next
+	cfg.mu = mu
+	cfg.changeCh = changeCh
+	cfg.notifyChangedLocked()
 	return nil
 }
 
@@ -307,10 +336,15 @@ func (cfg *Config) Replace(next *Config) error {
 	defer mu.Unlock()
 	next.Path = cfg.Path
 	next.mu = mu
+	next.MQTT.PasswordConfigured = false
 	if err := saveLocked(next); err != nil {
 		return err
 	}
+	changeCh := cfg.changeCh
 	*cfg = *next
+	cfg.mu = mu
+	cfg.changeCh = changeCh
+	cfg.notifyChangedLocked()
 	return nil
 }
 
@@ -421,6 +455,7 @@ func defaults(path string) Config {
 }
 
 func normalize(cfg *Config) {
+	cfg.MQTT.PasswordConfigured = false
 	if cfg.Version == 0 {
 		cfg.Version = 2
 	}
