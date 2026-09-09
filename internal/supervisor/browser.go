@@ -41,41 +41,50 @@ type Browser struct {
 	recoveryEpoch    uint64
 	recoveryRuns     []time.Time
 	manuallyStopped  bool
+	generation       uint64
 
-	mu            sync.Mutex
-	cmd           *exec.Cmd
-	done          chan struct{}
-	stopping      bool
-	started       time.Time
-	startCount    int
-	restartCount  int
-	active        int
-	lastStat      system.ProcessTreeStats
-	hotSince      time.Time
-	lastError     string
-	lastExit      time.Time
-	watchdog      WatchdogStatus
-	watchdogRuns  []time.Time
-	scheduler     SchedulerStatus
-	rotationIndex int
-	rotationUntil time.Time
-	devTools      bool
-	control       *cdpSession
-	themeStatus   ThemeStatus
-	authGuard     AuthGuardStatus
-	recovery      RecoveryStatus
-	telemetry     []TelemetrySample
-	override      ManualOverride
-	displayPower  string
-	idleBlanked   bool
+	mu               sync.Mutex
+	cmd              *exec.Cmd
+	done             chan struct{}
+	stopping         bool
+	started          time.Time
+	startCount       int
+	restartCount     int
+	active           int
+	lastStat         system.ProcessTreeStats
+	hotSince         time.Time
+	lastError        string
+	lastExit         time.Time
+	watchdog         WatchdogStatus
+	watchdogRuns     []time.Time
+	scheduler        SchedulerStatus
+	rotationIndex    int
+	rotationUntil    time.Time
+	devTools         bool
+	requiresControl  bool
+	readySince       time.Time
+	controlFailures  int
+	controlError     string
+	controlConnected time.Time
+	control          *cdpSession
+	themeStatus      ThemeStatus
+	authGuard        AuthGuardStatus
+	recovery         RecoveryStatus
+	telemetry        []TelemetrySample
+	override         ManualOverride
+	displayPower     string
+	idleBlanked      bool
 }
 
 type Status struct {
 	Operation  Operation               `json:"operation"`
 	State      string                  `json:"state"`
 	Running    bool                    `json:"running"`
+	Ready      bool                    `json:"ready"`
+	Generation uint64                  `json:"generation"`
 	PID        int                     `json:"pid,omitempty"`
 	Started    *time.Time              `json:"started,omitempty"`
+	ReadySince *time.Time              `json:"ready_since,omitempty"`
 	StartCount int                     `json:"start_count"`
 	Restarts   int                     `json:"restart_count"`
 	Command    string                  `json:"command"`
@@ -89,11 +98,20 @@ type Status struct {
 	LastError  string                  `json:"last_error,omitempty"`
 	LastExit   *time.Time              `json:"last_exit,omitempty"`
 	DevTools   bool                    `json:"devtools"`
+	Control    ControlStatus           `json:"control"`
 	Theme      ThemeStatus             `json:"theme_status"`
 	AuthGuard  AuthGuardStatus         `json:"auth_guard"`
 	Recovery   RecoveryStatus          `json:"recovery"`
 	Telemetry  TelemetrySummary        `json:"telemetry"`
 	Override   ManualOverride          `json:"override"`
+}
+
+type ControlStatus struct {
+	Required      bool       `json:"required"`
+	Connected     bool       `json:"connected"`
+	Failures      int        `json:"failures"`
+	LastError     string     `json:"last_error,omitempty"`
+	LastConnected *time.Time `json:"last_connected,omitempty"`
 }
 
 type ThemeStatus struct {
@@ -271,11 +289,17 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	b.done = make(chan struct{})
 	done := b.done
 	b.started = time.Now()
+	b.generation++
 	b.startCount++
 	b.lastStat = system.ProcessTreeStats{}
 	b.hotSince = time.Time{}
 	b.lastError = ""
 	b.devTools = false
+	b.requiresControl = supportsCDP(preset)
+	b.readySince = time.Time{}
+	b.controlFailures = 0
+	b.controlError = ""
+	b.controlConnected = time.Time{}
 	b.themeStatus = ThemeStatus{State: "pending", Configured: cfg.Kiosk.Theme}
 	b.recovery.State, b.recovery.Stage = "starting", "attach"
 	b.recovery.LastResult = "browser process started; connecting page control"
@@ -290,6 +314,7 @@ func (b *Browser) start(ctx context.Context) (err error) {
 		go b.monitorDevTools(profile, cfg.Kiosk.Theme, done)
 	} else {
 		b.mu.Lock()
+		b.readySince = time.Now()
 		b.recovery.State, b.recovery.Stage = "healthy", "running"
 		b.mu.Unlock()
 	}
@@ -298,7 +323,7 @@ func (b *Browser) start(ctx context.Context) (err error) {
 
 func writeBrowserLaunchLog(file *os.File, command string, args []string) {
 	_, _ = fmt.Fprintf(file, "command: %s\n", command)
-	_, _ = fmt.Fprintf(file, "args: %s\n", strings.Join(args, " "))
+	_, _ = fmt.Fprintf(file, "args: %s\n", strings.Join(diagnosticArgs(args), " "))
 	_, _ = fmt.Fprintf(file, "env DISPLAY=%s WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s XDG_SESSION_TYPE=%s\n",
 		os.Getenv("DISPLAY"),
 		os.Getenv("WAYLAND_DISPLAY"),
@@ -517,7 +542,12 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: args, Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: activeURL(cfg, b.active), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override}
+	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation}
+	status.Control = ControlStatus{Required: b.requiresControl, Connected: b.devTools, Failures: b.controlFailures, LastError: b.controlError}
+	if !b.controlConnected.IsZero() {
+		connected := b.controlConnected
+		status.Control.LastConnected = &connected
+	}
 	if !b.lastExit.IsZero() {
 		lastExit := b.lastExit
 		status.LastExit = &lastExit
@@ -531,12 +561,20 @@ func (b *Browser) Status() Status {
 		started := b.started
 		status.Started = &started
 	}
+	status.Ready = status.Running && !b.readySince.IsZero() && (!b.requiresControl || b.devTools)
+	if !b.readySince.IsZero() {
+		ready := b.readySince
+		status.ReadySince = &ready
+	}
 	status.Operation = b.operation
 	status.State = "stopped"
 	if status.Running {
-		status.State = "running"
+		status.State = "starting"
+		if status.Ready {
+			status.State = "running"
+		}
 	}
-	if b.recovery.State == "backoff" || b.recovery.State == "failed" {
+	if b.recovery.State == "backoff" || b.recovery.State == "failed" || b.recovery.State == "degraded" {
 		status.State = b.recovery.State
 	}
 	if b.operation.State == "running" {
@@ -734,6 +772,7 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	if b.cmd == nil {
 		b.done = nil
 		b.devTools = false
+		b.readySince = time.Time{}
 	}
 	b.lastExit = time.Now()
 	if expected {
@@ -825,10 +864,10 @@ func (b *Browser) writeCrashDiagnostic(cmd *exec.Cmd, runtime time.Duration, las
 	out.WriteString("last_error: " + lastError + "\n")
 	if cmd != nil {
 		out.WriteString("path: " + cmd.Path + "\n")
-		out.WriteString("args: " + strings.Join(cmd.Args, " ") + "\n")
+		out.WriteString("args: " + strings.Join(diagnosticArgs(cmd.Args), " ") + "\n")
 	}
 	out.WriteString("active_page: " + cfg.Kiosk.PageName(b.active) + "\n")
-	out.WriteString("active_url: " + b.activeURL() + "\n")
+	out.WriteString("active_url: " + diagnosticURL(b.activeURL()) + "\n")
 	out.WriteString("profile: " + browserUserDataDir(cfg, b.active) + "\n")
 	out.WriteString("performance_profile: " + cfg.Performance.Profile + "\n")
 	out.WriteString("gpu_mode: " + cfg.Performance.GPUMode + "\n")

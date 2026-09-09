@@ -92,6 +92,7 @@ type Server struct {
 	version  string
 	journal  *events.Journal
 	ready    chan struct{}
+	started  time.Time
 	mu       sync.Mutex
 	sessions map[string]Session
 	attempts map[string][]time.Time
@@ -138,7 +139,7 @@ func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher,
 	if len(journals) > 0 {
 		journal = journals[0]
 	}
-	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, journal: journal, ready: make(chan struct{}), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
+	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, journal: journal, ready: make(chan struct{}), started: time.Now(), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
 	s.loadSessions()
 	return s
 }
@@ -221,6 +222,7 @@ func (s *Server) Ready() <-chan struct{} { return s.ready }
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
+	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/assets/", s.asset)
 	mux.HandleFunc("/api/auth/status", s.authStatus)
 	mux.HandleFunc("/api/auth/setup", s.authSetup)
@@ -313,6 +315,29 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	response := map[string]any{
+		"status":         "ok",
+		"service_ready":  true,
+		"version":        s.version,
+		"uptime_seconds": int(time.Since(s.started).Seconds()),
+	}
+	if s.browser != nil {
+		browser := s.browser.Status()
+		response["browser"] = map[string]any{
+			"state":      browser.State,
+			"running":    browser.Running,
+			"ready":      browser.Ready,
+			"generation": browser.Generation,
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) systemAction(w http.ResponseWriter, r *http.Request) {
@@ -1607,10 +1632,16 @@ func (s *Server) browserAction(action string) http.HandlerFunc {
 			}
 		}
 		status := s.browser.Status()
+		message := "browser action completed"
+		nextAction := "none"
+		if status.Running && !status.Ready {
+			message = "browser process started; page control is still connecting"
+			nextAction = "wait_for_browser_control"
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"success": true, "action": action, "browser": status,
 			"operation_id": status.Operation.ID, "status": status.Operation.State,
-			"message": "browser action completed", "next_action": "none",
+			"message": message, "next_action": nextAction,
 		})
 	}
 }
@@ -1640,9 +1671,24 @@ func shouldVerifyBrowserRunning(action string) bool {
 func waitForBrowserState(browser Browser, running bool, timeout time.Duration) supervisor.Status {
 	deadline := time.Now().Add(timeout)
 	status := browser.Status()
+	var observedAt time.Time
 	for time.Now().Before(deadline) {
 		status = browser.Status()
-		if status.Running == running {
+		if running {
+			if status.Running {
+				if status.Ready {
+					return status
+				}
+				if observedAt.IsZero() {
+					observedAt = time.Now()
+				}
+				if time.Since(observedAt) >= 750*time.Millisecond {
+					return status
+				}
+			} else if !observedAt.IsZero() || status.LastError != "" {
+				return status
+			}
+		} else if !status.Running {
 			return status
 		}
 		time.Sleep(150 * time.Millisecond)
@@ -2974,5 +3020,16 @@ func sameOrigin(r *http.Request) bool {
 }
 
 func requestIsHTTPS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	if r.TLS != nil {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }

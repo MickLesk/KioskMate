@@ -324,6 +324,59 @@ func TestSaveBacksUpChangedConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRecoversCorruptConfigFromBackup(t *testing.T) {
+	path := filepath.Join(testHome(t), ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{"version":`)
+	writeFile(t, path+".bak", `{
+  "version": 4,
+  "admin": {"bind": "0.0.0.0", "port": 33333, "token": "recovered-token"},
+  "kiosk": {"pages": [{"page_id": "main", "name": "Main", "url": "http://ha.local:8123"}]},
+  "update": {"repository": "MickLesk/KioskMate", "service": "kioskmate.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin.Token != "recovered-token" || cfg.Kiosk.Pages[0].PageID != "main" {
+		t.Fatalf("recovered config = %#v", cfg)
+	}
+	if cfg.LoadWarning == "" {
+		t.Fatal("automatic recovery did not expose a warning")
+	}
+	corrupt, err := filepath.Glob(path + ".corrupt-*")
+	if err != nil || len(corrupt) != 1 {
+		t.Fatalf("corrupt config preservation = %#v, %v", corrupt, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || len(data) == 0 || string(data) == `{"version":` {
+		t.Fatalf("primary config was not restored: %q, %v", data, err)
+	}
+}
+
+func TestValidateRejectsUnsafeOrInvalidRuntimeValues(t *testing.T) {
+	cfg := defaults("")
+	cfg.Admin.TLSCert = "/tmp/admin.crt"
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("unpaired Admin TLS certificate was accepted")
+	}
+	cfg.Admin.TLSKey = "/tmp/admin.key"
+	cfg.Kiosk.Pages[0].URL = "javascript:alert(1)"
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("non-HTTP kiosk page URL was accepted")
+	}
+	cfg.Kiosk.Pages[0].URL = "https://ha.example/dashboard"
+	brightness := 101
+	cfg.Kiosk.Pages[0].DisplayOptions.Brightness = &brightness
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("out-of-range page brightness was accepted")
+	}
+	brightness = 80
+	cfg.Version = currentConfigVersion + 1
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("newer config schema was accepted")
+	}
+}
+
 func testHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()

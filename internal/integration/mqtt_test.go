@@ -165,7 +165,7 @@ func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
 	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	items := service.discoveryResetEntries()
 
-	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") || !hasDiscoveryEntry(items, "binary_sensor", "auth_guard") || !hasDiscoveryEntry(items, "binary_sensor", "browser_devtools") {
+	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") || !hasDiscoveryEntry(items, "binary_sensor", "auth_guard") || !hasDiscoveryEntry(items, "binary_sensor", "browser_devtools") || !hasDiscoveryEntry(items, "binary_sensor", "browser_ready") || !hasDiscoveryEntry(items, "sensor", "browser_state") || !hasDiscoveryEntry(items, "sensor", "browser_control_failures") {
 		t.Fatalf("discovery entries missing browser/display controls: %#v", items)
 	}
 }

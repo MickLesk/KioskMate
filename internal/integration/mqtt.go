@@ -808,6 +808,10 @@ func (s *MQTTService) publishAll() error {
 	}
 	state := map[string]any{
 		"running":       status.Running,
+		"ready":         status.Ready,
+		"state":         status.State,
+		"generation":    status.Generation,
+		"control":       status.Control,
 		"pid":           status.PID,
 		"rss_mb":        status.Stats.RSSMB,
 		"cpu_percent":   status.Stats.CPUPercent,
@@ -864,6 +868,10 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "ntp_server", cfg.Time.NTPServer, true)
 	_ = s.publishState(client, "ntp_synchronized", boolState(timeStatus.Synchronized), false)
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
+	_ = s.publishState(client, "browser_ready", boolState(status.Ready), false)
+	_ = s.publishState(client, "browser_state", firstString(status.State, "unknown"), false)
+	_ = s.publishState(client, "browser_generation", fmt.Sprintf("%d", status.Generation), false)
+	_ = s.publishState(client, "browser_control_failures", fmt.Sprintf("%d", status.Control.Failures), false)
 	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
 	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
 	_ = s.publishState(client, "browser_process_count", fmt.Sprintf("%d", len(status.Stats.PIDs)), false)
@@ -1216,6 +1224,9 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			},
 		},
 		s.diagnosticSensor(device, "browser_pid", "Browser PID", "mdi:identifier", ""),
+		s.diagnosticSensor(device, "browser_state", "Browser State", "mdi:state-machine", ""),
+		s.diagnosticSensor(device, "browser_generation", "Browser Generation", "mdi:counter", ""),
+		s.diagnosticSensor(device, "browser_control_failures", "Browser Control Reconnects", "mdi:connection", ""),
 		s.diagnosticSensor(device, "browser_start_count", "Browser Start Count", "mdi:counter", ""),
 		s.diagnosticSensor(device, "browser_restart_count", "Browser Restart Count", "mdi:restart", ""),
 		s.diagnosticSensor(device, "browser_started", "Browser Started", "mdi:clock-start", ""),
@@ -1540,6 +1551,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 	items = append(items, s.runtimeDiscoveryItems(device)...)
 	items = append(items,
 		discoveryItem{
+			Topic: s.discoveryTopic("binary_sensor", "browser_ready"),
+			Data: map[string]any{
+				"name":            "Browser Ready",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_browser_ready",
+				"state_topic":     s.root() + "/browser_ready/state",
+				"payload_on":      "ON",
+				"payload_off":     "OFF",
+				"device_class":    "connectivity",
+				"entity_category": "diagnostic",
+				"device":          device,
+			},
+		},
+		discoveryItem{
 			Topic: s.discoveryTopic("binary_sensor", "browser_devtools"),
 			Data: map[string]any{
 				"name":            "Browser Control Connected",
@@ -1776,6 +1800,7 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 	entries := append([][2]string{}, legacyDiscoveryEntries()...)
 	entries = append(entries,
 		[2]string{"binary_sensor", "browser"},
+		[2]string{"binary_sensor", "browser_ready"},
 		[2]string{"binary_sensor", "browser_devtools"},
 		[2]string{"binary_sensor", "auth_guard"},
 		[2]string{"sensor", "auth_guard_reason"},
@@ -1810,6 +1835,9 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "rss"},
 		[2]string{"sensor", "cpu"},
 		[2]string{"sensor", "browser_pid"},
+		[2]string{"sensor", "browser_state"},
+		[2]string{"sensor", "browser_generation"},
+		[2]string{"sensor", "browser_control_failures"},
 		[2]string{"sensor", "browser_started"},
 		[2]string{"sensor", "browser_start_count"},
 		[2]string{"sensor", "browser_restart_count"},

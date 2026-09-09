@@ -150,13 +150,25 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 			session.close()
 		}
 		b.mu.Lock()
+		shouldRecover := false
 		if b.done == done {
 			b.devTools = false
 			b.control = nil
 			if !b.authGuard.Tripped && err != nil {
 				b.lastError = err.Error()
+				b.controlFailures++
+				b.controlError = err.Error()
+				if !b.readySince.IsZero() {
+					b.recovery.State = "degraded"
+					b.recovery.Stage = "control_reconnect"
+					b.recovery.LastResult = err.Error()
+					now := time.Now()
+					b.recovery.LastAt = &now
+					shouldRecover = b.controlFailures >= 5 && !b.manuallyStopped
+				}
 			}
 		}
+		journal := b.journal
 		b.mu.Unlock()
 		if ctx.Err() != nil {
 			return
@@ -165,6 +177,20 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 		blocked := b.authGuard.Tripped
 		b.mu.Unlock()
 		if blocked {
+			return
+		}
+		if shouldRecover {
+			if journal != nil {
+				journal.Record("browser", "control_recovery", "running", "restarting browser after repeated DevTools failures", map[string]string{"failures": fmt.Sprint(attempt + 1)})
+			}
+			recoveryCtx, finish := context.WithTimeout(context.Background(), 30*time.Second)
+			recoveryErr := b.operate(recoveryCtx, "recover", func() error {
+				return b.recover(recoveryCtx, "browser control unavailable", true)
+			})
+			finish()
+			if recoveryErr != nil && !errors.Is(recoveryErr, context.Canceled) {
+				b.logger.Warn("Chromium control recovery failed", "error", recoveryErr)
+			}
 			return
 		}
 		b.logger.Warn("Chromium control reconnect", "error", err)
@@ -198,6 +224,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 		return context.Canceled
 	}
 	b.control, b.devTools = session, true
+	b.controlFailures = 0
+	b.controlError = ""
+	b.controlConnected = time.Now()
 	b.mu.Unlock()
 	if !*navigated {
 		cfg := b.cfg.Snapshot()
@@ -219,6 +248,7 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 		*navigated = true
 		b.mu.Lock()
 		if b.done == done && !b.authGuard.Tripped {
+			b.readySince = time.Now()
 			b.recovery.State, b.recovery.Stage = "healthy", "running"
 			b.recovery.LastResult = "page control connected"
 			b.lastError = ""

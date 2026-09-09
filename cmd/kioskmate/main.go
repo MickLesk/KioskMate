@@ -51,6 +51,9 @@ func main() {
 		os.Exit(1)
 	}
 	logger, logFile := setupLogger(cfg)
+	if cfg.LoadWarning != "" {
+		logger.Warn("configuration recovered", "detail", cfg.LoadWarning)
+	}
 	if *adminInfo || *doctor || *repair || *adminReset || *adminPassword {
 		if err := handleCommand(*adminInfo, *doctor, *repair, *adminReset, *adminPassword, cfg, version, logFile); err != nil {
 			logger.Error("command failed", "error", err)
@@ -67,6 +70,8 @@ func main() {
 	eventJournal, journalErr := events.Open(config.EventJournalPath(cfg.Path), 500)
 	if journalErr != nil {
 		logger.Warn("event journal unavailable", "error", journalErr)
+	} else if cfg.LoadWarning != "" {
+		eventJournal.Record("config", "automatic_restore", "warn", "configuration restored from backup", map[string]string{"detail": cfg.LoadWarning})
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

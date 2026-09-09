@@ -11,15 +11,19 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+const currentConfigVersion = 4
+
 type Config struct {
 	mu          *sync.RWMutex  `json:"-"`
 	changeCh    chan struct{}  `json:"-"`
 	Path        string         `json:"-"`
+	LoadWarning string         `json:"-"`
 	Version     int            `json:"version"`
 	Admin       AdminConfig    `json:"admin"`
 	Kiosk       KioskConfig    `json:"kiosk"`
@@ -220,8 +224,24 @@ func Load(path string) (*Config, error) {
 	cfg := defaults(path)
 	cfg.mu = &sync.RWMutex{}
 	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return nil, err
+		if decodeErr := json.Unmarshal(data, &cfg); decodeErr != nil {
+			backup, backupErr := os.ReadFile(path + ".bak")
+			if backupErr != nil {
+				return nil, fmt.Errorf("decode config: %w; backup unavailable: %v", decodeErr, backupErr)
+			}
+			cfg = defaults(path)
+			cfg.mu = &sync.RWMutex{}
+			if backupDecodeErr := json.Unmarshal(backup, &cfg); backupDecodeErr != nil {
+				return nil, fmt.Errorf("decode config: %w; decode backup: %v", decodeErr, backupDecodeErr)
+			}
+			corruptPath := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
+			if preserveErr := atomicWriteFile(corruptPath, data, 0o600); preserveErr != nil {
+				return nil, fmt.Errorf("preserve corrupt config: %w", preserveErr)
+			}
+			if restoreErr := atomicWriteFile(path, backup, 0o600); restoreErr != nil {
+				return nil, fmt.Errorf("restore config backup: %w", restoreErr)
+			}
+			cfg.LoadWarning = "primary config was corrupt and restored from " + path + ".bak; preserved original as " + corruptPath
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -378,6 +398,57 @@ func Validate(cfg *Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
 	}
+	if cfg.Version > currentConfigVersion {
+		return fmt.Errorf("config schema version %d is newer than supported version %d", cfg.Version, currentConfigVersion)
+	}
+	if cfg.Admin.Port < 0 || cfg.Admin.Port > 65535 {
+		return errors.New("Admin port must be 0 (default) or between 1 and 65535")
+	}
+	if strings.ContainsAny(cfg.Admin.Bind, "\r\n\x00") {
+		return errors.New("Admin bind address contains invalid characters")
+	}
+	if (strings.TrimSpace(cfg.Admin.TLSCert) == "") != (strings.TrimSpace(cfg.Admin.TLSKey) == "") {
+		return errors.New("Admin TLS certificate and key must be configured together")
+	}
+	if cfg.Kiosk.ZoomPercent != 0 && (cfg.Kiosk.ZoomPercent < 25 || cfg.Kiosk.ZoomPercent > 500) {
+		return errors.New("kiosk zoom must be between 25 and 500 percent")
+	}
+	if tick := cfg.Kiosk.Scheduler.TickInterval; tick < 0 || tick > 24*time.Hour {
+		return errors.New("scheduler tick interval must be between 0 and 24 hours")
+	}
+	for index, page := range cfg.Kiosk.Pages {
+		if strings.TrimSpace(page.URL) == "" {
+			if page.Disabled {
+				continue
+			}
+			return fmt.Errorf("kiosk page %d URL is required", index+1)
+		}
+		parsed, err := url.Parse(strings.TrimSpace(page.URL))
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+			return fmt.Errorf("kiosk page %d URL must use http:// or https:// and include a host", index+1)
+		}
+		if page.DurationSeconds < 0 || page.DurationSeconds > 7*24*60*60 {
+			return fmt.Errorf("kiosk page %d duration must be between 0 and 604800 seconds", index+1)
+		}
+		if brightness := page.DisplayOptions.Brightness; brightness != nil && (*brightness < 1 || *brightness > 100) {
+			return fmt.Errorf("kiosk page %d brightness must be between 1 and 100 percent", index+1)
+		}
+		if page.DisplayMode == "schedule" && (!validClock(page.Schedule.Start) || !validClock(page.Schedule.End)) {
+			return fmt.Errorf("kiosk page %d schedule requires valid HH:MM start and end values", index+1)
+		}
+	}
+	if strings.ContainsAny(cfg.Time.Timezone+cfg.Time.NTPServer, "\r\n\x00") {
+		return errors.New("time configuration contains invalid characters")
+	}
+	if repository := strings.TrimSpace(cfg.Update.Repository); repository != "" {
+		parts := strings.Split(repository, "/")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || strings.ContainsAny(repository, " \t\r\n") {
+			return errors.New("update repository must use owner/repository format")
+		}
+	}
+	if strings.ContainsAny(cfg.Update.Service, "/\\\r\n\x00") {
+		return errors.New("update service must be a systemd unit name, not a path")
+	}
 	mqtt := cfg.MQTT
 	if mqtt.Enabled {
 		parsed, err := url.Parse(strings.TrimSpace(mqtt.URL))
@@ -392,6 +463,16 @@ func Validate(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func validClock(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 || len(parts[0]) != 2 || len(parts[1]) != 2 {
+		return false
+	}
+	hour, hourErr := strconv.Atoi(parts[0])
+	minute, minuteErr := strconv.Atoi(parts[1])
+	return hourErr == nil && minuteErr == nil && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59
 }
 
 func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
@@ -454,7 +535,7 @@ func defaults(path string) Config {
 	return Config{
 		mu:      &sync.RWMutex{},
 		Path:    path,
-		Version: 4,
+		Version: currentConfigVersion,
 		Admin: AdminConfig{
 			Bind:  "0.0.0.0",
 			Port:  33333,
@@ -533,7 +614,7 @@ func normalize(cfg *Config) {
 	}
 	if cfg.Version < 4 {
 		cfg.MQTT.RejectUnauthorized = true
-		cfg.Version = 4
+		cfg.Version = currentConfigVersion
 	}
 	if cfg.Admin.Bind == "127.0.0.1" || cfg.Admin.Bind == "localhost" {
 		cfg.Admin.Bind = "0.0.0.0"

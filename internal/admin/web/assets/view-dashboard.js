@@ -17,11 +17,13 @@ function renderDashboard() {
         const enabledPages = pages.filter((page) => !page.disabled && page.url);
         const browserMessage = !browserKnown
           ? t("loading")
-          : (browser.running
+          : (browser.ready
           ? `${t("displayRunningHint")} ${browser.page_name || activePage.name || ""}`.trim()
-          : (browser.last_error ? `${t("displayStoppedErrorHint")}: ${browser.last_error}` : t("displayStoppedHint")));
-        const runningLabel = !browserKnown ? t("loading") : (browser.running ? t("running") : t("stopped"));
-        const runningTone = !browserKnown ? "" : (browser.running ? "ok" : "bad");
+          : (browser.running
+            ? t("displayConnectingHint")
+            : (browser.last_error ? `${t("displayStoppedErrorHint")}: ${browser.last_error}` : t("displayStoppedHint"))));
+        const runningLabel = !browserKnown ? t("loading") : (browser.ready ? t("running") : browser.running ? t("connecting") : t("stopped"));
+        const runningTone = !browserKnown ? "" : (browser.ready ? "ok" : browser.running ? "warn" : "bad");
         const schedulerReasonKey = String(browser.scheduler?.reason || "").toLowerCase();
         const hasTimeRules = (cfg.kiosk?.time_rules || []).length > 0;
         const schedulerNeedsAttention = schedulerReasonKey === "no active time rule" || (schedulerReasonKey === "disabled" && hasTimeRules);
@@ -30,7 +32,7 @@ function renderDashboard() {
             ${renderUpdateNotice()}
 			${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
             ${schedulerNeedsAttention ? stateBanner("warn", t("scheduler"), schedulerReasonKey === "disabled" ? t("schedulerDisabledWithRulesHint") : t("schedulerNoActiveRuleHint"), `<button data-view="kiosk-pages">${esc(t("manageFlow"))}</button>`) : ""}
-            ${stateBanner(browserKnown ? (browser.running ? "ok" : "bad") : "warn", browserKnown ? (browser.running ? t("displayReady") : t("displayNeedsAttention")) : t("loading"), browserMessage, browser.running
+            ${stateBanner(browserKnown ? (browser.ready ? "ok" : browser.running ? "warn" : "bad") : "warn", browserKnown ? (browser.ready ? t("displayReady") : browser.running ? t("displayConnecting") : t("displayNeedsAttention")) : t("loading"), browserMessage, browser.running
               ? `<button data-view="kiosk-pages">${esc(t("managePages"))}</button>`
               : (browserKnown ? button("startBrowser", "browser-start", "primary") : ""))}
             <section class="status-strip" aria-label="${esc(t("status"))}">
@@ -79,6 +81,8 @@ function renderDashboard() {
                   <div class="body health-list">
                     ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
                     ${healthRow(t("browserControl"), browser.devtools ? t("connected") : t("notConnected"), browser.devtools ? "ok" : "warn")}
+                    ${browser.control?.failures ? healthRow(t("browserControlFailures"), `${browser.control.failures}: ${browser.control.last_error || "-"}`, "warn") : ""}
+                    ${healthRow(t("browserGeneration"), String(browser.generation || 0), "")}
                     ${healthRow(t("haThemeSync"), formatThemeStatus(browser.theme_status), browser.theme_status?.state === "applied" ? "ok" : browser.theme_status?.state === "failed" ? "bad" : "")}
                     ${healthRow(t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready"), browser.auth_guard?.tripped ? "bad" : "ok")}
 					${browser.auth_guard?.tripped && browser.auth_guard?.kiosk_ip ? healthRow(t("kioskIPAddress"), browser.auth_guard.kiosk_ip, "warn") : ""}
