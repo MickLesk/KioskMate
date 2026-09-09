@@ -1,6 +1,6 @@
 # Implementation tracker: 0.8.0
 
-Branch: `codex/reliable-kiosk-0.8`. Baseline: `89ba3c1` (0.7.7).
+Branch: `dev-kiosk-0.8`. Baseline: `89ba3c1` (0.7.7).
 
 | Work package | State | Verification |
 | --- | --- | --- |

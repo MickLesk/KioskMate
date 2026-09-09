@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Diagnostics and Home Assistant
+- Added a bounded, privacy-safe event journal for browser operations, HA authentication guards, MQTT connection/command state, admin security actions and maintenance/update jobs.
+- Added an Events log source, combined-log output and diagnostic-bundle export for the structured journal; sensitive fields and MQTT payloads are excluded.
+- Made Home Assistant discovery capability-aware so unsupported display, audio, input and host sensors are cleared instead of being published with unusable `null` states.
+
 ## v0.8.0-alpha1
 
 ### Browser reliability

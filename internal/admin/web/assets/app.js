@@ -3048,7 +3048,13 @@
 		  type: item.state === "failed" ? "error" : item.state === "running" ? "warn" : "ok",
 		  at: item.finished || item.started,
 		}));
-		const entries = [...state.actionLog, ...persisted].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 4);
+		const journal = (state.events || []).slice(-6).map((item) => ({
+		  title: [item.component, item.action].filter(Boolean).join("/") || "runtime",
+		  detail: item.message || item.status || "",
+		  type: item.status === "error" || item.status === "failed" || item.status === "blocked" ? "error" : item.status === "running" ? "warn" : "ok",
+		  at: item.at,
+		}));
+		const entries = [...state.actionLog, ...persisted, ...journal].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 4);
 		if (!entries.length) return "";
         return `
           <div class="grid">
