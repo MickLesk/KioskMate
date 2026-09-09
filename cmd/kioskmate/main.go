@@ -75,13 +75,21 @@ func main() {
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"))
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"))
 
-	if err := browser.Start(ctx); err != nil {
-		logger.Warn("initial browser start failed", "error", err)
-	}
-
 	errc := make(chan error, 1)
 	go func() {
 		errc <- server.ListenAndServe(ctx)
+	}()
+	go func() {
+		select {
+		case <-server.Ready():
+		case <-ctx.Done():
+			return
+		}
+		startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := browser.Start(startCtx); err != nil {
+			logger.Warn("initial browser start failed", "error", err)
+		}
 	}()
 	go browser.RunScheduler(ctx)
 	go mqttService.Run(ctx)
@@ -102,11 +110,14 @@ func main() {
 	case err := <-errc:
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("admin server stopped", "error", err)
-			os.Exit(1)
+			stop()
 		}
 	}
 
-	if err := browser.Stop(context.Background()); err != nil {
+	stop()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelShutdown()
+	if err := browser.Stop(shutdownCtx); err != nil {
 		logger.Warn("browser stop failed", "error", err)
 	}
 }

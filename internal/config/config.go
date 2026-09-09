@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,7 @@ type PerfConfig struct {
 }
 
 type WatchdogConfig struct {
+	RestartOnCPU  bool          `json:"restart_on_cpu"`
 	Enabled       bool          `json:"enabled"`
 	CheckInterval time.Duration `json:"check_interval"`
 	MaxRSSMB      uint64        `json:"max_rss_mb"`
@@ -134,6 +136,12 @@ type MQTTConfig struct {
 	ClientID           string        `json:"client_id"`
 	KeepAlive          time.Duration `json:"keepalive"`
 	ForceDisableRetain bool          `json:"force_disable_retain"`
+	CAFile             string        `json:"ca_file"`
+	CertFile           string        `json:"cert_file"`
+	KeyFile            string        `json:"key_file"`
+	ServerName         string        `json:"server_name"`
+	RejectUnauthorized bool          `json:"reject_unauthorized"`
+	MaxPacketBytes     int           `json:"maximum_packet_size"`
 	Interval           time.Duration `json:"interval"`
 }
 
@@ -264,8 +272,23 @@ func (cfg *Config) Snapshot() *Config {
 	mu.RLock()
 	defer mu.RUnlock()
 	clone := *cfg
-	clone.mu = mu
+	clone.mu = &sync.RWMutex{}
 	clone.changeCh = nil
+	clone.Kiosk.URLs = slices.Clone(cfg.Kiosk.URLs)
+	clone.Kiosk.ExtraArgs = slices.Clone(cfg.Kiosk.ExtraArgs)
+	clone.Kiosk.Rotation = slices.Clone(cfg.Kiosk.Rotation)
+	clone.Kiosk.Pages = slices.Clone(cfg.Kiosk.Pages)
+	for i := range clone.Kiosk.Pages {
+		clone.Kiosk.Pages[i].Schedule.Days = slices.Clone(cfg.Kiosk.Pages[i].Schedule.Days)
+		if brightness := cfg.Kiosk.Pages[i].DisplayOptions.Brightness; brightness != nil {
+			value := *brightness
+			clone.Kiosk.Pages[i].DisplayOptions.Brightness = &value
+		}
+	}
+	clone.Kiosk.TimeRules = slices.Clone(cfg.Kiosk.TimeRules)
+	for i := range clone.Kiosk.TimeRules {
+		clone.Kiosk.TimeRules[i].Days = slices.Clone(cfg.Kiosk.TimeRules[i].Days)
+	}
 	return &clone
 }
 
@@ -404,7 +427,7 @@ func defaults(path string) Config {
 	return Config{
 		mu:      &sync.RWMutex{},
 		Path:    path,
-		Version: 2,
+		Version: 4,
 		Admin: AdminConfig{
 			Bind:  "0.0.0.0",
 			Port:  33333,
@@ -437,12 +460,14 @@ func defaults(path string) Config {
 			CPUGrace:      10 * time.Minute,
 		},
 		MQTT: MQTTConfig{
-			Enabled:   false,
-			Discovery: "homeassistant",
-			BaseTopic: "kioskmate",
-			Node:      "kioskmate",
-			KeepAlive: 60 * time.Second,
-			Interval:  30 * time.Second,
+			Enabled:            false,
+			Discovery:          "homeassistant",
+			BaseTopic:          "kioskmate",
+			Node:               "kioskmate",
+			KeepAlive:          60 * time.Second,
+			Interval:           30 * time.Second,
+			RejectUnauthorized: true,
+			MaxPacketBytes:     1 << 20,
 		},
 		Time: TimeConfig{
 			NTPServer: "pool.ntp.org",
@@ -478,6 +503,10 @@ func normalize(cfg *Config) {
 			}
 		}
 		cfg.Version = 3
+	}
+	if cfg.Version < 4 {
+		cfg.MQTT.RejectUnauthorized = true
+		cfg.Version = 4
 	}
 	if cfg.Admin.Bind == "127.0.0.1" || cfg.Admin.Bind == "localhost" {
 		cfg.Admin.Bind = "0.0.0.0"
@@ -571,6 +600,12 @@ func normalize(cfg *Config) {
 	}
 	if cfg.MQTT.KeepAlive == 0 {
 		cfg.MQTT.KeepAlive = 60 * time.Second
+	}
+	if cfg.MQTT.MaxPacketBytes <= 0 {
+		cfg.MQTT.MaxPacketBytes = 1 << 20
+	}
+	if cfg.MQTT.MaxPacketBytes > 256<<20 {
+		cfg.MQTT.MaxPacketBytes = 256 << 20
 	}
 	if strings.TrimSpace(cfg.Time.NTPServer) == "" {
 		cfg.Time.NTPServer = "pool.ntp.org"

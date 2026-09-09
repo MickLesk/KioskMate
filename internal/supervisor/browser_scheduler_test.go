@@ -559,6 +559,7 @@ func TestThemeReportIsExposedInBrowserStatus(t *testing.T) {
 
 func TestCPUOnlyWatchdogUsesMinimumGrace(t *testing.T) {
 	cfg := schedulerTestConfig()
+	cfg.Watchdog.RestartOnCPU = true
 	cfg.Watchdog.MaxCPUPercent = 100
 	cfg.Watchdog.CPUGrace = 45 * time.Second
 	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))

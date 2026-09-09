@@ -2,27 +2,35 @@ package mqttclient
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
 type Client struct {
-	URL         string
-	ClientID    string
-	Username    string
-	Password    string
-	Version     string
-	Timeout     time.Duration
-	KeepAlive   time.Duration
-	WillTopic   string
-	WillPayload []byte
-	WillRetain  bool
+	URL                string
+	ClientID           string
+	Username           string
+	Password           string
+	Version            string
+	Timeout            time.Duration
+	KeepAlive          time.Duration
+	WillTopic          string
+	WillPayload        []byte
+	WillRetain         bool
+	CAFile             string
+	CertFile           string
+	KeyFile            string
+	ServerName         string
+	InsecureSkipVerify bool
+	MaxPacketBytes     int
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -50,6 +58,16 @@ func (c *Client) keepAlive() uint16 {
 	return uint16(seconds)
 }
 
+func (c *Client) maxPacketBytes() int {
+	if c.MaxPacketBytes <= 0 {
+		return 1 << 20
+	}
+	if c.MaxPacketBytes > 256<<20 {
+		return 256 << 20
+	}
+	return c.MaxPacketBytes
+}
+
 func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -63,6 +81,9 @@ func (c *Client) connectLocked() error {
 	u, err := url.Parse(c.URL)
 	if err != nil {
 		return err
+	}
+	if u.Scheme != "mqtt" && u.Scheme != "mqtts" {
+		return fmt.Errorf("unsupported MQTT URL scheme %q; use mqtt or mqtts", u.Scheme)
 	}
 	host := u.Host
 	if host == "" {
@@ -78,7 +99,11 @@ func (c *Client) connectLocked() error {
 	var conn net.Conn
 	dialer := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	if u.Scheme == "mqtts" {
-		conn, err = tls.DialWithDialer(&dialer, "tcp", host, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})
+		tlsConfig, configErr := c.tlsConfig(u.Hostname())
+		if configErr != nil {
+			return configErr
+		}
+		conn, err = tls.DialWithDialer(&dialer, "tcp", host, tlsConfig)
 	} else {
 		conn, err = dialer.Dial("tcp", host)
 	}
@@ -98,7 +123,7 @@ func (c *Client) connectLocked() error {
 		_ = c.closeLocked()
 		return err
 	}
-	packet, payload, err := readPacket(conn)
+	packet, payload, err := readPacketLimit(conn, c.maxPacketBytes())
 	if err != nil {
 		_ = c.closeLocked()
 		return err
@@ -141,7 +166,7 @@ func (c *Client) Ping() error {
 		_ = c.closeLocked()
 		return err
 	}
-	packet, _, err := readPacket(c.conn)
+	packet, _, err := readPacketLimit(c.conn, c.maxPacketBytes())
 	_ = c.conn.SetDeadline(time.Time{})
 	if err != nil && !errors.Is(err, io.EOF) {
 		_ = c.closeLocked()
@@ -179,7 +204,7 @@ func (c *Client) Subscribe(topics []string, handler func(topic string, payload [
 	c.mu.Unlock()
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(keepAlive / 2))
-		packet, payload, err := readPacket(conn)
+		packet, payload, err := readPacketLimit(conn, c.maxPacketBytes())
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				c.mu.Lock()
@@ -222,7 +247,7 @@ func (c *Client) awaitPingResp(conn net.Conn, handler func(topic string, payload
 	deadline := time.Now().Add(c.timeout())
 	for {
 		_ = conn.SetReadDeadline(deadline)
-		packet, payload, err := readPacket(conn)
+		packet, payload, err := readPacketLimit(conn, c.maxPacketBytes())
 		if err != nil {
 			return fmt.Errorf("mqtt keepalive: no PINGRESP received: %w", err)
 		}
@@ -237,6 +262,44 @@ func (c *Client) awaitPingResp(conn net.Conn, handler func(topic string, payload
 			}
 		}
 	}
+}
+
+func (c *Client) tlsConfig(defaultServerName string) (*tls.Config, error) {
+	serverName := strings.TrimSpace(c.ServerName)
+	if serverName == "" {
+		serverName = defaultServerName
+	}
+	config := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         serverName,
+		InsecureSkipVerify: c.InsecureSkipVerify,
+	}
+	if path := strings.TrimSpace(c.CAFile); path != "" {
+		pem, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read MQTT CA certificate: %w", err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, errors.New("MQTT CA file contains no valid certificates")
+		}
+		config.RootCAs = roots
+	}
+	certFile, keyFile := strings.TrimSpace(c.CertFile), strings.TrimSpace(c.KeyFile)
+	if (certFile == "") != (keyFile == "") {
+		return nil, errors.New("MQTT client certificate and key must be configured together")
+	}
+	if certFile != "" {
+		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load MQTT client certificate: %w", err)
+		}
+		config.Certificates = []tls.Certificate{certificate}
+	}
+	return config, nil
 }
 
 func (c *Client) Close() error {

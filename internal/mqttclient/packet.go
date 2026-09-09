@@ -30,6 +30,10 @@ func writePacket(w io.Writer, packetType byte, flags byte, payload []byte) error
 }
 
 func readPacket(r io.Reader) (byte, []byte, error) {
+	return readPacketLimit(r, 1<<20)
+}
+
+func readPacketLimit(r io.Reader, maximum int) (byte, []byte, error) {
 	var first [1]byte
 	if _, err := io.ReadFull(r, first[:]); err != nil {
 		return 0, nil, err
@@ -37,6 +41,12 @@ func readPacket(r io.Reader) (byte, []byte, error) {
 	remaining, err := decodeRemainingLength(r)
 	if err != nil {
 		return 0, nil, err
+	}
+	if maximum <= 0 {
+		maximum = 1 << 20
+	}
+	if remaining > maximum {
+		return 0, nil, fmt.Errorf("mqtt packet size %d exceeds limit %d", remaining, maximum)
 	}
 	payload := make([]byte, remaining)
 	if _, err := io.ReadFull(r, payload); err != nil {

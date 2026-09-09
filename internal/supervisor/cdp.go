@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -35,11 +34,6 @@ type cdpMessage struct {
 	} `json:"error,omitempty"`
 }
 
-type cdpSession struct {
-	conn *websocket.Conn
-	next atomic.Int64
-}
-
 type cdpCommander interface {
 	command(context.Context, string, any, any) error
 }
@@ -57,6 +51,8 @@ type themeReport struct {
 }
 
 func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	target, err := waitForDevToolsTarget(ctx, profile)
 	if err != nil {
 		return nil, err
@@ -68,39 +64,9 @@ func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
 		return nil, fmt.Errorf("connect to Chromium DevTools: %w", err)
 	}
 	conn.SetReadLimit(16 << 20)
-	return &cdpSession{conn: conn}, nil
-}
-
-func (s *cdpSession) close() {
-	_ = s.conn.Close(websocket.StatusNormalClosure, "done")
-}
-
-func (s *cdpSession) command(ctx context.Context, method string, params any, result any) error {
-	id := s.next.Add(1)
-	payload, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
-	if err != nil {
-		return err
-	}
-	if err := s.conn.Write(ctx, websocket.MessageText, payload); err != nil {
-		return err
-	}
-	for {
-		_, data, err := s.conn.Read(ctx)
-		if err != nil {
-			return err
-		}
-		var message cdpMessage
-		if err := json.Unmarshal(data, &message); err != nil || message.ID != id {
-			continue
-		}
-		if message.Error != nil {
-			return fmt.Errorf("DevTools %s failed: %s", method, message.Error.Message)
-		}
-		if result != nil && len(message.Result) > 0 {
-			return json.Unmarshal(message.Result, result)
-		}
-		return nil
-	}
+	session := newCDPSession(conn)
+	session.target = target
+	return session, nil
 }
 
 func captureDevToolsScreenshot(ctx context.Context, profile string) ([]byte, error) {
@@ -129,33 +95,31 @@ func captureDevToolsScreenshot(ctx context.Context, profile string) ([]byte, err
 	return data, nil
 }
 
-func (b *Browser) reloadDevTools(ctx context.Context) error {
-	cfg := b.cfg.Snapshot()
+func (b *Browser) controlSession() (*cdpSession, error) {
 	b.mu.Lock()
-	profile := browserUserDataDir(cfg, b.active)
-	running := b.cmd != nil && b.cmd.Process != nil
-	b.mu.Unlock()
-	if !running {
-		return errors.New("browser is not running")
+	defer b.mu.Unlock()
+	if b.cmd == nil || b.cmd.Process == nil {
+		return nil, errors.New("browser is not running")
 	}
-	session, err := dialDevTools(ctx, profile)
+	if b.control == nil || !b.devTools {
+		return nil, errors.New("browser control is connecting; retry when connected")
+	}
+	return b.control, nil
+}
+
+func (b *Browser) reloadDevTools(ctx context.Context) error {
+	session, err := b.controlSession()
 	if err != nil {
 		return err
 	}
-	defer session.close()
 	return session.command(ctx, "Page.reload", map[string]any{"ignoreCache": false}, nil)
 }
 
 func (b *Browser) navigateDevTools(ctx context.Context, target string) error {
-	cfg := b.cfg.Snapshot()
-	b.mu.Lock()
-	profile := browserUserDataDir(cfg, b.active)
-	b.mu.Unlock()
-	session, err := dialDevTools(ctx, profile)
+	session, err := b.controlSession()
 	if err != nil {
 		return err
 	}
-	defer session.close()
 	var result struct {
 		ErrorText string `json:"errorText"`
 	}
@@ -178,122 +142,191 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 		case <-ctx.Done():
 		}
 	}()
-	session, err := dialDevTools(ctx, profile)
-	if err != nil {
-		b.logger.Warn("Chromium DevTools unavailable", "error", err)
-		return
-	}
-	defer session.close()
-	defer func() {
+	navigated := false
+	for attempt := 0; ctx.Err() == nil; attempt++ {
+		session, err := dialDevTools(ctx, profile)
+		if err == nil {
+			err = b.runDevTools(ctx, session, theme, done, &navigated)
+			session.close()
+		}
 		b.mu.Lock()
 		if b.done == done {
 			b.devTools = false
+			b.control = nil
+			if !b.authGuard.Tripped && err != nil {
+				b.lastError = err.Error()
+			}
 		}
 		b.mu.Unlock()
-	}()
-	if err := session.command(ctx, "Network.enable", map[string]any{}, nil); err != nil {
-		b.logger.Warn("Chromium DevTools network monitor failed", "error", err)
-		return
-	}
-	b.mu.Lock()
-	b.devTools = true
-	b.mu.Unlock()
-	b.logger.Info("Chromium DevTools monitor attached")
-	go b.monitorTheme(profile, theme, done)
-	for {
-		_, data, err := session.conn.Read(ctx)
-		if err != nil {
+		if ctx.Err() != nil {
 			return
 		}
-		var event cdpMessage
-		if json.Unmarshal(data, &event) != nil {
-			continue
+		b.mu.Lock()
+		blocked := b.authGuard.Tripped
+		b.mu.Unlock()
+		if blocked {
+			return
 		}
-		switch event.Method {
-		case "Network.webSocketFrameReceived":
-			var params struct {
-				Response struct {
-					PayloadData string `json:"payloadData"`
-				} `json:"response"`
-			}
-			if json.Unmarshal(event.Params, &params) == nil && homeAssistantAuthFailureFrame(params.Response.PayloadData) {
-				b.tripAuthGuard("Home Assistant rejected the stored WebSocket access token")
-				return
-			}
-		case "Network.responseReceived":
-			var params struct {
-				Type     string `json:"type"`
-				Response struct {
-					Status float64 `json:"status"`
-					URL    string  `json:"url"`
-				} `json:"response"`
-			}
-			if json.Unmarshal(event.Params, &params) == nil && homeAssistantAuthFailureResponse(int(params.Response.Status), params.Type, params.Response.URL) {
-				b.tripAuthGuard(fmt.Sprintf("Home Assistant returned HTTP %d for %s", int(params.Response.Status), params.Type))
-				return
-			}
+		b.logger.Warn("Chromium control reconnect", "error", err)
+		delay := time.Second * time.Duration(1<<minRuntimeInt(attempt, 4))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
 	}
 }
 
-func (b *Browser) monitorTheme(profile string, theme string, done <-chan struct{}) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		select {
-		case <-done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	session, err := dialDevTools(ctx, profile)
-	if err != nil {
-		b.setThemeError(theme, err)
-		return
+func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme string, done <-chan struct{}, navigated *bool) error {
+	if err := session.command(ctx, "Network.enable", map[string]any{}, nil); err != nil {
+		return err
 	}
-	defer session.close()
+	if err := session.command(ctx, "Page.enable", map[string]any{}, nil); err != nil {
+		return err
+	}
 	if err := session.command(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
-		b.setThemeError(theme, err)
-		b.logger.Warn("Chromium DevTools runtime monitor failed", "error", err)
-		return
+		return err
 	}
 	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
 		b.setThemeError(theme, err)
-		b.logger.Warn("Home Assistant theme synchronization failed", "theme", theme, "error", err)
-		return
 	}
-	if _, ok := homeAssistantThemeScript(theme); ok {
-		b.logger.Info("Home Assistant theme synchronization enabled", "theme", theme)
+	b.mu.Lock()
+	if b.done != done {
+		b.mu.Unlock()
+		return context.Canceled
 	}
+	b.control, b.devTools = session, true
+	b.mu.Unlock()
+	if !*navigated {
+		cfg := b.cfg.Snapshot()
+		b.mu.Lock()
+		target := activeURL(cfg, b.active)
+		b.mu.Unlock()
+		if err := b.authenticationAllowed(); err != nil {
+			return err
+		}
+		var result struct {
+			Error string `json:"errorText"`
+		}
+		if err := session.command(ctx, "Page.navigate", map[string]any{"url": target}, &result); err != nil {
+			return err
+		}
+		if result.Error != "" {
+			return fmt.Errorf("navigate to kiosk page: %s", result.Error)
+		}
+		*navigated = true
+		b.mu.Lock()
+		if b.done == done && !b.authGuard.Tripped {
+			b.recovery.State, b.recovery.Stage = "healthy", "running"
+			b.recovery.LastResult = "page control connected"
+			b.lastError = ""
+		}
+		b.mu.Unlock()
+	}
+	sockets := map[string]string{}
+	tokenFailures := map[string]authEvidence{}
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
 	for {
-		_, data, err := session.conn.Read(ctx)
-		if err != nil {
-			return
-		}
-		var event cdpMessage
-		if json.Unmarshal(data, &event) != nil || event.Method != "Runtime.consoleAPICalled" {
-			continue
-		}
-		if report, ok := parseThemeConsoleEvent(event.Params); ok {
-			b.setThemeReport(theme, report)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-session.done:
+			return errors.New("Chromium control disconnected")
+		case <-heartbeat.C:
+			if err := session.command(ctx, "Page.getFrameTree", map[string]any{}, nil); err != nil {
+				return err
+			}
+		case event := <-session.events:
+			if event.Method == "Runtime.consoleAPICalled" {
+				if report, ok := parseThemeConsoleEvent(event.Params); ok {
+					b.setThemeReport(theme, report)
+				}
+				continue
+			}
+			var params struct {
+				ID       string `json:"requestId"`
+				URL      string `json:"url"`
+				Type     string `json:"type"`
+				Response struct {
+					Status  int    `json:"status"`
+					URL     string `json:"url"`
+					Payload string `json:"payloadData"`
+				} `json:"response"`
+			}
+			if json.Unmarshal(event.Params, &params) != nil {
+				continue
+			}
+			switch event.Method {
+			case "Network.webSocketCreated":
+				if len(sockets) >= 128 {
+					sockets = map[string]string{}
+				}
+				sockets[params.ID] = params.URL
+			case "Network.webSocketFrameReceived":
+				if b.isHAAuthResource(sockets[params.ID], "/api/websocket") && homeAssistantAuthFailureFrame(params.Response.Payload) {
+					b.blockAuthentication(authEvidence{Kind: "invalid_token", Confidence: "confirmed", URL: sockets[params.ID], Resource: "WebSocket", Reason: "Home Assistant rejected this browser session", Action: "sign_in"})
+					return context.Canceled
+				}
+			case "Network.responseReceived":
+				raw := params.Response.URL
+				if !b.isHAOrigin(raw) {
+					continue
+				}
+				evidence := classifyHAResponse(params.Response.Status, params.Type, raw)
+				if evidence.Kind == "token_response" {
+					if len(tokenFailures) < 128 {
+						tokenFailures[params.ID] = evidence
+					}
+					continue
+				}
+				if evidence.Kind != "" {
+					b.blockAuthentication(evidence)
+					return context.Canceled
+				}
+			case "Network.loadingFinished":
+				if evidence, ok := tokenFailures[params.ID]; ok {
+					delete(tokenFailures, params.ID)
+					var body struct {
+						Body   string `json:"body"`
+						Base64 bool   `json:"base64Encoded"`
+					}
+					if err := session.command(ctx, "Network.getResponseBody", map[string]any{"requestId": params.ID}, &body); err != nil {
+						continue
+					}
+					if body.Base64 {
+						bytes, err := base64.StdEncoding.DecodeString(body.Body)
+						if err != nil {
+							continue
+						}
+						body.Body = string(bytes)
+					}
+					var failure struct {
+						Error string `json:"error"`
+					}
+					if json.Unmarshal([]byte(body.Body), &failure) == nil && failure.Error == "invalid_grant" {
+						evidence.Kind, evidence.Confidence, evidence.Reason, evidence.Action = "invalid_grant", "confirmed", "Home Assistant refresh grant is no longer valid", "sign_in"
+						b.blockAuthentication(evidence)
+						return context.Canceled
+					}
+				}
+			}
 		}
 	}
 }
 
 func homeAssistantAuthFailureFrame(payload string) bool {
-	compact := strings.ReplaceAll(strings.ReplaceAll(payload, " ", ""), "\n", "")
-	return strings.Contains(compact, `"type":"auth_invalid"`)
+	return parseAuthFailure(payload)
 }
 
 func homeAssistantAuthFailureResponse(status int, kind string, rawURL string) bool {
 	if !authRelevantResourceType(kind) || !likelyHomeAssistantURL(rawURL) {
 		return false
 	}
-	if status == http.StatusForbidden {
-		return true
-	}
-	lowerURL := strings.ToLower(rawURL)
-	return status == http.StatusUnauthorized && (strings.Contains(lowerURL, "/auth/token") || strings.Contains(lowerURL, "/api/websocket"))
+	evidence := classifyHAResponse(status, kind, rawURL)
+	return evidence.Kind != "" && evidence.Kind != "token_response"
 }
 
 func configureHomeAssistantTheme(ctx context.Context, session cdpCommander, theme string) error {

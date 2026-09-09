@@ -27,6 +27,7 @@ jobs:
         run: |
           node --check internal/admin/web/assets/theme.js
           node --check internal/admin/web/assets/i18n.js
+          node --check internal/admin/web/assets/api.js
           node --check internal/admin/web/assets/app.js
           node scripts/check-i18n.mjs
       - name: Build Linux binaries
@@ -37,3 +38,5 @@ jobs:
         run: |
           VERSION=0.0.0-ci ARCH=arm64 bash scripts/package-deb.sh
           VERSION=0.0.0-ci ARCH=amd64 bash scripts/package-deb.sh
+          bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_arm64.deb
+          bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_amd64.deb

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,10 +27,18 @@ type displayPowerControl interface {
 }
 
 type Browser struct {
-	cfg       *config.Config
-	logger    *slog.Logger
-	display   displayPowerControl
-	persistMu sync.Mutex
+	cfg              *config.Config
+	logger           *slog.Logger
+	display          displayPowerControl
+	persistMu        sync.Mutex
+	operationOnce    sync.Once
+	operationGate    chan struct{}
+	operation        Operation
+	operationHistory []Operation
+	recoveryCancel   context.CancelFunc
+	recoveryEpoch    uint64
+	recoveryRuns     []time.Time
+	manuallyStopped  bool
 
 	mu            sync.Mutex
 	cmd           *exec.Cmd
@@ -49,6 +58,7 @@ type Browser struct {
 	rotationIndex int
 	rotationUntil time.Time
 	devTools      bool
+	control       *cdpSession
 	themeStatus   ThemeStatus
 	authGuard     AuthGuardStatus
 	recovery      RecoveryStatus
@@ -59,6 +69,8 @@ type Browser struct {
 }
 
 type Status struct {
+	Operation  Operation               `json:"operation"`
+	State      string                  `json:"state"`
 	Running    bool                    `json:"running"`
 	PID        int                     `json:"pid,omitempty"`
 	Started    *time.Time              `json:"started,omitempty"`
@@ -95,6 +107,11 @@ type ThemeStatus struct {
 }
 
 type AuthGuardStatus struct {
+	Confidence      string     `json:"confidence,omitempty"`
+	Origin          string     `json:"origin,omitempty"`
+	Resource        string     `json:"resource,omitempty"`
+	HTTPStatus      int        `json:"http_status,omitempty"`
+	NextAction      string     `json:"next_action,omitempty"`
 	Tripped         bool       `json:"tripped"`
 	Reason          string     `json:"reason,omitempty"`
 	Kind            string     `json:"kind,omitempty"`
@@ -157,106 +174,114 @@ func (b *Browser) NoteDisplayPower(power string) {
 	b.displayPower = power
 }
 
-func (b *Browser) Start(ctx context.Context) error {
+func (b *Browser) start(ctx context.Context) (err error) {
+	cfg := b.cfg.Snapshot()
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if b.cmd != nil && b.cmd.Process != nil {
+		b.mu.Unlock()
 		return nil
 	}
 	if b.authGuard.Tripped {
-		return fmt.Errorf("Home Assistant authentication guard is active: %s; reset the browser session before starting", b.authGuard.Reason)
+		b.mu.Unlock()
+		return b.authenticationAllowed()
 	}
+	active := b.active
 	b.stopping = false
-	target := activeURL(b.cfg.Snapshot(), b.active)
-	if likelyHomeAssistantURL(target) {
+	b.mu.Unlock()
+	defer func() {
+		if err != nil {
+			b.mu.Lock()
+			if !b.authGuard.Tripped {
+				b.lastError = err.Error()
+				b.setStartFailureLocked(err)
+			}
+			b.mu.Unlock()
+			b.persistRuntimeState()
+		}
+	}()
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	target := activeURL(cfg, active)
+	if b.isHAOrigin(target) {
 		banned, checkErr := checkHomeAssistantBan(ctx, target)
 		if checkErr != nil {
-			b.logger.Debug("Home Assistant ban preflight unavailable", "url", target, "error", checkErr)
-		} else if banned {
-			reason := "Home Assistant returned HTTP 403 before browser startup"
-			now := time.Now()
-			kind, action := classifyAuthGuard(reason)
-			b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, Kind: kind, SuggestedAction: action, KioskIP: localKioskIP(), At: &now}
-			b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: action, LastAt: &now}
-			b.lastError = "authentication guard: " + reason
-			go b.persistAuthGuard()
-			go b.persistRuntimeState()
-			return fmt.Errorf("%s; %s", reason, action)
+			b.logger.Debug("Home Assistant preflight unavailable", "error", checkErr)
+		}
+		if banned {
+			b.blockAuthentication(authEvidence{
+				Kind: "access_denied", Confidence: "probable", URL: target, Resource: "manifest", Status: http.StatusForbidden,
+				Reason: "Home Assistant denied its public manifest before browser startup", Action: "inspect_ha",
+			})
+			return b.authenticationAllowed()
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	preset := browserPreset(cfg.Kiosk.BrowserPreset)
+	command := strings.TrimSpace(cfg.Kiosk.BrowserCommand)
+	if command == "" {
+		command = findBrowser(preset)
 	}
-	command, args, err := b.command()
-	if err != nil {
-		b.lastError = err.Error()
-		b.setStartFailureLocked(err)
-		go b.persistRuntimeState()
-		return err
+	if command == "" {
+		return errors.New("no supported browser found")
 	}
-	if supportsCDP(browserPreset(b.cfg.Snapshot().Kiosk.BrowserPreset)) {
-		if err := hardenChromiumProfile(browserUserDataDir(b.cfg.Snapshot(), b.active)); err != nil {
-			b.lastError = "harden Chromium profile: " + err.Error()
-			b.setStartFailureLocked(err)
-			go b.persistRuntimeState()
+	launchURL := target
+	profile := browserUserDataDir(cfg, active)
+	if supportsCDP(preset) {
+		if err = migratePageProfiles(cfg); err != nil {
+			return err
+		}
+		if err = hardenChromiumProfile(profile); err != nil {
 			return fmt.Errorf("harden Chromium profile: %w", err)
 		}
+		launchURL = "about:blank"
 	}
-	// The browser lifetime belongs to the supervisor, not to the HTTP/MQTT
-	// request that asked for it to start.
+	args := browserArgs(cfg, preset, launchURL, cfg.Kiosk.ExtraArgs, active)
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	cmd := exec.Command(command, args...)
 	logFile := b.openBrowserLog()
 	if logFile != nil {
 		writer := io.MultiWriter(os.Stdout, logFile)
-		cmd.Stdout = writer
-		cmd.Stderr = writer
+		cmd.Stdout, cmd.Stderr = writer, writer
 		writeBrowserLaunchLog(logFile, command, args)
 	} else {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	}
 	cmd.SysProcAttr = processGroupAttr()
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		if logFile != nil {
 			_, _ = fmt.Fprintf(logFile, "start error: %v\n", err)
-		}
-		if logFile != nil {
 			_ = logFile.Close()
 		}
-		b.lastError = err.Error()
-		b.setStartFailureLocked(err)
-		go b.persistRuntimeState()
 		return err
 	}
+	b.mu.Lock()
 	b.cmd = cmd
 	b.done = make(chan struct{})
+	done := b.done
 	b.started = time.Now()
 	b.startCount++
 	b.lastStat = system.ProcessTreeStats{}
 	b.hotSince = time.Time{}
 	b.lastError = ""
 	b.devTools = false
-	configuredTheme := b.cfg.Snapshot().Kiosk.Theme
-	b.themeStatus = ThemeStatus{State: "pending", Configured: configuredTheme}
-	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command, "args", args)
-	b.recovery.State = "healthy"
-	b.recovery.Stage = "running"
-	b.recovery.LastResult = "browser started"
+	b.themeStatus = ThemeStatus{State: "pending", Configured: cfg.Kiosk.Theme}
+	b.recovery.State, b.recovery.Stage = "starting", "attach"
+	b.recovery.LastResult = "browser process started; connecting page control"
 	now := time.Now()
 	b.recovery.LastAt = &now
+	b.mu.Unlock()
+	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command)
 	go b.persistRuntimeState()
-	if logFile != nil {
-		_, _ = fmt.Fprintf(logFile, "started pid: %d\n", cmd.Process.Pid)
-	}
-
 	go b.wait(cmd, logFile)
-	go b.watch(cmd.Process.Pid, b.done)
-	cfg := b.cfg.Snapshot()
-	if supportsCDP(browserPreset(cfg.Kiosk.BrowserPreset)) {
-		go b.monitorDevTools(browserUserDataDir(cfg, b.active), cfg.Kiosk.Theme, b.done)
+	go b.watch(cmd.Process.Pid, done)
+	if supportsCDP(preset) {
+		go b.monitorDevTools(profile, cfg.Kiosk.Theme, done)
+	} else {
+		b.mu.Lock()
+		b.recovery.State, b.recovery.Stage = "healthy", "running"
+		b.mu.Unlock()
 	}
 	return nil
 }
@@ -288,7 +313,7 @@ func (b *Browser) openBrowserLog() *os.File {
 	return file
 }
 
-func (b *Browser) Stop(ctx context.Context) error {
+func (b *Browser) stop(ctx context.Context) error {
 	b.mu.Lock()
 	cmd := b.cmd
 	done := b.done
@@ -322,28 +347,33 @@ func (b *Browser) Stop(ctx context.Context) error {
 	}
 }
 
-func (b *Browser) Restart(ctx context.Context) error {
+func (b *Browser) restart(ctx context.Context) error {
 	if err := b.authenticationAllowed(); err != nil {
 		return err
 	}
 	b.mu.Lock()
-	b.restartCount++
+	running := b.cmd != nil && b.cmd.Process != nil
 	b.mu.Unlock()
-	go b.persistRuntimeState()
-	if err := b.Stop(ctx); err != nil {
+	if err := b.stop(ctx); err != nil {
 		return err
 	}
-	return b.Start(ctx)
+	if err := b.start(ctx); err != nil {
+		return err
+	}
+	if running {
+		b.mu.Lock()
+		b.restartCount++
+		b.mu.Unlock()
+	}
+	go b.persistRuntimeState()
+	return nil
 }
 
-func (b *Browser) Reload(ctx context.Context) error {
+func (b *Browser) reload(ctx context.Context) error {
 	if err := b.authenticationAllowed(); err != nil {
 		return err
 	}
-	if err := b.reloadDevTools(ctx); err == nil {
-		return nil
-	}
-	return b.Restart(ctx)
+	return b.reloadDevTools(ctx)
 }
 
 func (b *Browser) Next(ctx context.Context) error {
@@ -368,7 +398,7 @@ func (b *Browser) Previous(ctx context.Context) error {
 	return b.SetActive(ctx, active)
 }
 
-func (b *Browser) SetActive(ctx context.Context, index int) error {
+func (b *Browser) setActive(ctx context.Context, index int) error {
 	if err := b.authenticationAllowed(); err != nil {
 		return err
 	}
@@ -388,15 +418,15 @@ func (b *Browser) SetActive(ctx context.Context, index int) error {
 	b.mu.Unlock()
 	var err error
 	if !running {
-		err = b.Start(ctx)
+		err = b.start(ctx)
 	} else if !isolate || previous == index {
 		if navErr := b.navigateDevTools(ctx, target); navErr == nil {
 			err = nil
 		} else {
-			err = b.Restart(ctx)
+			err = b.restart(ctx)
 		}
 	} else {
-		err = b.Restart(ctx)
+		err = b.restart(ctx)
 	}
 	if err == nil && control != nil && brightness > 0 {
 		_ = control.SetBrightness(ctx, brightness)
@@ -425,12 +455,12 @@ func pageBrightness(cfg config.KioskConfig, index int) int {
 	return 0
 }
 
-func (b *Browser) ResetSession(ctx context.Context) error {
+func (b *Browser) resetSession(ctx context.Context) error {
 	cfg := b.cfg.Snapshot()
 	b.mu.Lock()
 	active := b.active
 	b.mu.Unlock()
-	if err := b.Stop(ctx); err != nil {
+	if err := b.stop(ctx); err != nil {
 		return err
 	}
 	dir := browserUserDataDir(cfg, active)
@@ -441,7 +471,10 @@ func (b *Browser) ResetSession(ctx context.Context) error {
 		return err
 	}
 	b.clearAuthGuard()
-	return b.Start(ctx)
+	b.mu.Lock()
+	b.manuallyStopped = false
+	b.mu.Unlock()
+	return b.start(ctx)
 }
 
 func (b *Browser) CaptureScreenshot(ctx context.Context) ([]byte, error) {
@@ -488,6 +521,20 @@ func (b *Browser) Status() Status {
 		started := b.started
 		status.Started = &started
 	}
+	status.Operation = b.operation
+	status.State = "stopped"
+	if status.Running {
+		status.State = "running"
+	}
+	if b.recovery.State == "backoff" || b.recovery.State == "failed" {
+		status.State = b.recovery.State
+	}
+	if b.operation.State == "running" {
+		status.State = map[string]string{"start": "starting", "restart": "recovering", "stop": "stopping", "reload": "reloading", "page": "navigating", "reset-session": "recovering"}[b.operation.Action]
+	}
+	if b.authGuard.Tripped {
+		status.State = "auth_blocked"
+	}
 	return status
 }
 
@@ -514,6 +561,13 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 			}
 			timer.Reset(0)
 		case now := <-timer.C:
+			b.mu.Lock()
+			paused := b.manuallyStopped || b.authGuard.Tripped
+			b.mu.Unlock()
+			if paused {
+				timer.Reset(b.schedulerInterval())
+				continue
+			}
 			snap := b.cfg.Snapshot()
 			now = nowInConfigTimezone(now, snap.Time.Timezone)
 			target, status := b.schedulerTarget(now)
@@ -680,6 +734,10 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		b.recovery.Stage = "stopped"
 		b.recovery.LastResult = "browser stopped normally"
 		b.recovery.LastAt = &now
+		if b.authGuard.Tripped {
+			b.recovery.State, b.recovery.Stage = "auth_blocked", "authentication"
+			b.lastError = b.authGuard.Reason
+		}
 	} else if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		b.lastError = err.Error()
 		if runtime > 0 && runtime < 5*time.Second {
@@ -819,7 +877,7 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 				current := b.cfg.Snapshot()
 				b.logger.Warn("browser watchdog restart", "reason", reason, "rss_mb", stats.RSSMB, "rss_limit_mb", current.Watchdog.MaxRSSMB, "cpu", stats.CPUPercent, "cpu_limit", current.Watchdog.MaxCPUPercent)
 				restartCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				_ = b.recover(restartCtx, "watchdog: "+reason, true)
+				_ = b.operate(restartCtx, "recover", func() error { return b.recover(restartCtx, "watchdog: "+reason, true) })
 				cancel()
 				return
 			}
@@ -838,6 +896,9 @@ func (b *Browser) shouldRestart(stats system.ProcessTreeStats) (bool, string) {
 	}
 	reason := b.watchdogReason(stats, overRSS, overCPU)
 	b.watchdog.Pressure = reason
+	if overCPU && !overRSS && !cfg.Watchdog.RestartOnCPU {
+		return false, reason
+	}
 	if b.hotSince.IsZero() {
 		b.hotSince = time.Now()
 		return false, reason
@@ -1258,6 +1319,7 @@ func (b *Browser) tripAuthGuard(reason string) {
 	now := time.Now()
 	kind, action := classifyAuthGuard(reason)
 	b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, Kind: kind, SuggestedAction: action, KioskIP: localKioskIP(), At: &now}
+	b.cancelRecoveryLocked()
 	b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: action, LastAt: &now}
 	b.lastError = "authentication guard: " + reason
 	b.mu.Unlock()
@@ -1357,11 +1419,7 @@ func browserUserDataDir(cfg *config.Config, page int) string {
 	if base == "" || !cfg.Kiosk.IsolateSessions {
 		return base
 	}
-	name := cfg.Kiosk.PageName(page)
-	if name == "" {
-		name = fmt.Sprintf("page-%d", page+1)
-	}
-	return filepath.Join(base, "pages", pathSegment(name, page))
+	return filepath.Join(base, "pages", profileIdentity(cfg, page))
 }
 
 func pathSegment(value string, page int) string {

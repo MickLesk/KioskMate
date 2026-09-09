@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,6 +70,10 @@ type runtimeBrowser interface {
 	ResetTelemetry() error
 }
 
+type operationBrowser interface {
+	Operations() []supervisor.Operation
+}
+
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
@@ -84,6 +89,7 @@ type Server struct {
 	hardware *hardware.Service
 	logger   *slog.Logger
 	version  string
+	ready    chan struct{}
 	mu       sync.Mutex
 	sessions map[string]Session
 	attempts map[string][]time.Time
@@ -99,6 +105,7 @@ type snapshotCache struct {
 
 type Session struct {
 	ID        string    `json:"id"`
+	CSRF      string    `json:"csrf"`
 	Created   time.Time `json:"created"`
 	LastSeen  time.Time `json:"last_seen"`
 	Remote    string    `json:"remote"`
@@ -116,10 +123,16 @@ type mqttTestRequest struct {
 	ClientID           string `json:"client_id"`
 	KeepAliveSeconds   int    `json:"keepalive_seconds"`
 	ForceDisableRetain bool   `json:"force_disable_retain"`
+	CAFile             string `json:"ca_file"`
+	CertFile           string `json:"cert_file"`
+	KeyFile            string `json:"key_file"`
+	ServerName         string `json:"server_name"`
+	RejectUnauthorized *bool  `json:"reject_unauthorized"`
+	MaxPacketBytes     int    `json:"maximum_packet_size"`
 }
 
 func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger) *Server {
-	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
+	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, ready: make(chan struct{}), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
 	s.loadSessions()
 	return s
 }
@@ -176,14 +189,28 @@ func (s *Server) loadSessions() {
 	if json.Unmarshal(data, &sessions) != nil {
 		return
 	}
-	s.mu.Lock()
-	if sessions == nil {
-		sessions = map[string]Session{}
+	migrated := make(map[string]Session, len(sessions))
+	for key, session := range sessions {
+		storedKey := key
+		if !isSessionHash(storedKey) {
+			storedKey = sessionKey(key)
+		}
+		if session.ID == "" || session.ID == key {
+			session.ID = sessionFingerprint(storedKey)
+		}
+		if session.CSRF == "" {
+			session.CSRF = randomID(24)
+		}
+		migrated[storedKey] = session
 	}
-	s.sessions = sessions
+	s.mu.Lock()
+	s.sessions = migrated
 	s.pruneSessionsLocked(time.Now())
 	s.mu.Unlock()
+	s.persistSessions()
 }
+
+func (s *Server) Ready() <-chan struct{} { return s.ready }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
@@ -229,6 +256,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/recovery", s.auth(s.browserRecovery))
 	mux.HandleFunc("/api/browser/override", s.auth(s.browserOverride))
 	mux.HandleFunc("/api/browser/telemetry", s.auth(s.browserTelemetry))
+	mux.HandleFunc("/api/browser/operations", s.auth(s.browserOperations))
 	mux.HandleFunc("/api/browser/profile-recommendation", s.auth(s.browserProfileRecommendation))
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
@@ -259,6 +287,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	errc := make(chan error, 1)
+	close(s.ready)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -472,6 +501,9 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if authenticated {
 		response["config"] = publicConfigSnapshot(snapshot)
+		if csrf := s.sessionCSRF(r); csrf != "" {
+			response["csrf"] = csrf
+		}
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -485,8 +517,9 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "setup already completed"})
 		return
 	}
-	if !s.allowAttempt(r) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts"})
+	if allowed, retry := s.allowAttempt(r); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
 	}
 	var body struct {
@@ -529,12 +562,13 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.clearAttempts(r)
-	s.createSession(w, r)
+	session := s.createSession(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
 		"version":       s.version,
 		"config":        publicConfig(s.cfg),
+		"csrf":          session.CSRF,
 	})
 }
 
@@ -543,8 +577,9 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.allowAttempt(r) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts"})
+	if allowed, retry := s.allowAttempt(r); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
 	}
 	var body struct {
@@ -575,12 +610,13 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.clearAttempts(r)
-	s.createSession(w, r)
+	session := s.createSession(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
 		"version":       s.version,
 		"config":        publicConfig(s.cfg),
+		"csrf":          session.CSRF,
 	})
 }
 
@@ -591,7 +627,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		s.mu.Lock()
-		delete(s.sessions, cookie.Value)
+		delete(s.sessions, sessionKey(cookie.Value))
 		s.mu.Unlock()
 		s.persistSessions()
 	}
@@ -608,6 +644,7 @@ func (s *Server) authSessions(w http.ResponseWriter, r *http.Request) {
 	s.pruneSessionsLocked(time.Now())
 	out := make([]Session, 0, len(s.sessions))
 	for _, session := range s.sessions {
+		session.CSRF = ""
 		out = append(out, session)
 	}
 	s.mu.Unlock()
@@ -1439,13 +1476,18 @@ func (s *Server) browserAction(action string) http.HandlerFunc {
 			err = s.browser.ResetSession(ctx)
 		}
 		if err != nil {
+			operation := s.browser.Status().Operation
 			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error":       err.Error(),
-				"success":     false,
-				"action":      action,
-				"browser":     s.browser.Status(),
-				"browser_log": labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 80),
-				"core_log":    labeledTail("core", config.LogFilePath(s.cfg.Path), 40),
+				"error":        err.Error(),
+				"success":      false,
+				"action":       action,
+				"browser":      s.browser.Status(),
+				"browser_log":  labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 80),
+				"core_log":     labeledTail("core", config.LogFilePath(s.cfg.Path), 40),
+				"operation_id": operation.ID,
+				"status":       operation.State,
+				"message":      err.Error(),
+				"next_action":  "inspect_browser_logs",
 			})
 			return
 		}
@@ -1468,8 +1510,25 @@ func (s *Server) browserAction(action string) http.HandlerFunc {
 			}
 		}
 		status := s.browser.Status()
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "action": action, "browser": status})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true, "action": action, "browser": status,
+			"operation_id": status.Operation.ID, "status": status.Operation.State,
+			"message": "browser action completed", "next_action": "none",
+		})
 	}
+}
+
+func (s *Server) browserOperations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	browser, ok := s.browser.(operationBrowser)
+	if !ok {
+		writeJSON(w, http.StatusOK, []supervisor.Operation{})
+		return
+	}
+	writeJSON(w, http.StatusOK, browser.Operations())
 }
 
 func shouldVerifyBrowserRunning(action string) bool {
@@ -2022,8 +2081,17 @@ func runMQTTTest(body mqttTestRequest, emit func(map[string]any)) map[string]any
 		keepAlive = 60 * time.Second
 	}
 	retained := !body.ForceDisableRetain
-	client := &mqttclient.Client{URL: body.URL, ClientID: clientID, Username: body.Username, Password: body.Password, Version: body.Version, Timeout: 5 * time.Second, KeepAlive: keepAlive}
-	event("validate", "ok", "Settings accepted", map[string]any{"broker": body.URL, "version": body.Version, "base_topic": baseTopic, "node": node, "client_id": clientID, "discovery_prefix": discovery, "root": root, "keepalive_seconds": int(keepAlive / time.Second), "retain": retained})
+	rejectUnauthorized := true
+	if body.RejectUnauthorized != nil {
+		rejectUnauthorized = *body.RejectUnauthorized
+	}
+	client := &mqttclient.Client{
+		URL: body.URL, ClientID: clientID, Username: body.Username, Password: body.Password,
+		Version: body.Version, Timeout: 5 * time.Second, KeepAlive: keepAlive,
+		CAFile: body.CAFile, CertFile: body.CertFile, KeyFile: body.KeyFile, ServerName: body.ServerName,
+		InsecureSkipVerify: !rejectUnauthorized, MaxPacketBytes: body.MaxPacketBytes,
+	}
+	event("validate", "ok", "Settings accepted", map[string]any{"broker": body.URL, "version": body.Version, "base_topic": baseTopic, "node": node, "client_id": clientID, "discovery_prefix": discovery, "root": root, "keepalive_seconds": int(keepAlive / time.Second), "retain": retained, "verify_certificate": rejectUnauthorized})
 	event("connect", "running", "Opening MQTT connection and waiting for CONNACK", map[string]any{"broker": body.URL, "client_id": clientID})
 	if err := client.Connect(); err != nil {
 		_ = client.Close()
@@ -2461,9 +2529,15 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 			return
 		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.validToken(r) && !sameOrigin(r) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
-			return
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.validToken(r) {
+			if !sameOrigin(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected", "code": "origin_rejected"})
+				return
+			}
+			if !s.validCSRF(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "session verification failed; reload the Admin UI", "code": "csrf_rejected"})
+				return
+			}
 		}
 		next(w, r)
 	}
@@ -2479,7 +2553,8 @@ func (s *Server) authenticated(r *http.Request) bool {
 	}
 	s.mu.Lock()
 	s.pruneSessionsLocked(time.Now())
-	session, ok := s.sessions[cookie.Value]
+	key := sessionKey(cookie.Value)
+	session, ok := s.sessions[key]
 	persist := false
 	if ok {
 		now := time.Now()
@@ -2489,7 +2564,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 			persist = true
 		}
 		session.LastSeen = now
-		s.sessions[cookie.Value] = session
+		s.sessions[key] = session
 	}
 	s.mu.Unlock()
 	if persist {
@@ -2509,10 +2584,12 @@ func (s *Server) validToken(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Snapshot().Admin.Token)) == 1
 }
 
-func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
-	id := randomID(32)
+func (s *Server) createSession(w http.ResponseWriter, r *http.Request) Session {
+	token := randomID(32)
+	key := sessionKey(token)
 	session := Session{
-		ID:        id,
+		ID:        sessionFingerprint(key),
+		CSRF:      randomID(24),
 		Created:   time.Now(),
 		LastSeen:  time.Now(),
 		Remote:    remoteIP(r),
@@ -2520,7 +2597,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.pruneSessionsLocked(time.Now())
-	s.sessions[id] = session
+	s.sessions[key] = session
 	for len(s.sessions) > 32 {
 		var oldestID string
 		var oldest time.Time
@@ -2536,16 +2613,17 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	s.persistSessions()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    id,
+		Value:    token,
 		Path:     "/",
 		MaxAge:   int((7 * 24 * time.Hour).Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		Secure:   requestIsHTTPS(r),
 	})
+	return session
 }
 
-func (s *Server) allowAttempt(r *http.Request) bool {
+func (s *Server) allowAttempt(r *http.Request) (bool, time.Duration) {
 	key := remoteIP(r)
 	cutoff := time.Now().Add(-5 * time.Minute)
 	s.mu.Lock()
@@ -2557,7 +2635,54 @@ func (s *Server) allowAttempt(r *http.Request) bool {
 		}
 	}
 	s.attempts[key] = kept
-	return len(kept) < 8
+	if len(kept) < 8 {
+		return true, 0
+	}
+	retry := time.Until(kept[0].Add(5 * time.Minute))
+	if retry < time.Second {
+		retry = time.Second
+	}
+	return false, retry
+}
+
+func sessionKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func sessionFingerprint(key string) string {
+	if len(key) > 12 {
+		return key[:12]
+	}
+	return key
+}
+
+func isSessionHash(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func (s *Server) sessionCSRF(r *http.Request) string {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return ""
+	}
+	s.mu.Lock()
+	session, ok := s.sessions[sessionKey(cookie.Value)]
+	s.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	return session.CSRF
+}
+
+func (s *Server) validCSRF(r *http.Request) bool {
+	want := s.sessionCSRF(r)
+	got := strings.TrimSpace(r.Header.Get("X-KioskMate-CSRF"))
+	return want != "" && got != "" && subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }
 
 func (s *Server) recordFailedAttempt(r *http.Request) {

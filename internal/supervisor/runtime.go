@@ -65,15 +65,23 @@ type ManualOverride struct {
 }
 
 type runtimeState struct {
+	RecoveryRuns []time.Time       `json:"recovery_runs,omitempty"`
 	StartCount   int               `json:"start_count"`
 	RestartCount int               `json:"restart_count"`
 	Recovery     RecoveryStatus    `json:"recovery"`
 	Override     ManualOverride    `json:"override"`
 	Telemetry    []TelemetrySample `json:"telemetry"`
+	Operations   []Operation       `json:"operations,omitempty"`
 }
 
 func (b *Browser) Recover(ctx context.Context, reason string) error {
-	return b.recover(ctx, reason, false)
+	return b.operate(ctx, "recover", func() error {
+		b.mu.Lock()
+		b.manuallyStopped = false
+		b.cancelRecoveryLocked()
+		b.mu.Unlock()
+		return b.recover(ctx, reason, false)
+	})
 }
 
 func (b *Browser) setStartFailureLocked(err error) {
@@ -89,6 +97,10 @@ func (b *Browser) setStartFailureLocked(err error) {
 func (b *Browser) recover(ctx context.Context, reason string, forceRestart bool) error {
 	now := time.Now()
 	b.mu.Lock()
+	if b.manuallyStopped {
+		b.mu.Unlock()
+		return fmt.Errorf("browser was stopped manually")
+	}
 	if b.authGuard.Tripped {
 		err := fmt.Errorf("authentication guard is active: %s", b.authGuard.Reason)
 		b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: err.Error(), LastAt: &now}
@@ -101,6 +113,22 @@ func (b *Browser) recover(ctx context.Context, reason string, forceRestart bool)
 		b.mu.Unlock()
 		return fmt.Errorf("automatic recovery is in backoff until %s", until.Format(time.RFC3339))
 	}
+	cutoff := now.Add(-time.Hour)
+	runs := b.recoveryRuns[:0]
+	for _, at := range b.recoveryRuns {
+		if at.After(cutoff) {
+			runs = append(runs, at)
+		}
+	}
+	b.recoveryRuns = runs
+	if len(runs) >= 6 {
+		until := runs[0].Add(time.Hour)
+		b.recovery.State, b.recovery.Stage, b.recovery.BackoffUntil = "backoff", "restart_budget", &until
+		b.mu.Unlock()
+		b.persistRuntimeState()
+		return fmt.Errorf("automatic recovery budget exhausted until %s", until.Format(time.RFC3339))
+	}
+	b.recoveryRuns = append(b.recoveryRuns, now)
 	running := b.cmd != nil && b.cmd.Process != nil
 	b.recovery.State = "recovering"
 	b.recovery.Stage = "reload"
@@ -121,9 +149,9 @@ func (b *Browser) recover(ctx context.Context, reason string, forceRestart bool)
 	b.mu.Unlock()
 	var err error
 	if running {
-		err = b.Restart(ctx)
+		err = b.restart(ctx)
 	} else {
-		err = b.Start(ctx)
+		err = b.start(ctx)
 	}
 	if err != nil {
 		b.finishRecovery("restart", err.Error(), true)
@@ -172,6 +200,14 @@ func (b *Browser) prepareUnexpectedExitRecoveryLocked(runtime time.Duration, las
 func (b *Browser) scheduleUnexpectedExitRecovery() {
 	b.mu.Lock()
 	until := b.recovery.BackoffUntil
+	if until == nil || b.manuallyStopped || b.authGuard.Tripped {
+		b.mu.Unlock()
+		return
+	}
+	b.cancelRecoveryLocked()
+	epoch := b.recoveryEpoch
+	ctx, cancel := context.WithCancel(context.Background())
+	b.recoveryCancel = cancel
 	b.mu.Unlock()
 	if until == nil {
 		return
@@ -181,13 +217,26 @@ func (b *Browser) scheduleUnexpectedExitRecovery() {
 		delay = 0
 	}
 	go func() {
+		defer cancel()
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
-		<-timer.C
-		time.Sleep(100 * time.Millisecond)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := b.recover(ctx, "unexpected browser exit", true); err != nil {
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return
+		}
+		runCtx, finish := context.WithTimeout(ctx, 30*time.Second)
+		defer finish()
+		err := b.operate(runCtx, "recover", func() error {
+			b.mu.Lock()
+			stale := b.recoveryEpoch != epoch || b.manuallyStopped
+			b.mu.Unlock()
+			if stale {
+				return context.Canceled
+			}
+			return b.recover(runCtx, "unexpected browser exit", true)
+		})
+		if err != nil && ctx.Err() == nil {
 			b.logger.Warn("automatic browser recovery failed", "error", err)
 		}
 	}()
@@ -314,7 +363,11 @@ func (b *Browser) persistRuntimeState() {
 	b.persistMu.Lock()
 	defer b.persistMu.Unlock()
 	b.mu.Lock()
-	state := runtimeState{StartCount: b.startCount, RestartCount: b.restartCount, Recovery: b.recovery, Override: b.override, Telemetry: append([]TelemetrySample(nil), b.telemetry...)}
+	state := runtimeState{
+		RecoveryRuns: append([]time.Time(nil), b.recoveryRuns...), StartCount: b.startCount, RestartCount: b.restartCount,
+		Recovery: b.recovery, Override: b.override, Telemetry: append([]TelemetrySample(nil), b.telemetry...),
+		Operations: append([]Operation(nil), b.operationHistory...),
+	}
 	b.mu.Unlock()
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -343,6 +396,11 @@ func (b *Browser) loadRuntimeState() {
 		return
 	}
 	b.startCount, b.restartCount, b.recovery, b.override = state.StartCount, state.RestartCount, state.Recovery, state.Override
+	b.recoveryRuns = state.RecoveryRuns
+	b.operationHistory = state.Operations
+	if len(b.operationHistory) > 50 {
+		b.operationHistory = b.operationHistory[len(b.operationHistory)-50:]
+	}
 	cutoff := time.Now().Add(-telemetryRetention)
 	for _, sample := range state.Telemetry {
 		if sample.At.After(cutoff) {
@@ -358,7 +416,7 @@ func classifyAuthGuard(reason string) (string, string) {
 	lower := strings.ToLower(reason)
 	switch {
 	case strings.Contains(lower, "403") || strings.Contains(lower, "forbidden") || strings.Contains(lower, "ip ban"):
-		return "ip_ban", "Remove the kiosk IP from Home Assistant ip_bans.yaml, restart Home Assistant, then reset the KioskMate HA session."
+		return "access_denied", "Check Home Assistant and proxy access rules. If HA confirms an IP ban, remove only this kiosk's entry on the HA host and restart HA. Preserve the browser session first."
 	case strings.Contains(lower, "401") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "token"):
 		return "credentials", "Reset the KioskMate HA session and sign in again with valid Home Assistant credentials."
 	default:

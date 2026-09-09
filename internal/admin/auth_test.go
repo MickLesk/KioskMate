@@ -75,12 +75,16 @@ func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T
 		Authenticated bool          `json:"authenticated"`
 		Version       string        `json:"version"`
 		Config        config.Config `json:"config"`
+		CSRF          string        `json:"csrf"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
 	if !body.Authenticated || body.Version != "0.7.2" {
 		t.Fatalf("unexpected bootstrap response: %#v", body)
+	}
+	if body.CSRF == "" {
+		t.Fatal("login response is missing CSRF token")
 	}
 	if body.Config.Admin.PasswordHash != "" || body.Config.MQTT.Password != "" {
 		t.Fatal("login response exposed private credentials")
@@ -95,6 +99,12 @@ func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T
 	if len(cookies) == 0 {
 		t.Fatal("login response did not create an Admin session")
 	}
+	if _, exposed := server.sessions[cookies[0].Value]; exposed {
+		t.Fatal("raw session token was stored as a map key")
+	}
+	if _, ok := server.sessions[sessionKey(cookies[0].Value)]; !ok {
+		t.Fatal("hashed session token was not stored")
+	}
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
 	statusReq.AddCookie(cookies[0])
 	statusRec := httptest.NewRecorder()
@@ -102,11 +112,29 @@ func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T
 	var statusBody struct {
 		Authenticated bool           `json:"authenticated"`
 		Config        *config.Config `json:"config"`
+		CSRF          string         `json:"csrf"`
 	}
 	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusBody); err != nil {
 		t.Fatal(err)
 	}
-	if !statusBody.Authenticated || statusBody.Config == nil || statusBody.Config.Kiosk.ZoomPercent == 0 {
+	if !statusBody.Authenticated || statusBody.Config == nil || statusBody.Config.Kiosk.ZoomPercent == 0 || statusBody.CSRF != body.CSRF {
 		t.Fatalf("session bootstrap is incomplete: %#v", statusBody)
+	}
+
+	protected := server.auth(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	missingReq := httptest.NewRequest(http.MethodPost, "/protected", nil)
+	missingReq.AddCookie(cookies[0])
+	missingRec := httptest.NewRecorder()
+	protected(missingRec, missingReq)
+	if missingRec.Code != http.StatusForbidden {
+		t.Fatalf("mutation without CSRF = %d, want 403", missingRec.Code)
+	}
+	validReq := httptest.NewRequest(http.MethodPost, "/protected", nil)
+	validReq.AddCookie(cookies[0])
+	validReq.Header.Set("X-KioskMate-CSRF", body.CSRF)
+	validRec := httptest.NewRecorder()
+	protected(validRec, validReq)
+	if validRec.Code != http.StatusNoContent {
+		t.Fatalf("mutation with CSRF = %d, want 204", validRec.Code)
 	}
 }

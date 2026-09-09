@@ -1,6 +1,17 @@
 package mqttclient
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
+
+func TestReadPacketRejectsOversizedPayloadBeforeAllocation(t *testing.T) {
+	_, _, err := readPacketLimit(bytes.NewReader([]byte{0x30, 0x7f}), 16)
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("unexpected packet limit error: %v", err)
+	}
+}
 
 func TestConnectPayloadMQTT5IncludesProperties(t *testing.T) {
 	payload := connectPayload("kioskmate", "", "", 30, "5.0", nil)
