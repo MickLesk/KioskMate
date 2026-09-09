@@ -87,7 +87,8 @@
         kioskSelectedPageIndex: null,
         pageWizard: null,
         actionLog: [],
-		operations: [],
+        operations: [],
+        events: [],
         logs: [],
         logSource: localStorage.getItem("kioskmate.logSource") || "combined",
         logFilter: localStorage.getItem("kioskmate.logFilter") || "",
@@ -456,14 +457,15 @@
 		  getJSON("/api/time"), getJSON("/api/time/zones"), getJSON("/api/jobs?limit=25"),
 		  getJSON("/api/update/history"),
 		  getJSON("/api/browser/operations"),
+		  getJSON("/api/events?limit=200"),
 		]);
 		const value = (index) => requests[index].status === "fulfilled" ? requests[index].value : undefined;
-		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6), operations: value(7) });
+		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6), operations: value(7), events: value(8) });
 		const failed = requests.filter((item) => item.status === "rejected");
 		if (failed.length === requests.length) throw failed[0].reason;
       }
 
-	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations }) {
+	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -480,6 +482,7 @@
 		if (jobs) state.jobs = jobs.jobs || [];
 		if (updateHistory) state.updateHistory = updateHistory;
 		if (operations) state.operations = operations;
+		if (events) state.events = events.events || [];
 		syncThemeFromConfig();
 	  }
 
@@ -1304,6 +1307,7 @@
           ["combined", t("logCombined")],
           ["core", t("logCore")],
           ["browser", t("logBrowser")],
+          ["events", t("logEvents")],
           ["journal", t("logJournal")],
           ["status", t("logStatus")],
           ["paths", t("logPaths")],
@@ -2688,12 +2692,24 @@
       async function refreshLogs() {
         await runAction("logs-refresh", async () => {
           const source = state.logSource || "combined";
-          const result = await getJSON("/api/logs?source=" + encodeURIComponent(source) + "&lines=" + encodeURIComponent(val("log-lines") || "300"));
-          state.logs = result.lines || [];
+          const result = source === "events"
+            ? await getJSON("/api/events?limit=" + encodeURIComponent(val("log-lines") || "300"))
+            : await getJSON("/api/logs?source=" + encodeURIComponent(source) + "&lines=" + encodeURIComponent(val("log-lines") || "300"));
+          state.logs = source === "events" ? formatEvents(result.events || []) : (result.lines || []);
           state.logSource = result.source || source;
           state.logWarning = result.warning || "";
           renderApp();
         }, t("refreshLogs"));
+      }
+
+      function formatEvents(events) {
+        return events.slice().reverse().map((event) => {
+          const at = event.at ? new Date(event.at).toLocaleString() : "-";
+          const action = [event.component, event.action].filter(Boolean).join("/");
+          const duration = event.duration_ms ? ` (${event.duration_ms} ms)` : "";
+          const details = Object.entries(event.details || {}).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join(", ");
+          return `[${at}] ${action || "runtime"} ${event.status || "info"}${duration}: ${event.message || ""}${details ? ` [${details}]` : ""}`;
+        });
       }
 
       function filteredLogs() {

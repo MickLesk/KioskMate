@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 )
 
 type Service struct {
@@ -19,6 +20,7 @@ type Service struct {
 	mu         sync.Mutex
 	jobs       map[string]*Job
 	credential *Credential
+	journal    *events.Journal
 }
 
 type Job struct {
@@ -44,6 +46,12 @@ const privilegeTTL = 15 * time.Minute
 
 func New(cfg *config.Config) *Service {
 	return &Service{cfg: cfg, jobs: map[string]*Job{}}
+}
+
+func (s *Service) SetEventJournal(journal *events.Journal) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.journal = journal
 }
 
 func (s *Service) Start(ctx context.Context, name string) (*Job, error) {
@@ -93,9 +101,12 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 	s.pruneJobsLocked(100)
 	s.mu.Unlock()
 	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), actionTimeout(name))
+	s.mu.Lock()
+	journal := s.journal
+	s.mu.Unlock()
 	go func() {
 		defer cancel()
-		run(jobCtx, job, command, args, input)
+		run(jobCtx, job, command, args, input, journal)
 	}()
 	return job, nil
 }
@@ -148,9 +159,12 @@ func (s *Service) startCommand(ctx context.Context, name string, command string,
 	s.pruneJobsLocked(100)
 	s.mu.Unlock()
 	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	s.mu.Lock()
+	journal := s.journal
+	s.mu.Unlock()
 	go func() {
 		defer cancel()
-		run(jobCtx, job, command, args, input)
+		run(jobCtx, job, command, args, input, journal)
 	}()
 	return job
 }
@@ -345,8 +359,18 @@ func suPasswordCommand(command string, args []string, password string) (string, 
 	return "su", []string{"-", "root", "-c", line}, password + "\n"
 }
 
-func run(ctx context.Context, job *Job, command string, args []string, input string) {
-	defer job.finishDefault(1)
+func run(ctx context.Context, job *Job, command string, args []string, input string, journal *events.Journal) {
+	defer func() {
+		job.finishDefault(1)
+		if journal != nil {
+			result := job.snapshot()
+			status := "error"
+			if result.ExitCode == 0 {
+				status = "ok"
+			}
+			journal.RecordDuration("system", result.Name, status, "maintenance job completed", time.Since(result.Started), map[string]string{"job_id": result.ID, "exit_code": fmt.Sprint(result.ExitCode)})
+		}
+	}()
 	job.append(command + " " + strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = append(os.Environ(),

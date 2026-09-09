@@ -446,6 +446,10 @@ func BrowserLogFilePath(path string) string {
 	return filepath.Join(ConfigDir(path), "logs", "browser.log")
 }
 
+func EventJournalPath(path string) string {
+	return filepath.Join(ConfigDir(path), "events.jsonl")
+}
+
 func defaults(path string) Config {
 	return Config{
 		mu:      &sync.RWMutex{},

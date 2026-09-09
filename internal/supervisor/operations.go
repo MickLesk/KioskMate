@@ -46,7 +46,16 @@ func (b *Browser) operate(ctx context.Context, action string, run func() error) 
 	if len(b.operationHistory) > 50 {
 		b.operationHistory = b.operationHistory[len(b.operationHistory)-50:]
 	}
+	operation := b.operation
+	journal := b.journal
 	b.mu.Unlock()
+	if journal != nil {
+		status, message := operation.State, operation.State
+		if err != nil {
+			message = err.Error()
+		}
+		journal.RecordDuration("browser", operation.Action, status, message, now.Sub(operation.Started), map[string]string{"operation_id": operation.ID})
+	}
 	b.persistRuntimeState()
 	return err
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
@@ -52,6 +53,7 @@ type MQTTService struct {
 	updater          *updater.Service
 	actions          *actions.Service
 	logger           *slog.Logger
+	journal          *events.Journal
 	version          string
 	client           *mqttclient.Client
 	command          *mqttclient.Client
@@ -103,9 +105,13 @@ type pageHealth struct {
 	Checked      time.Time
 }
 
-func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
+func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger, journals ...*events.Journal) *MQTTService {
 	_ = cfg.Snapshot()
-	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled", overrideDuration: time.Hour}
+	var journal *events.Journal
+	if len(journals) > 0 {
+		journal = journals[0]
+	}
+	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, journal: journal, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled", overrideDuration: time.Hour}
 }
 
 func (s *MQTTService) ConnectionStatus() MQTTConnectionStatus {
@@ -130,7 +136,7 @@ func (s *MQTTService) ConnectionStatus() MQTTConnectionStatus {
 
 func (s *MQTTService) setConnectionResult(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousState, previousError := s.state, s.lastError
 	if err == nil {
 		now := time.Now()
 		if s.state != "connected" {
@@ -140,25 +146,39 @@ func (s *MQTTService) setConnectionResult(err error) {
 		s.lastPublished = now
 		s.lastError = ""
 		s.failures = 0
-		return
-	}
-	s.lastError = err.Error()
-	s.failures++
-	if strings.Contains(strings.ToLower(err.Error()), "not authorized") || strings.Contains(err.Error(), "0x87") {
-		s.state = "auth_error"
 	} else {
-		s.state = "error"
+		s.lastError = err.Error()
+		s.failures++
+		if strings.Contains(strings.ToLower(err.Error()), "not authorized") || strings.Contains(err.Error(), "0x87") {
+			s.state = "auth_error"
+		} else {
+			s.state = "error"
+		}
+	}
+	state, message, journal := s.state, s.lastError, s.journal
+	s.mu.Unlock()
+	if journal != nil && (state != previousState || message != previousError) {
+		status := "ok"
+		if err != nil {
+			status = "error"
+		}
+		journal.Record("mqtt", "connection", status, firstNonEmpty(message, "connected"), map[string]string{"state": state})
 	}
 }
 
 func (s *MQTTService) setConnectionState(state string) {
 	s.mu.Lock()
+	previous := s.state
 	s.state = state
 	if state == "disabled" {
 		s.lastError = ""
 		s.failures = 0
 	}
+	journal := s.journal
 	s.mu.Unlock()
+	if journal != nil && previous != state {
+		journal.Record("mqtt", "state", "info", "connection state changed", map[string]string{"state": state})
+	}
 }
 
 func (s *MQTTService) PublishNow() error {
@@ -445,6 +465,7 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			s.logger.Warn("mqtt page trigger failed", "topic", topic, "page", page, "error", err)
 		}
 		s.publishCommandResult(topic, command, err)
+		s.recordCommand(topic, err)
 		return
 	} else if topicIsTrigger {
 		// Topic matches a configured page trigger, but the payload does not
@@ -686,6 +707,31 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		s.logger.Warn("mqtt command failed", "command", command, "error", err)
 	}
 	s.publishCommandResult(topic, command, err)
+	s.recordCommand(topic, err)
+}
+
+func (s *MQTTService) recordCommand(topic string, err error) {
+	s.mu.Lock()
+	journal := s.journal
+	s.mu.Unlock()
+	if journal == nil {
+		return
+	}
+	status := "ok"
+	message := "MQTT command completed"
+	if err != nil {
+		status = "error"
+		message = "MQTT command failed"
+	}
+	journal.Record("mqtt", "command", status, message, map[string]string{"topic": compactTopic(topic)})
+}
+
+func compactTopic(topic string) string {
+	parts := strings.Split(strings.Trim(topic, "/"), "/")
+	if len(parts) > 3 {
+		parts = parts[len(parts)-3:]
+	}
+	return strings.Join(parts, "/")
 }
 
 // triggeredPage checks whether topic/payload matches a configured MQTT page
@@ -1555,6 +1601,10 @@ func (s *MQTTService) unsupportedDiscoveryObjects(support hardware.Support) map[
 	unsupported := map[string]bool{}
 	if !support.DisplayStatus {
 		unsupported["display_power"] = true
+	}
+	// A Home Assistant light entity must expose a real brightness command. A
+	// display power switch remains useful when only DPMS/power is available.
+	if !support.DisplayStatus || !support.DisplayBrightness {
 		unsupported["display"] = true
 	}
 	if !support.AudioVolume {
@@ -1565,6 +1615,18 @@ func (s *MQTTService) unsupportedDiscoveryObjects(support hardware.Support) map[
 	}
 	if !support.KeyboardVisibility {
 		unsupported["keyboard"] = true
+	}
+	if !support.BatteryLevel {
+		unsupported["battery_level"] = true
+	}
+	if !support.IlluminanceLevel {
+		unsupported["illuminance_level"] = true
+	}
+	if !support.PackageUpgrades {
+		unsupported["package_upgrades"] = true
+	}
+	if !support.ProcessorTemperature {
+		unsupported["processor_temperature"] = true
 	}
 	return unsupported
 }

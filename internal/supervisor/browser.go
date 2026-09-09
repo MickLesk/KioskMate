@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/logutil"
 	"github.com/MickLesk/KioskMate/internal/system"
 )
@@ -29,6 +30,7 @@ type displayPowerControl interface {
 type Browser struct {
 	cfg              *config.Config
 	logger           *slog.Logger
+	journal          *events.Journal
 	display          displayPowerControl
 	persistMu        sync.Mutex
 	operationOnce    sync.Once
@@ -162,6 +164,14 @@ func (b *Browser) SetDisplayPower(control displayPowerControl) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.display = control
+}
+
+// SetEventJournal attaches the shared runtime journal after construction. The
+// setter keeps Browser tests and lightweight embedders free from filesystem I/O.
+func (b *Browser) SetEventJournal(journal *events.Journal) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.journal = journal
 }
 
 func (b *Browser) NoteDisplayPower(power string) {
@@ -1319,6 +1329,7 @@ func (b *Browser) tripAuthGuard(reason string) {
 	now := time.Now()
 	kind, action := classifyAuthGuard(reason)
 	running := b.cmd != nil && b.cmd.Process != nil
+	journal := b.journal
 	b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, Kind: kind, SuggestedAction: action, KioskIP: localKioskIP(), At: &now}
 	b.cancelRecoveryLocked()
 	b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: action, LastAt: &now}
@@ -1326,6 +1337,9 @@ func (b *Browser) tripAuthGuard(reason string) {
 	b.mu.Unlock()
 	b.persistAuthGuard()
 	b.logger.Error("Home Assistant authentication guard tripped", "reason", reason)
+	if journal != nil {
+		journal.Record("home_assistant", "auth_guard", "blocked", reason, map[string]string{"kind": kind, "suggested_action": action})
+	}
 	if running {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

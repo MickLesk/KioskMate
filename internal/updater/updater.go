@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 )
 
 type Service struct {
@@ -32,6 +33,7 @@ type Service struct {
 	status     ReleaseInfo
 	installing bool
 	history    []HistoryEntry
+	journal    *events.Journal
 }
 
 type PrivilegeProvider interface {
@@ -107,6 +109,12 @@ func New(cfg *config.Config, version string, privilege ...PrivilegeProvider) *Se
 	return service.loadHistory()
 }
 
+func (s *Service) SetEventJournal(journal *events.Journal) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.journal = journal
+}
+
 func (s *Service) Check(ctx context.Context) (ReleaseInfo, error) {
 	s.checkMu.Lock()
 	defer s.checkMu.Unlock()
@@ -114,6 +122,7 @@ func (s *Service) Check(ctx context.Context) (ReleaseInfo, error) {
 	release, err := s.latest(ctx)
 	if err != nil {
 		s.storeCheck(ReleaseInfo{CurrentVersion: s.version, Error: err.Error()}, err)
+		s.recordEvent("check", "error", "update check failed")
 		return ReleaseInfo{}, err
 	}
 	asset := selectAsset(release.Assets)
@@ -128,6 +137,11 @@ func (s *Service) Check(ctx context.Context) (ReleaseInfo, error) {
 		Supported:       runtime.GOOS == "linux" && asset.URL != "",
 	}
 	s.storeCheck(info, nil)
+	status := "up_to_date"
+	if info.UpdateAvailable {
+		status = "available"
+	}
+	s.recordEvent("check", "ok", "update check completed", map[string]string{"state": status, "version": info.LatestVersion})
 	return s.Status(), nil
 }
 
@@ -371,12 +385,37 @@ func (s *Service) applyRelease(ctx context.Context, job *Job, privilege privileg
 
 func (s *Service) finishInstallJob(job *Job) {
 	job.finishDefault(1)
+	result := job.snapshot()
+	s.mu.Lock()
+	journal := s.journal
+	s.mu.Unlock()
+	if journal != nil {
+		status := "error"
+		if result.ExitCode == 0 {
+			status = "ok"
+		}
+		journal.RecordDuration("update", result.Name, status, "update job completed", time.Since(result.Started), map[string]string{"job_id": result.ID, "stage": result.Stage, "exit_code": fmt.Sprint(result.ExitCode)})
+	}
 	if job.snapshot().Stage == "restarting" {
 		return
 	}
 	s.mu.Lock()
 	s.installing = false
 	s.mu.Unlock()
+}
+
+func (s *Service) recordEvent(action, status, message string, details ...map[string]string) {
+	s.mu.Lock()
+	journal := s.journal
+	s.mu.Unlock()
+	if journal == nil {
+		return
+	}
+	var values map[string]string
+	if len(details) > 0 {
+		values = details[0]
+	}
+	journal.Record("update", action, status, message, values)
 }
 
 func (s *Service) restartServiceAfterUpdate(job *Job) {

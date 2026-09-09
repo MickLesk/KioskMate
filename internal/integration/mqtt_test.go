@@ -170,6 +170,25 @@ func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
 	}
 }
 
+func TestUnsupportedDiscoveryObjectsFollowHardwareCapabilities(t *testing.T) {
+	service := NewMQTTService(mqttTestConfig(t), &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	unsupported := service.unsupportedDiscoveryObjects(hardware.Support{DisplayStatus: true})
+
+	for _, object := range []string{"display", "volume", "microphone", "keyboard", "battery_level", "illuminance_level", "package_upgrades", "processor_temperature"} {
+		if !unsupported[object] {
+			t.Fatalf("unsupported object %q was not marked for cleanup", object)
+		}
+	}
+	if unsupported["display_power"] {
+		t.Fatal("display power switch was removed although display power is supported")
+	}
+
+	unsupported = service.unsupportedDiscoveryObjects(hardware.Support{DisplayStatus: true, DisplayBrightness: true})
+	if unsupported["display"] {
+		t.Fatal("display light was removed although power and brightness are supported")
+	}
+}
+
 func TestMQTTDiscoveryIncludesUpdaterDiagnostics(t *testing.T) {
 	cfg := mqttTestConfig(t)
 	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))

@@ -31,6 +31,7 @@ import (
 
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/integration"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
@@ -89,6 +90,7 @@ type Server struct {
 	hardware *hardware.Service
 	logger   *slog.Logger
 	version  string
+	journal  *events.Journal
 	ready    chan struct{}
 	mu       sync.Mutex
 	sessions map[string]Session
@@ -131,8 +133,12 @@ type mqttTestRequest struct {
 	MaxPacketBytes     int    `json:"maximum_packet_size"`
 }
 
-func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger) *Server {
-	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, ready: make(chan struct{}), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
+func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger, journals ...*events.Journal) *Server {
+	var journal *events.Journal
+	if len(journals) > 0 {
+		journal = journals[0]
+	}
+	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, journal: journal, ready: make(chan struct{}), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
 	s.loadSessions()
 	return s
 }
@@ -227,6 +233,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/time", s.auth(s.timeStatus))
 	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
+	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
 	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
 	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
 	mux.HandleFunc("/api/terminal/run", s.auth(s.terminalRun))
@@ -359,9 +366,11 @@ func (s *Server) privilege(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		s.audit("privilege_activate", "ok", "privilege session activated", map[string]string{"mode": body.Mode})
 		writeJSON(w, http.StatusOK, s.actions.PrivilegeStatus())
 	case http.MethodDelete:
 		s.actions.ClearPrivilege()
+		s.audit("privilege_clear", "ok", "privilege session cleared", nil)
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -520,6 +529,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if allowed, retry := s.allowAttempt(r); !allowed {
+		s.audit("setup", "rate_limited", "setup rate limit reached", map[string]string{"remote": remoteIP(r)})
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
@@ -534,6 +544,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Snapshot().Admin.Token)) != 1 {
 		s.recordFailedAttempt(r)
+		s.audit("setup", "failed", "invalid setup token", map[string]string{"remote": remoteIP(r)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid setup token"})
 		return
 	}
@@ -565,6 +576,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	session := s.createSession(w, r)
+	s.audit("setup", "ok", "admin setup completed", map[string]string{"remote": remoteIP(r)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
@@ -580,6 +592,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if allowed, retry := s.allowAttempt(r); !allowed {
+		s.audit("login", "rate_limited", "login rate limit reached", map[string]string{"remote": remoteIP(r)})
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
@@ -600,6 +613,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		s.recordFailedAttempt(r)
+		s.audit("login", "failed", "invalid admin credentials", map[string]string{"remote": remoteIP(r)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -613,6 +627,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	session := s.createSession(w, r)
+	s.audit("login", "ok", "admin session created", map[string]string{"remote": remoteIP(r)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
@@ -634,6 +649,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 		s.persistSessions()
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	s.audit("logout", "ok", "admin session ended", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -662,6 +678,7 @@ func (s *Server) authLogoutAll(w http.ResponseWriter, r *http.Request) {
 	s.sessions = map[string]Session{}
 	s.mu.Unlock()
 	s.persistSessions()
+	s.audit("logout_all", "ok", "all admin sessions ended", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -704,6 +721,7 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 	s.sessions = map[string]Session{}
 	s.mu.Unlock()
 	s.persistSessions()
+	s.audit("password_change", "ok", "admin password changed", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -837,6 +855,33 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) eventJournal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 && value <= 500 {
+			limit = value
+		}
+	}
+	result := map[string]any{"events": []events.Event{}, "limit": limit}
+	if s.journal != nil {
+		result["events"] = s.journal.Recent(limit)
+		result["path"] = s.journal.Path()
+	} else {
+		result["warning"] = "event journal unavailable"
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) audit(action, status, message string, details map[string]string) {
+	if s.journal != nil {
+		s.journal.Record("admin", action, status, message, details)
+	}
+}
+
 func (s *Server) logsDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -874,6 +919,7 @@ func (s *Server) diagnosticsExport(w http.ResponseWriter, r *http.Request) {
 	addZipText(zw, "logs.combined.txt", strings.Join(s.combinedLogs(ctx, 1500), "\n"))
 	addZipText(zw, "logs.core.txt", strings.Join(labeledTail("core", config.LogFilePath(s.cfg.Path), 1500), "\n"))
 	addZipText(zw, "logs.browser.txt", strings.Join(labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 1500), "\n"))
+	addZipText(zw, "events.txt", strings.Join(s.eventLines(500), "\n"))
 	if err := zw.Close(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -884,13 +930,15 @@ func (s *Server) diagnosticsExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logLines(ctx context.Context, source string, limit int) map[string]any {
-	sources := []string{"combined", "core", "browser", "journal", "status", "paths"}
+	sources := []string{"combined", "core", "browser", "events", "journal", "status", "paths"}
 	result := map[string]any{"source": source, "sources": sources}
 	switch source {
 	case "core":
 		result["lines"] = labeledTail("core", config.LogFilePath(s.cfg.Path), limit)
 	case "browser":
 		result["lines"] = labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), limit)
+	case "events":
+		result["lines"] = s.eventLines(limit)
 	case "journal":
 		lines, warning := s.journalLines(ctx, limit)
 		result["lines"] = lines
@@ -908,10 +956,43 @@ func (s *Server) logLines(ctx context.Context, source string, limit int) map[str
 	return result
 }
 
+func (s *Server) eventLines(limit int) []string {
+	if s.journal == nil {
+		return []string{"event journal unavailable"}
+	}
+	items := s.journal.Recent(limit)
+	lines := make([]string, 0, len(items))
+	for index := len(items) - 1; index >= 0; index-- {
+		event := items[index]
+		line := fmt.Sprintf("[%s] %s/%s %s", event.At.Local().Format("2006-01-02 15:04:05"), event.Component, event.Action, event.Status)
+		if event.Duration > 0 {
+			line += fmt.Sprintf(" (%d ms)", event.Duration)
+		}
+		if event.Message != "" {
+			line += ": " + event.Message
+		}
+		if len(event.Details) > 0 {
+			parts := make([]string, 0, len(event.Details))
+			for key, value := range event.Details {
+				parts = append(parts, key+"="+value)
+			}
+			sort.Strings(parts)
+			line += " [" + strings.Join(parts, ", ") + "]"
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return []string{"(event journal empty)"}
+	}
+	return lines
+}
+
 func (s *Server) combinedLogs(ctx context.Context, limit int) []string {
 	var lines []string
 	lines = append(lines, labeledTail("core", config.LogFilePath(s.cfg.Path), limit/2)...)
 	lines = append(lines, labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), limit/2)...)
+	lines = append(lines, sectionHeader("kioskmate events")...)
+	lines = append(lines, s.eventLines(max(20, limit/4))...)
 	if journal, warning := s.journalLines(ctx, max(40, limit/4)); len(journal) > 0 {
 		lines = append(lines, sectionHeader("journal")...)
 		lines = append(lines, journal...)
@@ -971,6 +1052,7 @@ func (s *Server) logPathLines() []string {
 		"== paths ==",
 		"Core log: " + config.LogFilePath(s.cfg.Path),
 		"Browser log: " + config.BrowserLogFilePath(s.cfg.Path),
+		"Event journal: " + config.EventJournalPath(s.cfg.Path),
 		"Config: " + s.cfg.Path,
 		"Config backup: " + s.cfg.Path + ".bak",
 		"Tip: run `kioskmate --admin-info` on the kiosk for full recovery paths.",
@@ -1148,6 +1230,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		s.audit("config_save", "ok", "configuration saved", nil)
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1188,6 +1271,7 @@ func (s *Server) configImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.audit("config_import", "ok", "configuration imported", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -1216,6 +1300,7 @@ func (s *Server) repair(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		s.audit("repair", "ok", "configuration repair completed", nil)
 		writeJSON(w, http.StatusOK, report)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1259,6 +1344,7 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.audit("config_restore", "ok", "configuration backup restored", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 

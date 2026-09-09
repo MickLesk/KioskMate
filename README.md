@@ -197,10 +197,12 @@ For multi-dashboard setups, enable **Kiosk -> Display and rendering -> Advanced 
 
 ## Diagnostics
 
-The Logs page can show core logs, browser logs, systemd journal, service status and paths. Use:
+The Logs page can show core logs, browser logs, the structured KioskMate event journal, systemd journal, service status and paths. Use:
 
 - **Download logs** for a plain-text log export.
 - **Diagnostic bundle** for a ZIP containing redacted config, runtime status and logs.
+
+The event journal is stored at `~/.config/kioskmate/events.jsonl`. It is bounded and rotated automatically. It records browser operations, Home Assistant authentication guards, MQTT connection/command state, admin security actions and maintenance/update jobs without storing passwords or MQTT payloads.
 
 ## Packaging
 
