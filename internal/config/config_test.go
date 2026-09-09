@@ -34,6 +34,22 @@ func TestNormalizeV3EnablesSchedulerForTimeRules(t *testing.T) {
 	}
 }
 
+func TestValidateMQTTTransportSettings(t *testing.T) {
+	cfg := &Config{MQTT: MQTTConfig{Enabled: true, URL: "http://broker.local:1883", MaxPacketBytes: 1 << 20}}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("insecure HTTP MQTT URL was accepted")
+	}
+	cfg.MQTT.URL = "mqtts://broker.local:8883"
+	cfg.MQTT.CertFile = "/tmp/client.crt"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("unpaired MQTT client certificate was accepted")
+	}
+	cfg.MQTT.KeyFile = "/tmp/client.key"
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadCreatesKioskMateConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -368,6 +369,28 @@ func (cfg *Config) Replace(next *Config) error {
 	cfg.mu = mu
 	cfg.changeCh = changeCh
 	cfg.notifyChangedLocked()
+	return nil
+}
+
+// Validate checks values that would otherwise fail later in a worker goroutine.
+// It intentionally does not reject legacy pages or optional hardware features.
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return errors.New("config is nil")
+	}
+	mqtt := cfg.MQTT
+	if mqtt.Enabled {
+		parsed, err := url.Parse(strings.TrimSpace(mqtt.URL))
+		if err != nil || (parsed.Scheme != "mqtt" && parsed.Scheme != "mqtts") || parsed.Hostname() == "" {
+			return errors.New("MQTT URL must use mqtt:// or mqtts:// and include a broker host")
+		}
+		if (strings.TrimSpace(mqtt.CertFile) == "") != (strings.TrimSpace(mqtt.KeyFile) == "") {
+			return errors.New("MQTT client certificate and key must be configured together")
+		}
+		if mqtt.MaxPacketBytes < 1024 || mqtt.MaxPacketBytes > 256<<20 {
+			return errors.New("MQTT maximum packet size must be between 1024 and 268435456 bytes")
+		}
+	}
 	return nil
 }
 

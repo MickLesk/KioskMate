@@ -1286,6 +1286,9 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 		next.MQTT.Password = s.cfg.Snapshot().MQTT.Password
 	}
 	next.MQTT.PasswordConfigured = false
+	if err := config.Validate(&next); err != nil {
+		return nil, err
+	}
 	return &next, nil
 }
 
