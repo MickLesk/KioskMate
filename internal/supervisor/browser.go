@@ -757,6 +757,7 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		b.lastError = fmt.Sprintf("browser exited after %s without error", runtime.Round(time.Millisecond))
 	}
 	lastError := b.lastError
+	journal := b.journal
 	if !expected {
 		b.prepareUnexpectedExitRecoveryLocked(runtime, lastError)
 	}
@@ -764,6 +765,19 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	b.persistRuntimeState()
 	if done != nil {
 		close(done)
+	}
+	if journal != nil {
+		status := "ok"
+		message := "browser exited normally"
+		if !expected {
+			status = "error"
+			message = "browser exited unexpectedly"
+		}
+		details := map[string]string{"expected": strconv.FormatBool(expected), "runtime_ms": strconv.FormatInt(runtime.Milliseconds(), 10)}
+		if lastError != "" {
+			details["reason"] = lastError
+		}
+		journal.Record("browser", "process_exit", status, message, details)
 	}
 	if logFile != nil {
 		if err != nil {
@@ -879,11 +893,15 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 				b.watchdog.LastReason = reason
 				b.watchdog.LastAction = "restart"
 			}
+			journal := b.journal
 			b.mu.Unlock()
 			if persist {
 				b.persistRuntimeState()
 			}
 			if restart {
+				if journal != nil {
+					journal.Record("browser", "watchdog_restart", "running", "watchdog restart requested", map[string]string{"reason": reason})
+				}
 				current := b.cfg.Snapshot()
 				b.logger.Warn("browser watchdog restart", "reason", reason, "rss_mb", stats.RSSMB, "rss_limit_mb", current.Watchdog.MaxRSSMB, "cpu", stats.CPUPercent, "cpu_limit", current.Watchdog.MaxCPUPercent)
 				restartCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
