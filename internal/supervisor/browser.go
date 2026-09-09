@@ -1318,6 +1318,7 @@ func (b *Browser) tripAuthGuard(reason string) {
 	}
 	now := time.Now()
 	kind, action := classifyAuthGuard(reason)
+	running := b.cmd != nil && b.cmd.Process != nil
 	b.authGuard = AuthGuardStatus{Tripped: true, Reason: reason, Kind: kind, SuggestedAction: action, KioskIP: localKioskIP(), At: &now}
 	b.cancelRecoveryLocked()
 	b.recovery = RecoveryStatus{State: "auth_blocked", Stage: "authentication", Reason: reason, LastResult: action, LastAt: &now}
@@ -1325,11 +1326,13 @@ func (b *Browser) tripAuthGuard(reason string) {
 	b.mu.Unlock()
 	b.persistAuthGuard()
 	b.logger.Error("Home Assistant authentication guard tripped", "reason", reason)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = b.Stop(ctx)
-	}()
+	if running {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = b.Stop(ctx)
+		}()
+	}
 }
 
 func (b *Browser) clearAuthGuard() {
