@@ -104,6 +104,9 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 	s.mu.Lock()
 	journal := s.journal
 	s.mu.Unlock()
+	if journal != nil {
+		journal.Record("system", name, "running", "maintenance job started", map[string]string{"job_id": job.ID})
+	}
 	go func() {
 		defer cancel()
 		run(jobCtx, job, command, args, input, journal)
@@ -162,6 +165,9 @@ func (s *Service) startCommand(ctx context.Context, name string, command string,
 	s.mu.Lock()
 	journal := s.journal
 	s.mu.Unlock()
+	if journal != nil {
+		journal.Record("system", name, "running", "maintenance job started", map[string]string{"job_id": job.ID})
+	}
 	go func() {
 		defer cancel()
 		run(jobCtx, job, command, args, input, journal)

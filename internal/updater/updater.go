@@ -231,7 +231,15 @@ func (s *Service) startInstall(ctx context.Context, name, target, mode, password
 	s.installing = true
 	s.jobs[job.ID] = job
 	s.pruneJobsLocked(50)
+	journal := s.journal
 	s.mu.Unlock()
+	if journal != nil {
+		details := map[string]string{"job_id": job.ID, "mode": strings.TrimPrefix(name, "update-")}
+		if target != "" {
+			details["target_version"] = target
+		}
+		journal.Record("update", strings.TrimPrefix(name, "update-"), "running", "update job started", details)
+	}
 	s.beginHistory(job, strings.TrimPrefix(name, "update-"), target)
 	jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Minute)
 	go func() {
