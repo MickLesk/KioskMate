@@ -42,6 +42,9 @@ func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
 	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, "app.js?v=0.7.1") {
 		t.Fatalf("index does not contain versioned assets: %s", body)
 	}
+	if !strings.Contains(body, "api.js?v=0.7.1") {
+		t.Fatal("index is missing the versioned API module")
+	}
 	if !strings.Contains(body, "Loading control panel") {
 		t.Fatal("index is missing visible bootstrap state")
 	}

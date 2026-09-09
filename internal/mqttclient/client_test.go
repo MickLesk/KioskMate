@@ -2,6 +2,7 @@ package mqttclient
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,6 +39,20 @@ func TestConnectTimesOutWhenBrokerDoesNotRespond(t *testing.T) {
 		t.Fatalf("Connect timeout took %s", elapsed)
 	}
 	<-done
+}
+
+func TestTLSConfigRequiresCertificatePair(t *testing.T) {
+	client := &Client{CertFile: "client.crt"}
+	if _, err := client.tlsConfig("broker.local"); err == nil || !strings.Contains(err.Error(), "configured together") {
+		t.Fatalf("unexpected TLS config error: %v", err)
+	}
+}
+
+func TestConnectRejectsNonMQTTScheme(t *testing.T) {
+	client := &Client{URL: "http://broker.local:1883"}
+	if err := client.Connect(); err == nil || !strings.Contains(err.Error(), "unsupported MQTT URL scheme") {
+		t.Fatalf("unexpected scheme error: %v", err)
+	}
 }
 
 func TestPingTimesOutWithoutDeadlockWhenBrokerDoesNotRespond(t *testing.T) {

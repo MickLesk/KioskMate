@@ -230,34 +230,7 @@
       }
 
       async function streamJSONLines(path, body, onEvent, signal) {
-        const response = await fetch(path, {
-          method: "POST",
-          credentials: "same-origin",
-          headers: requestHeaders(),
-          body: JSON.stringify(body),
-          signal,
-        });
-        if (!response.ok) {
-          const text = await response.text();
-          throw new Error(text || response.statusText || "HTTP " + response.status);
-        }
-        if (!response.body) throw new Error("Streaming response is not available");
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            onEvent(JSON.parse(line));
-          }
-        }
-        buffer += decoder.decode();
-        if (buffer.trim()) onEvent(JSON.parse(buffer));
+		return window.KioskMateAPI.streamJSONLines(path, body, { onEvent, signal, csrf: state.auth?.csrf });
       }
 
       function formatValue(value, suffix = "") {
@@ -331,43 +304,12 @@
         return JSON.parse(JSON.stringify(state.config || {}));
       }
 
-      function requestHeaders(headers = {}) {
-        const csrf = state.auth?.csrf;
-        return {
-          "Content-Type": "application/json",
-          ...(csrf ? { "X-KioskMate-CSRF": csrf } : {}),
-          ...headers,
-        };
-      }
-
       async function request(path, options = {}) {
-		const { timeout: timeoutMs, signal, headers, ...fetchOptions } = options;
-		const controller = signal ? null : new AbortController();
-		const timeout = controller ? setTimeout(() => controller.abort(), Number(timeoutMs || 12000)) : null;
 		try {
-		  const response = await fetch(path, {
-			credentials: "same-origin",
-			headers: requestHeaders(headers || {}),
-			...fetchOptions,
-			signal: signal || controller?.signal,
-		  });
-		  const text = await response.text();
-		  let data = {};
-		  if (text) {
-			try { data = JSON.parse(text); }
-			catch { data = { error: text }; }
-		  }
-		  if (!response.ok) {
-			const error = new Error(data.error || response.statusText || "HTTP " + response.status);
-			error.data = data;
-			throw error;
-		  }
-		  return data;
+		  return await window.KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
 		} catch (error) {
 		  if (error?.name === "AbortError") throw new Error(t("requestTimeout"));
 		  throw error;
-		} finally {
-		  if (timeout) clearTimeout(timeout);
 		}
       }
 
@@ -488,7 +430,7 @@
           renderApp();
           startUpdateStatusPolling();
 		  refreshCore(false).then(() => {
-			if (state.auth?.authenticated) renderApp();
+			if (state.auth?.authenticated) renderAppIfIdle();
 		  }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
         } catch (err) {
 		  renderFatal(err);
@@ -591,7 +533,7 @@
         const update = await getJSON("/api/update?cached=1");
         const changed = JSON.stringify(update) !== JSON.stringify(state.update);
         state.update = update;
-        if (changed && state.auth?.authenticated) renderApp();
+		if (changed && state.auth?.authenticated) renderAppIfIdle();
       }
 
       function renderLogin() {
@@ -635,10 +577,11 @@
 			renderApp();
 			toast(t("signedIn"), "", "ok");
 			startUpdateStatusPolling();
-			refreshCore(false).then(() => { if (state.auth?.authenticated) renderApp(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
+			refreshCore(false).then(() => { if (state.auth?.authenticated) renderAppIfIdle(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
 		  } catch (error) {
 			const currentError = document.getElementById("auth-error");
-			if (currentError) { currentError.hidden = false; currentError.textContent = error.message || t("loginFailed"); }
+			const message = error.retryAfter > 0 ? t("loginRetryAfter").replace("{seconds}", String(error.retryAfter)) : (error.message || t("loginFailed"));
+			if (currentError) { currentError.hidden = false; currentError.textContent = message; }
 			const password = document.getElementById("auth-password");
 			password?.focus();
 		  } finally {
@@ -705,6 +648,14 @@
         bindDirtyTracking();
         startHeaderClock();
       }
+
+	  function renderAppIfIdle() {
+		const active = document.activeElement;
+		const editing = active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
+		if (state.dirtyViews.size || editing) return false;
+		renderApp();
+		return true;
+	  }
 
       function renderNav() {
         return NAV.map((item) => {
@@ -1216,6 +1167,12 @@
                 ${field("mqtt-keepalive", t("keepalive"), "number", "", secondsToDuration(mqtt.keepalive, 60))}
                 ${field("mqtt-interval", t("interval"), "number", "", secondsToDuration(mqtt.interval, 30))}
                 <div>${switchHtml("mqtt-disable-retain", t("forceDisableRetain"), !!mqtt.force_disable_retain)}</div>
+				${field("mqtt-ca-file", t("mqttCAFile"), "text", "", mqtt.ca_file || "")}
+				${field("mqtt-cert-file", t("mqttCertFile"), "text", "", mqtt.cert_file || "")}
+				${field("mqtt-key-file", t("mqttKeyFile"), "text", "", mqtt.key_file || "")}
+				${field("mqtt-server-name", t("mqttServerName"), "text", "", mqtt.server_name || "")}
+				${field("mqtt-max-packet", t("mqttMaximumPacketSize"), "number", "", mqtt.maximum_packet_size || 1048576)}
+				<div>${switchHtml("mqtt-reject-unauthorized", t("mqttRejectUnauthorized"), mqtt.reject_unauthorized !== false)}</div>
               </div>
             </details>
             <div class="card result-panel">
@@ -2449,6 +2406,12 @@
             client_id: val("mqtt-client-id"),
             keepalive: durationToNs(val("mqtt-keepalive") || 60),
             force_disable_retain: checked("mqtt-disable-retain"),
+			ca_file: val("mqtt-ca-file"),
+			cert_file: val("mqtt-cert-file"),
+			key_file: val("mqtt-key-file"),
+			server_name: val("mqtt-server-name"),
+			reject_unauthorized: checked("mqtt-reject-unauthorized"),
+			maximum_packet_size: Number(val("mqtt-max-packet") || 1048576),
             interval: durationToNs(val("mqtt-interval")),
           };
           const password = val("mqtt-password");
@@ -2471,7 +2434,7 @@
             const status = await getJSON("/api/status?fast=1", { timeout: 8000 });
             if (status) {
               applyCoreState({ status });
-              if (state.view === "mqtt") renderApp();
+			  if (state.view === "mqtt") renderAppIfIdle();
               const stateName = status.mqtt?.state || "";
               if (status.mqtt?.connected || stateName === "auth_error" || stateName === "error" || stateName === "disabled") {
                 return;
@@ -2496,6 +2459,12 @@
             client_id: val("mqtt-client-id"),
             keepalive_seconds: Number(val("mqtt-keepalive") || 60),
             force_disable_retain: checked("mqtt-disable-retain"),
+			ca_file: val("mqtt-ca-file"),
+			cert_file: val("mqtt-cert-file"),
+			key_file: val("mqtt-key-file"),
+			server_name: val("mqtt-server-name"),
+			reject_unauthorized: checked("mqtt-reject-unauthorized"),
+			maximum_packet_size: Number(val("mqtt-max-packet") || 1048576),
           };
           if (output) output.textContent = `${t("loading")}...`;
           const controller = new AbortController();
@@ -2770,7 +2739,7 @@
         document.querySelectorAll("[data-restore]").forEach((button) => button.addEventListener("click", () => restoreBackup(button.dataset.restore)));
         if (state.view === "settings-admin" && !state.loaded.sessions) {
           state.loaded.sessions = true;
-          getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view.startsWith("settings")) renderApp(); }).catch(() => {});
+		  getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view.startsWith("settings")) renderAppIfIdle(); }).catch(() => {});
         }
         if (state.view === "settings-admin" && !state.loaded.ssh) {
           state.loaded.ssh = true;
@@ -2782,7 +2751,7 @@
         }
 		if (state.view === "kiosk-display" && !state.loaded.telemetry) {
 		  state.loaded.telemetry = true;
-		  getJSON("/api/browser/telemetry").then((data) => { state.telemetry = data; if (state.view === "kiosk-display") renderApp(); }).catch(() => { state.loaded.telemetry = false; });
+		  getJSON("/api/browser/telemetry").then((data) => { state.telemetry = data; if (state.view === "kiosk-display") renderAppIfIdle(); }).catch(() => { state.loaded.telemetry = false; });
 		}
       }
 
@@ -3293,12 +3262,19 @@
         if (!mqtt.enabled) return;
         try {
           const parsed = new URL(mqtt.url);
-          if (!["mqtt:", "mqtts:", "ws:", "wss:"].includes(parsed.protocol)) throw new Error("protocol");
+		  if (!["mqtt:", "mqtts:"].includes(parsed.protocol)) throw new Error("protocol");
         } catch {
           validationError("mqtt-url", t("validationBrokerUrl"));
         }
         if (!String(mqtt.node || "").trim()) validationError("mqtt-node", t("validationMQTTNode"));
         if (!String(mqtt.base_topic || "").trim()) validationError("mqtt-base-topic", t("validationMQTTTopic"));
+		if (!!String(mqtt.cert_file || "").trim() !== !!String(mqtt.key_file || "").trim()) {
+		  validationError("mqtt-cert-file", t("validationMQTTCertificatePair"));
+		}
+		const maximum = Number(mqtt.maximum_packet_size || 1048576);
+		if (!Number.isFinite(maximum) || maximum < 1024 || maximum > 268435456) {
+		  validationError("mqtt-max-packet", t("validationMQTTMaximumPacket"));
+		}
       }
 
       function collectPages() {

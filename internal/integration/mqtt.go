@@ -318,6 +318,12 @@ func (s *MQTTService) connectionKey() string {
 		cfg.MQTT.Version,
 		cfg.MQTT.KeepAlive.String(),
 		fmt.Sprint(cfg.MQTT.ForceDisableRetain),
+		cfg.MQTT.CAFile,
+		cfg.MQTT.CertFile,
+		cfg.MQTT.KeyFile,
+		cfg.MQTT.ServerName,
+		fmt.Sprint(cfg.MQTT.RejectUnauthorized),
+		fmt.Sprint(cfg.MQTT.MaxPacketBytes),
 		pageSig.String(),
 	}, "\x00")
 }
@@ -339,12 +345,18 @@ func (s *MQTTService) closeClients() {
 func (s *MQTTService) commands(ctx context.Context) {
 	cfg := s.cfg.Snapshot()
 	client := &mqttclient.Client{
-		URL:       cfg.MQTT.URL,
-		ClientID:  firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node) + "_cmd",
-		Username:  cfg.MQTT.Username,
-		Password:  cfg.MQTT.Password,
-		Version:   cfg.MQTT.Version,
-		KeepAlive: cfg.MQTT.KeepAlive,
+		URL:                cfg.MQTT.URL,
+		ClientID:           firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node) + "_cmd",
+		Username:           cfg.MQTT.Username,
+		Password:           cfg.MQTT.Password,
+		Version:            cfg.MQTT.Version,
+		KeepAlive:          cfg.MQTT.KeepAlive,
+		CAFile:             cfg.MQTT.CAFile,
+		CertFile:           cfg.MQTT.CertFile,
+		KeyFile:            cfg.MQTT.KeyFile,
+		ServerName:         cfg.MQTT.ServerName,
+		InsecureSkipVerify: !cfg.MQTT.RejectUnauthorized,
+		MaxPacketBytes:     cfg.MQTT.MaxPacketBytes,
 		// Command client stays silent on crash; publisher LWT marks availability offline.
 	}
 	s.mu.Lock()
@@ -1957,15 +1969,21 @@ func (s *MQTTService) mqtt() *mqttclient.Client {
 	if s.client == nil {
 		cfg := s.cfg.Snapshot()
 		s.client = &mqttclient.Client{
-			URL:         cfg.MQTT.URL,
-			ClientID:    firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node),
-			Username:    cfg.MQTT.Username,
-			Password:    cfg.MQTT.Password,
-			Version:     cfg.MQTT.Version,
-			KeepAlive:   cfg.MQTT.KeepAlive,
-			WillTopic:   s.root() + "/availability",
-			WillPayload: []byte("offline"),
-			WillRetain:  s.retained(true),
+			URL:                cfg.MQTT.URL,
+			ClientID:           firstNonEmpty(cfg.MQTT.ClientID, cfg.MQTT.Node),
+			Username:           cfg.MQTT.Username,
+			Password:           cfg.MQTT.Password,
+			Version:            cfg.MQTT.Version,
+			KeepAlive:          cfg.MQTT.KeepAlive,
+			WillTopic:          s.root() + "/availability",
+			WillPayload:        []byte("offline"),
+			WillRetain:         s.retained(true),
+			CAFile:             cfg.MQTT.CAFile,
+			CertFile:           cfg.MQTT.CertFile,
+			KeyFile:            cfg.MQTT.KeyFile,
+			ServerName:         cfg.MQTT.ServerName,
+			InsecureSkipVerify: !cfg.MQTT.RejectUnauthorized,
+			MaxPacketBytes:     cfg.MQTT.MaxPacketBytes,
 		}
 	}
 	return s.client

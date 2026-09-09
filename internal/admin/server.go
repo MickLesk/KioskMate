@@ -123,6 +123,12 @@ type mqttTestRequest struct {
 	ClientID           string `json:"client_id"`
 	KeepAliveSeconds   int    `json:"keepalive_seconds"`
 	ForceDisableRetain bool   `json:"force_disable_retain"`
+	CAFile             string `json:"ca_file"`
+	CertFile           string `json:"cert_file"`
+	KeyFile            string `json:"key_file"`
+	ServerName         string `json:"server_name"`
+	RejectUnauthorized *bool  `json:"reject_unauthorized"`
+	MaxPacketBytes     int    `json:"maximum_packet_size"`
 }
 
 func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger) *Server {
@@ -2075,8 +2081,17 @@ func runMQTTTest(body mqttTestRequest, emit func(map[string]any)) map[string]any
 		keepAlive = 60 * time.Second
 	}
 	retained := !body.ForceDisableRetain
-	client := &mqttclient.Client{URL: body.URL, ClientID: clientID, Username: body.Username, Password: body.Password, Version: body.Version, Timeout: 5 * time.Second, KeepAlive: keepAlive}
-	event("validate", "ok", "Settings accepted", map[string]any{"broker": body.URL, "version": body.Version, "base_topic": baseTopic, "node": node, "client_id": clientID, "discovery_prefix": discovery, "root": root, "keepalive_seconds": int(keepAlive / time.Second), "retain": retained})
+	rejectUnauthorized := true
+	if body.RejectUnauthorized != nil {
+		rejectUnauthorized = *body.RejectUnauthorized
+	}
+	client := &mqttclient.Client{
+		URL: body.URL, ClientID: clientID, Username: body.Username, Password: body.Password,
+		Version: body.Version, Timeout: 5 * time.Second, KeepAlive: keepAlive,
+		CAFile: body.CAFile, CertFile: body.CertFile, KeyFile: body.KeyFile, ServerName: body.ServerName,
+		InsecureSkipVerify: !rejectUnauthorized, MaxPacketBytes: body.MaxPacketBytes,
+	}
+	event("validate", "ok", "Settings accepted", map[string]any{"broker": body.URL, "version": body.Version, "base_topic": baseTopic, "node": node, "client_id": clientID, "discovery_prefix": discovery, "root": root, "keepalive_seconds": int(keepAlive / time.Second), "retain": retained, "verify_certificate": rejectUnauthorized})
 	event("connect", "running", "Opening MQTT connection and waiting for CONNACK", map[string]any{"broker": body.URL, "client_id": clientID})
 	if err := client.Connect(); err != nil {
 		_ = client.Close()

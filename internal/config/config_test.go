@@ -17,8 +17,11 @@ func TestNormalizeV3EnablesSchedulerForTimeRules(t *testing.T) {
 		},
 	}
 	normalize(cfg)
-	if cfg.Version != 3 {
-		t.Fatalf("version = %d, want 3", cfg.Version)
+	if cfg.Version != 4 {
+		t.Fatalf("version = %d, want 4", cfg.Version)
+	}
+	if !cfg.MQTT.RejectUnauthorized {
+		t.Fatal("MQTT TLS certificate verification was not enabled during migration")
 	}
 	if !cfg.Kiosk.Scheduler.Enabled {
 		t.Fatal("scheduler should be enabled for existing time rules")

@@ -136,6 +136,12 @@ type MQTTConfig struct {
 	ClientID           string        `json:"client_id"`
 	KeepAlive          time.Duration `json:"keepalive"`
 	ForceDisableRetain bool          `json:"force_disable_retain"`
+	CAFile             string        `json:"ca_file"`
+	CertFile           string        `json:"cert_file"`
+	KeyFile            string        `json:"key_file"`
+	ServerName         string        `json:"server_name"`
+	RejectUnauthorized bool          `json:"reject_unauthorized"`
+	MaxPacketBytes     int           `json:"maximum_packet_size"`
 	Interval           time.Duration `json:"interval"`
 }
 
@@ -421,7 +427,7 @@ func defaults(path string) Config {
 	return Config{
 		mu:      &sync.RWMutex{},
 		Path:    path,
-		Version: 2,
+		Version: 4,
 		Admin: AdminConfig{
 			Bind:  "0.0.0.0",
 			Port:  33333,
@@ -454,12 +460,14 @@ func defaults(path string) Config {
 			CPUGrace:      10 * time.Minute,
 		},
 		MQTT: MQTTConfig{
-			Enabled:   false,
-			Discovery: "homeassistant",
-			BaseTopic: "kioskmate",
-			Node:      "kioskmate",
-			KeepAlive: 60 * time.Second,
-			Interval:  30 * time.Second,
+			Enabled:            false,
+			Discovery:          "homeassistant",
+			BaseTopic:          "kioskmate",
+			Node:               "kioskmate",
+			KeepAlive:          60 * time.Second,
+			Interval:           30 * time.Second,
+			RejectUnauthorized: true,
+			MaxPacketBytes:     1 << 20,
 		},
 		Time: TimeConfig{
 			NTPServer: "pool.ntp.org",
@@ -495,6 +503,10 @@ func normalize(cfg *Config) {
 			}
 		}
 		cfg.Version = 3
+	}
+	if cfg.Version < 4 {
+		cfg.MQTT.RejectUnauthorized = true
+		cfg.Version = 4
 	}
 	if cfg.Admin.Bind == "127.0.0.1" || cfg.Admin.Bind == "localhost" {
 		cfg.Admin.Bind = "0.0.0.0"
@@ -588,6 +600,12 @@ func normalize(cfg *Config) {
 	}
 	if cfg.MQTT.KeepAlive == 0 {
 		cfg.MQTT.KeepAlive = 60 * time.Second
+	}
+	if cfg.MQTT.MaxPacketBytes <= 0 {
+		cfg.MQTT.MaxPacketBytes = 1 << 20
+	}
+	if cfg.MQTT.MaxPacketBytes > 256<<20 {
+		cfg.MQTT.MaxPacketBytes = 256 << 20
 	}
 	if strings.TrimSpace(cfg.Time.NTPServer) == "" {
 		cfg.Time.NTPServer = "pool.ntp.org"
