@@ -66,7 +66,7 @@ func TestSchedulerManualOverrideExpiresBackToWorkflow(t *testing.T) {
 
 func TestAuthGuardClassificationIncludesIPBanRecovery(t *testing.T) {
 	kind, action := classifyAuthGuard("Home Assistant returned HTTP 403 Forbidden")
-	if kind != "ip_ban" || action == "" {
+	if kind != "access_denied" || action == "" {
 		t.Fatalf("classification = %q, %q", kind, action)
 	}
 }

@@ -87,6 +87,7 @@
         kioskSelectedPageIndex: null,
         pageWizard: null,
         actionLog: [],
+		operations: [],
         logs: [],
         logSource: localStorage.getItem("kioskmate.logSource") || "combined",
         logFilter: localStorage.getItem("kioskmate.logFilter") || "",
@@ -232,7 +233,7 @@
         const response = await fetch(path, {
           method: "POST",
           credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
+          headers: requestHeaders(),
           body: JSON.stringify(body),
           signal,
         });
@@ -330,6 +331,15 @@
         return JSON.parse(JSON.stringify(state.config || {}));
       }
 
+      function requestHeaders(headers = {}) {
+        const csrf = state.auth?.csrf;
+        return {
+          "Content-Type": "application/json",
+          ...(csrf ? { "X-KioskMate-CSRF": csrf } : {}),
+          ...headers,
+        };
+      }
+
       async function request(path, options = {}) {
 		const { timeout: timeoutMs, signal, headers, ...fetchOptions } = options;
 		const controller = signal ? null : new AbortController();
@@ -337,7 +347,7 @@
 		try {
 		  const response = await fetch(path, {
 			credentials: "same-origin",
-			headers: { "Content-Type": "application/json", ...(headers || {}) },
+			headers: requestHeaders(headers || {}),
 			...fetchOptions,
 			signal: signal || controller?.signal,
 		  });
@@ -499,14 +509,15 @@
 		  getJSON("/api/config"), getJSON("/api/status", { timeout: 20000 }), getJSON("/api/privilege"),
 		  getJSON("/api/time"), getJSON("/api/time/zones"), getJSON("/api/jobs?limit=25"),
 		  getJSON("/api/update/history"),
+		  getJSON("/api/browser/operations"),
 		]);
 		const value = (index) => requests[index].status === "fulfilled" ? requests[index].value : undefined;
-		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6) });
+		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6), operations: value(7) });
 		const failed = requests.filter((item) => item.status === "rejected");
 		if (failed.length === requests.length) throw failed[0].reason;
       }
 
-	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory }) {
+	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -522,6 +533,7 @@
 		if (zones) state.timezones = zones.zones || [];
 		if (jobs) state.jobs = jobs.jobs || [];
 		if (updateHistory) state.updateHistory = updateHistory;
+		if (operations) state.operations = operations;
 		syncThemeFromConfig();
 	  }
 
@@ -3041,12 +3053,19 @@
       }
 
       function renderActionLog() {
-        if (!state.actionLog.length) return "";
+		const persisted = (state.operations || []).slice(-4).reverse().map((item) => ({
+		  title: item.action || "browser",
+		  detail: item.error || item.state || "",
+		  type: item.state === "failed" ? "error" : item.state === "running" ? "warn" : "ok",
+		  at: item.finished || item.started,
+		}));
+		const entries = [...state.actionLog, ...persisted].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 4);
+		if (!entries.length) return "";
         return `
           <div class="grid">
             <strong>${esc(t("recentActions"))}</strong>
             <div class="workflow-line">
-              ${state.actionLog.slice(0, 4).map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString())}</span>`).join("")}
+			  ${entries.map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}" title="${esc(item.detail)}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString())}</span>`).join("")}
             </div>
           </div>`;
       }

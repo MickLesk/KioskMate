@@ -53,20 +53,6 @@ chmod 0755 "$PKG/DEBIAN/preinst"
 cat > "$PKG/DEBIAN/postinst" <<'POSTINST'
 #!/usr/bin/env bash
 set -e
-backup_config() {
-  FILE="$1"
-  [ -f "$FILE" ] || return 0
-  cp -p "$FILE" "$FILE.bak" >/dev/null 2>&1 || true
-}
-for HOME_DIR in /home/*; do
-  [ -d "$HOME_DIR" ] || continue
-  CONFIG="$HOME_DIR/.config/kioskmate/config.json"
-  backup_config "$CONFIG"
-  if [ -f "$CONFIG" ]; then
-    sed -i 's/"bind": "127\.0\.0\.1"/"bind": "0.0.0.0"/' "$CONFIG" || true
-    sed -i 's/"bind": "localhost"/"bind": "0.0.0.0"/' "$CONFIG" || true
-  fi
-done
 reload_user_units() {
   for RUNTIME in /run/user/*; do
     [ -d "$RUNTIME" ] || continue

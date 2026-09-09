@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,7 @@ type PerfConfig struct {
 }
 
 type WatchdogConfig struct {
+	RestartOnCPU  bool          `json:"restart_on_cpu"`
 	Enabled       bool          `json:"enabled"`
 	CheckInterval time.Duration `json:"check_interval"`
 	MaxRSSMB      uint64        `json:"max_rss_mb"`
@@ -264,8 +266,23 @@ func (cfg *Config) Snapshot() *Config {
 	mu.RLock()
 	defer mu.RUnlock()
 	clone := *cfg
-	clone.mu = mu
+	clone.mu = &sync.RWMutex{}
 	clone.changeCh = nil
+	clone.Kiosk.URLs = slices.Clone(cfg.Kiosk.URLs)
+	clone.Kiosk.ExtraArgs = slices.Clone(cfg.Kiosk.ExtraArgs)
+	clone.Kiosk.Rotation = slices.Clone(cfg.Kiosk.Rotation)
+	clone.Kiosk.Pages = slices.Clone(cfg.Kiosk.Pages)
+	for i := range clone.Kiosk.Pages {
+		clone.Kiosk.Pages[i].Schedule.Days = slices.Clone(cfg.Kiosk.Pages[i].Schedule.Days)
+		if brightness := cfg.Kiosk.Pages[i].DisplayOptions.Brightness; brightness != nil {
+			value := *brightness
+			clone.Kiosk.Pages[i].DisplayOptions.Brightness = &value
+		}
+	}
+	clone.Kiosk.TimeRules = slices.Clone(cfg.Kiosk.TimeRules)
+	for i := range clone.Kiosk.TimeRules {
+		clone.Kiosk.TimeRules[i].Days = slices.Clone(cfg.Kiosk.TimeRules[i].Days)
+	}
 	return &clone
 }
 

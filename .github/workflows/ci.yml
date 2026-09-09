@@ -37,3 +37,5 @@ jobs:
         run: |
           VERSION=0.0.0-ci ARCH=arm64 bash scripts/package-deb.sh
           VERSION=0.0.0-ci ARCH=amd64 bash scripts/package-deb.sh
+          bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_arm64.deb
+          bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_amd64.deb
