@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.8.0-alpha1
+
+### Browser reliability
+- Serialized browser lifecycle operations and persisted recent operation history so start, stop, reload and recovery actions have one authoritative result.
+- Added stable per-page Chromium profile identities, including migration support when pages are reordered or renamed.
+- Reworked the DevTools transport around one bounded event reader, reducing command races, unbounded event growth and false recovery triggers.
+- Added recovery backoff and hourly restart limits; CPU-only watchdog restarts are opt-in instead of being triggered by normal multi-core Chromium load.
+- Starts the Admin control path before browser navigation and preserves actionable diagnostics when Chromium or the display session is unavailable.
+
+### Home Assistant session safety
+- Detects Home Assistant `auth_invalid`, invalid token responses and relevant authentication `401`/`403` responses without treating camera or media resource failures as a login ban.
+- Stores authentication-guard evidence, the affected origin and the local kiosk address so an IP-ban incident can be diagnosed from Admin.
+- Runs a safe Home Assistant preflight before browser startup and blocks automatic navigation while the persistent authentication guard is active.
+- Applies kiosk theme preferences through the controlled DevTools session after attach, including dashboards that provide their own custom UI theme.
+
+### MQTT and Home Assistant
+- Added validated MQTT transport configuration for `mqtt://` and `mqtts://`, custom CA files, mutual TLS, SNI override, certificate verification and maximum packet size.
+- Kept MQTT 3.1.1 and 5.0 support explicit in the Admin UI and expanded connection-test diagnostics for validation, CONNACK and publish failures.
+- Preserved the existing Home Assistant discovery model, including per-page controls and display/audio capability entities.
+
+### Admin and packaging
+- Added hashed persistent Admin sessions, CSRF protection for mutations and `Retry-After` details for rate-limited sign-ins.
+- Added operation IDs, action history and safer background refreshes that do not overwrite focused or unsaved forms.
+- Added release-time syntax and translation checks for the embedded Admin UI.
+- Hardened Debian packaging and added verification for package metadata, maintainer scripts, service files and architecture-specific artifacts.
+
 ## v0.7.7
 
 ### Privileges / APT jobs
