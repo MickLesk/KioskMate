@@ -45,6 +45,9 @@ func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
 	if !strings.Contains(body, "api.js?v=0.7.1") {
 		t.Fatal("index is missing the versioned API module")
 	}
+	if !strings.Contains(body, "ui-components.js?v=0.7.1") {
+		t.Fatal("index is missing the versioned UI component module")
+	}
 	if !strings.Contains(body, "Loading control panel") {
 		t.Fatal("index is missing visible bootstrap state")
 	}

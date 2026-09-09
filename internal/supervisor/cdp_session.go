@@ -117,7 +117,7 @@ func (s *cdpSession) interestingEvent(event cdpMessage) bool {
 				URL    string `json:"url"`
 			} `json:"response"`
 		}
-		if json.Unmarshal(event.Params, &response) != nil || response.Response.Status < 400 {
+		if json.Unmarshal(event.Params, &response) != nil || (response.Response.Status != 400 && response.Response.Status != 401 && response.Response.Status != 403) {
 			return false
 		}
 		if response.Response.Status == 400 && isTokenEndpoint(response.Response.URL) && response.ID != "" {

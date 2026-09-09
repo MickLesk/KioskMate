@@ -132,6 +132,10 @@
         return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
       }
 
+	  const field = window.KioskMateUI.field;
+	  const selectHtml = window.KioskMateUI.selectHtml;
+	  const switchHtml = window.KioskMateUI.switchHtml;
+
       function val(id) {
         return document.getElementById(id)?.value ?? "";
       }
@@ -3135,7 +3139,10 @@
 
       function renderJobs() {
         if (!state.jobs.length) return t("noData");
-        return state.jobs.map((job) => `$ ${job.name} (${job.exit_code})\n${(job.output || []).join("\n")}`).join("\n\n");
+        return state.jobs.map((job) => {
+          const result = job.finished ? `exit ${job.exit_code}` : t("jobRunning");
+          return `$ ${job.name} (${result})\n${(job.output || []).join("\n")}`;
+        }).join("\n\n");
       }
 
       function renderJobsHTML() {
@@ -3405,10 +3412,6 @@
           .join("")}</tbody></table></div>`;
       }
 
-      function field(id, label, type = "text", autocomplete = "", value = "", placeholder = "") {
-        return `<div><label for="${esc(id)}">${esc(label)}</label><input id="${esc(id)}" type="${esc(type)}" ${autocomplete ? `autocomplete="${esc(autocomplete)}"` : ""} ${placeholder ? `placeholder="${esc(placeholder)}"` : ""} value="${esc(value)}" /></div>`;
-      }
-
       function unsupportedControl(label) {
         return `<div class="unsupported-control"><label>${esc(label)}</label><span>${esc(t("notSupportedOnDevice"))}</span></div>`;
       }
@@ -3417,20 +3420,8 @@
         return `<div><label for="${esc(id)}">${esc(label)}</label><textarea id="${esc(id)}">${esc(value)}</textarea></div>`;
       }
 
-      function selectHtml(id, label, value, options) {
-        return `<div><label for="${esc(id)}">${esc(label)}</label><select id="${esc(id)}">${(options || [])
-          .map(([v, text]) => `<option value="${esc(v)}" ${String(v) === String(value) ? "selected" : ""}>${esc(text)}</option>`)
-          .join("")}</select></div>`;
-      }
-
-      function switchHtml(id, label, on) {
-        return `<label class="switch" for="${esc(id)}"><span>${esc(label)}</span><input id="${esc(id)}" type="checkbox" ${on ? "checked" : ""} /></label>`;
-      }
-
       function button(labelKey, action, cls = "") {
-        const hint = t(action + "Hint");
-        const title = hint === action + "Hint" ? t(labelKey) : hint;
-        return `<button class="${esc(cls)}" title="${esc(title)}" data-busy="${esc(action)}" data-action="${esc(action)}">${esc(t(labelKey))}</button>`;
+		return window.KioskMateUI.button(labelKey, action, cls, t);
       }
 
       boot();
