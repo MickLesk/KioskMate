@@ -61,6 +61,7 @@ func Open(path string, limit int) (*Journal, error) {
 		return nil, err
 	}
 	defer file.Close()
+	_ = os.Chmod(path, 0o600)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 1024), maxLineBytes)
 	for scanner.Scan() {

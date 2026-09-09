@@ -72,6 +72,14 @@ func TestLoadCreatesKioskMateConfig(t *testing.T) {
 	}
 }
 
+func TestEventJournalPathUsesConfigDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".config", "kioskmate", "config.json")
+	want := filepath.Join(filepath.Dir(path), "events.jsonl")
+	if got := EventJournalPath(path); got != want {
+		t.Fatalf("event journal path = %q, want %q", got, want)
+	}
+}
+
 func TestLoadPreservesExistingKioskMateConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")
