@@ -59,15 +59,21 @@ reload_user_units() {
     UID_NAME="$(basename "$RUNTIME")"
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
-    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+    [ -S "$RUNTIME/bus" ] || continue
+    user_systemctl "$RUNTIME" "$USER_NAME" daemon-reload >/dev/null 2>&1 || true
     # prerm stops the user service during upgrades; bring enabled instances back up.
-    if XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user --quiet is-enabled kioskmate.service >/dev/null 2>&1; then
-      XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user start kioskmate.service >/dev/null 2>&1 || true
+    if user_systemctl "$RUNTIME" "$USER_NAME" --quiet is-enabled kioskmate.service >/dev/null 2>&1; then
+      user_systemctl "$RUNTIME" "$USER_NAME" start kioskmate.service >/dev/null 2>&1 || true
     fi
   done
 }
+user_systemctl() {
+  RUNTIME="$1"
+  USER_NAME="$2"
+  shift 2
+  XDG_RUNTIME_DIR="$RUNTIME" DBUS_SESSION_BUS_ADDRESS="unix:path=$RUNTIME/bus" runuser -u "$USER_NAME" -- systemctl --user "$@"
+}
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl --global enable kioskmate.service >/dev/null 2>&1 || true
   reload_user_units
 fi
 exit 0
@@ -83,8 +89,15 @@ stop_user_units() {
     UID_NAME="$(basename "$RUNTIME")"
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
-    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user stop kioskmate.service >/dev/null 2>&1 || true
+    [ -S "$RUNTIME/bus" ] || continue
+    user_systemctl "$RUNTIME" "$USER_NAME" stop kioskmate.service >/dev/null 2>&1 || true
   done
+}
+user_systemctl() {
+  RUNTIME="$1"
+  USER_NAME="$2"
+  shift 2
+  XDG_RUNTIME_DIR="$RUNTIME" DBUS_SESSION_BUS_ADDRESS="unix:path=$RUNTIME/bus" runuser -u "$USER_NAME" -- systemctl --user "$@"
 }
 if command -v systemctl >/dev/null 2>&1; then
   stop_user_units

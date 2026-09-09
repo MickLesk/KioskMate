@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.0-alpha2
 
 ### Diagnostics and Home Assistant
 - Added a bounded, privacy-safe event journal for browser operations, HA authentication guards, MQTT connection/command state, admin security actions and maintenance/update jobs.
