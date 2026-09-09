@@ -74,4 +74,23 @@ exit 0
 POSTINST
 chmod 0755 "$PKG/DEBIAN/postinst"
 
+cat > "$PKG/DEBIAN/prerm" <<'PRERM'
+#!/usr/bin/env bash
+set -e
+stop_user_units() {
+  for RUNTIME in /run/user/*; do
+    [ -d "$RUNTIME" ] || continue
+    UID_NAME="$(basename "$RUNTIME")"
+    USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
+    [ -n "$USER_NAME" ] || continue
+    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user stop kioskmate.service >/dev/null 2>&1 || true
+  done
+}
+if command -v systemctl >/dev/null 2>&1; then
+  stop_user_units
+fi
+exit 0
+PRERM
+chmod 0755 "$PKG/DEBIAN/prerm"
+
 dpkg-deb --build --root-owner-group "$PKG" "${OUT}/kioskmate_${VERSION}_${ARCH}.deb"
