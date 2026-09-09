@@ -320,7 +320,9 @@ func (s *Server) systemAction(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	name := strings.TrimPrefix(r.URL.Path, "/api/system/")
-	job, err := s.actions.StartPrivileged(context.Background(), name, body.Mode, body.Password)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	job, err := s.actions.StartPrivileged(ctx, name, body.Mode, body.Password)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -785,7 +787,9 @@ func (s *Server) timeStatus(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		job, err := s.actions.StartTimeConfig(context.Background(), body.Timezone, body.NTPServer, body.Mode, body.Password)
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		job, err := s.actions.StartTimeConfig(ctx, body.Timezone, body.NTPServer, body.Mode, body.Password)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -1350,7 +1354,9 @@ func (s *Server) updateInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	job, err := s.updater.Install(context.Background(), body.Mode, body.Password)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	job, err := s.updater.Install(ctx, body.Mode, body.Password)
 	if err != nil {
 		status := http.StatusBadRequest
 		code := "update_failed"
@@ -1421,7 +1427,9 @@ func (s *Server) updateRollback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	job, err := s.updater.Rollback(context.Background(), body.Mode, body.Password)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	job, err := s.updater.Rollback(ctx, body.Mode, body.Password)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, updater.ErrPrivilegeRequired) || errors.Is(err, updater.ErrUpdateInProgress) {
