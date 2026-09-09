@@ -9,7 +9,7 @@ import (
 
 func TestAssetServesEmbeddedJavaScript(t *testing.T) {
 	server := NewServer(nil, nil, nil, nil, nil, nil, "test", nil)
-	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+	req := httptest.NewRequest(http.MethodGet, "/assets/app-core.js", nil)
 	rec := httptest.NewRecorder()
 
 	server.asset(rec, req)
@@ -39,7 +39,7 @@ func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, "app.js?v=0.7.1") {
+	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, "app-core.js?v=0.7.1") {
 		t.Fatalf("index does not contain versioned assets: %s", body)
 	}
 	if !strings.Contains(body, "api.js?v=0.7.1") {
@@ -47,6 +47,14 @@ func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(body, "ui-components.js?v=0.7.1") {
 		t.Fatal("index is missing the versioned UI component module")
+	}
+	coreIndex := strings.Index(body, "app-core.js?v=0.7.1")
+	viewIndex := strings.Index(body, "view-dashboard.js?v=0.7.1")
+	actionIndex := strings.Index(body, "actions-core.js?v=0.7.1")
+	renderIndex := strings.Index(body, "renderers.js?v=0.7.1")
+	bootstrapIndex := strings.Index(body, "app-bootstrap.js?v=0.7.1")
+	if coreIndex < 0 || viewIndex < coreIndex || actionIndex < viewIndex || renderIndex < actionIndex || bootstrapIndex < renderIndex {
+		t.Fatal("Admin frontend modules are missing or loaded in the wrong order")
 	}
 	if !strings.Contains(body, "Loading control panel") {
 		t.Fatal("index is missing visible bootstrap state")
@@ -69,9 +77,16 @@ func TestAssetRejectsNestedPaths(t *testing.T) {
 }
 
 func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
-	app, err := content.ReadFile("web/assets/app.js")
-	if err != nil {
-		t.Fatal(err)
+	var app strings.Builder
+	for _, name := range []string{
+		"app-core.js", "view-dashboard.js", "view-kiosk.js", "view-mqtt.js", "view-system.js", "view-settings.js",
+		"actions-core.js", "actions-kiosk.js", "actions-mqtt.js", "actions-system.js", "actions-settings.js", "renderers.js", "app-bootstrap.js",
+	} {
+		asset, err := content.ReadFile("web/assets/" + name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		app.Write(asset)
 	}
 	i18n, err := content.ReadFile("web/assets/i18n.js")
 	if err != nil {
@@ -79,8 +94,8 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 	}
 
 	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "formatEvents", "nav-mobile-toggle", "state.auth.config", "Promise.allSettled", "renderFatal", "auth-error"} {
-		if !strings.Contains(string(app), marker) {
-			t.Errorf("embedded app.js missing %q", marker)
+		if !strings.Contains(app.String(), marker) {
+			t.Errorf("embedded Admin assets missing %q", marker)
 		}
 	}
 	for _, marker := range []string{"allChangesSaved", "validationPageUrl", "dayShort_mon", "kioskSequence", "finishAndStart", "mqttReadiness", "noJobsYet", "logEvents", "navigationMenu"} {

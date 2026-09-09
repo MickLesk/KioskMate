@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import vm from "node:vm";
 
-const app = fs.readFileSync("internal/admin/web/assets/app.js", "utf8");
+const assetsDir = "internal/admin/web/assets";
+const app = fs.readdirSync(assetsDir)
+  .filter((name) => name.endsWith(".js") && name !== "i18n.js")
+  .sort()
+  .map((name) => fs.readFileSync(`${assetsDir}/${name}`, "utf8"))
+  .join("\n");
 const source = fs.readFileSync("internal/admin/web/assets/i18n.js", "utf8");
 const context = { window: {} };
 vm.runInNewContext(source, context, { filename: "i18n.js" });

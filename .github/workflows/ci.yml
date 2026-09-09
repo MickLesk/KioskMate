@@ -25,11 +25,7 @@ jobs:
         run: go test -race ./...
       - name: Frontend syntax
         run: |
-          node --check internal/admin/web/assets/theme.js
-          node --check internal/admin/web/assets/i18n.js
-          node --check internal/admin/web/assets/api.js
-          node --check internal/admin/web/assets/ui-components.js
-          node --check internal/admin/web/assets/app.js
+          for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
       - name: Build Linux binaries
         run: |
