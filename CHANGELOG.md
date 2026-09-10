@@ -11,12 +11,18 @@
 ### Configuration and Admin security
 - Added dry-run previews for configuration imports and restores, including changed areas, page counts and required browser or service restarts.
 - Added rolling atomic configuration backups with bounded history while preserving the existing last-known-good backup.
+- Added an explicit schema-migration boundary, centralized save-time validation and visible Admin warnings for recovered or migrated configurations.
 - Improved login throttling with bounded client state, stale-entry pruning, `Retry-After` status and a persistent visible countdown after reload.
 - Expanded sensitive-value redaction for URLs in Admin responses and the structured event journal.
 
+### MQTT and updates
+- Added a persistent, validated Home Assistant discovery-topic registry so stale entities from deleted pages, renamed nodes or changed discovery prefixes are removed after restarts.
+- Separated MQTT status locking from broker network I/O so a slow or unreachable broker no longer stalls Admin status requests.
+- Strengthened built-in update validation with exact release-version matching plus executable and systemd-unit content checks before installation.
+
 ### Build quality
 - Canonicalized the English and German translation catalog and made canonical form, parity and referenced-key validation a build gate.
-- Enabled CI for development branches, added race testing to release builds and strengthened Debian artifact verification with embedded-version checks.
+- Enabled CI for development branches, added race testing to release builds and consolidated Debian packaging behind one deterministic generator with stronger artifact checks.
 
 ## v0.8.0-alpha2
 

@@ -247,7 +247,16 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.Path = path
+	loadedVersion := cfg.Version
 	normalize(&cfg)
+	if loadedVersion < currentConfigVersion {
+		migrationWarning := fmt.Sprintf("configuration migrated from schema %d to %d; previous content is available in the backup history", loadedVersion, currentConfigVersion)
+		if cfg.LoadWarning != "" {
+			cfg.LoadWarning += "; " + migrationWarning
+		} else {
+			cfg.LoadWarning = migrationWarning
+		}
+	}
 	if err := Save(&cfg); err != nil {
 		return nil, err
 	}
@@ -594,8 +603,7 @@ func defaults(path string) Config {
 	}
 }
 
-func normalize(cfg *Config) {
-	cfg.MQTT.PasswordConfigured = false
+func migrateSchema(cfg *Config) {
 	if cfg.Version == 0 {
 		cfg.Version = 2
 	}
@@ -623,6 +631,11 @@ func normalize(cfg *Config) {
 		cfg.MQTT.RejectUnauthorized = true
 		cfg.Version = currentConfigVersion
 	}
+}
+
+func normalize(cfg *Config) {
+	cfg.MQTT.PasswordConfigured = false
+	migrateSchema(cfg)
 	if cfg.Admin.Bind == "127.0.0.1" || cfg.Admin.Bind == "localhost" {
 		cfg.Admin.Bind = "0.0.0.0"
 	}

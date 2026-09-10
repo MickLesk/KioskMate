@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,6 +33,59 @@ func TestMQTTConnectionStatusTracksSuccessAndAuthFailure(t *testing.T) {
 	service.setConnectionResult(errors.New("mqtt connack failed: not authorized (reason=0x87)"))
 	if got := service.ConnectionStatus().State; got != "auth_error" {
 		t.Fatalf("auth status = %q", got)
+	}
+}
+
+func TestConnectionStatusDoesNotWaitForSlowBrokerPublish(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		close(accepted)
+		<-release
+		_ = conn.Close()
+	}()
+
+	cfg := mqttTestConfig(t)
+	cfg.MQTT.Enabled = true
+	cfg.MQTT.URL = "mqtt://" + listener.Addr().String()
+	cfg.Kiosk.Pages = nil
+	cfg.Kiosk.URLs = nil
+	hw := hardware.New()
+	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = hw.Status(warmupCtx)
+	warmupCancel()
+	service := NewMQTTService(cfg, &fakeBrowser{}, hw, nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	done := make(chan struct{})
+	go func() {
+		_ = service.PublishNow()
+		close(done)
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("publisher did not connect to test broker")
+	}
+
+	started := time.Now()
+	_ = service.ConnectionStatus()
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("ConnectionStatus blocked for %s during broker publish", elapsed)
+	}
+	close(release)
+	_ = listener.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publisher did not finish after broker connection closed")
 	}
 }
 

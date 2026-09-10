@@ -208,8 +208,10 @@ func (s *MQTTService) ResetDiscovery() (int, error) {
 	if s.cfg.Snapshot().MQTT.URL == "" {
 		return 0, errors.New("mqtt url is empty")
 	}
+	s.publishMu.Lock()
 	s.mu.Lock()
 	client := s.mqtt()
+	s.mu.Unlock()
 	count := 0
 	topics := map[string]bool{}
 	for _, entry := range s.discoveryResetEntries() {
@@ -221,17 +223,17 @@ func (s *MQTTService) ResetDiscovery() (int, error) {
 	}
 	for topic := range topics {
 		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
-			s.mu.Unlock()
+			s.publishMu.Unlock()
 			return count, err
 		}
 		count++
 	}
 	if err := s.saveDiscoveryRegistryLocked(nil); err != nil {
-		s.mu.Unlock()
+		s.publishMu.Unlock()
 		return count, err
 	}
 	s.cleaned = false
-	s.mu.Unlock()
+	s.publishMu.Unlock()
 	if err := s.publishAll(); err != nil {
 		return count, err
 	}
@@ -274,9 +276,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 			commandCtx, cancel := context.WithCancel(ctx)
 			commandCancel = cancel
 			activeKey = key
-			s.mu.Lock()
-			s.cache = map[string]string{}
-			s.mu.Unlock()
+			s.resetPublishCache()
 			go s.commands(commandCtx)
 			s.setConnectionState("connecting")
 			s.logger.Info("mqtt connection configured", "root", s.root(), "discovery", s.cfg.Snapshot().MQTT.Discovery, "version", s.cfg.Snapshot().MQTT.Version)
@@ -284,13 +284,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 		if err := s.publishAll(); err != nil {
 			s.setConnectionResult(err)
 			s.logger.Warn("mqtt publish failed", "error", err)
-			s.mu.Lock()
-			if s.client != nil {
-				_ = s.client.Close()
-				s.client = nil
-			}
-			s.cache = map[string]string{}
-			s.mu.Unlock()
+			s.resetPublisher()
 		} else {
 			s.setConnectionResult(nil)
 		}
@@ -370,17 +364,38 @@ func (s *MQTTService) connectionKey() string {
 }
 
 func (s *MQTTService) closeClients() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil {
-		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
-		_ = s.client.Close()
-		s.client = nil
+	client, command := s.client, s.command
+	s.client, s.command = nil, nil
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
+		_ = client.Close()
 	}
-	if s.command != nil {
-		_ = s.command.Close()
-		s.command = nil
+	if command != nil {
+		_ = command.Close()
 	}
+}
+
+func (s *MQTTService) resetPublishCache() {
+	s.publishMu.Lock()
+	s.cache = map[string]string{}
+	s.publishMu.Unlock()
+}
+
+func (s *MQTTService) resetPublisher() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	s.mu.Lock()
+	client := s.client
+	s.client = nil
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
+	s.cache = map[string]string{}
 }
 
 func (s *MQTTService) commands(ctx context.Context) {
@@ -806,8 +821,8 @@ func (s *MQTTService) publishAll() error {
 	s.refreshOnePageHealth(pages)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	client := s.mqtt()
+	s.mu.Unlock()
 	if err := s.publishDiscovery(client, hw); err != nil {
 		return err
 	}
@@ -2217,10 +2232,13 @@ func (s *MQTTService) publishCommandResult(topic string, command string, err err
 }
 
 func (s *MQTTService) publishOffline() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil {
-		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
+	client := s.client
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
 	}
 }
 

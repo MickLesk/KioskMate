@@ -105,6 +105,13 @@ func TestLoadPreservesExistingKioskMateConfig(t *testing.T) {
 	if cfg.MQTT.Node != "panel" || cfg.MQTT.URL != "mqtt://ha.local:1883" {
 		t.Fatalf("mqtt config = %#v", cfg.MQTT)
 	}
+	if cfg.LoadWarning == "" {
+		t.Fatal("schema migration was not reported")
+	}
+	entries, err := os.ReadDir(BackupDir(path))
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("pre-migration backup missing: entries=%d error=%v", len(entries), err)
+	}
 }
 
 func TestLoadMigratesPagesToWorkflowMetadata(t *testing.T) {

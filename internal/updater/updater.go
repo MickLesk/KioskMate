@@ -364,7 +364,7 @@ func (s *Service) applyRelease(ctx context.Context, job *Job, privilege privileg
 		s.fail(job, err)
 		return
 	}
-	if err := validateDebPackage(ctx, file); err != nil {
+	if err := validateDebPackage(ctx, file, info.LatestVersion); err != nil {
 		s.fail(job, err)
 		return
 	}
