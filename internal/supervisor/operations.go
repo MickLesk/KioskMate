@@ -46,7 +46,16 @@ func (b *Browser) operate(ctx context.Context, action string, run func() error) 
 	if len(b.operationHistory) > 50 {
 		b.operationHistory = b.operationHistory[len(b.operationHistory)-50:]
 	}
+	operation := b.operation
+	journal := b.journal
 	b.mu.Unlock()
+	if journal != nil {
+		status, message := operation.State, operation.State
+		if err != nil {
+			message = err.Error()
+		}
+		journal.RecordDuration("browser", operation.Action, status, message, now.Sub(operation.Started), map[string]string{"operation_id": operation.ID})
+	}
 	b.persistRuntimeState()
 	return err
 }
@@ -84,7 +93,15 @@ func (b *Browser) Stop(ctx context.Context) error {
 	b.manuallyStopped = true
 	b.cancelRecoveryLocked()
 	b.mu.Unlock()
-	return b.operate(ctx, "stop", func() error { return b.stop(ctx) })
+	return b.operate(ctx, "stop", func() error { return b.stop(ctx, "manual_stop") })
+}
+
+func (b *Browser) Shutdown(ctx context.Context) error {
+	b.mu.Lock()
+	b.manuallyStopped = true
+	b.cancelRecoveryLocked()
+	b.mu.Unlock()
+	return b.operate(ctx, "shutdown", func() error { return b.stop(ctx, "service_shutdown") })
 }
 
 func (b *Browser) Restart(ctx context.Context) error {
@@ -93,7 +110,7 @@ func (b *Browser) Restart(ctx context.Context) error {
 		b.manuallyStopped = false
 		b.cancelRecoveryLocked()
 		b.mu.Unlock()
-		return b.restart(ctx)
+		return b.restart(ctx, "manual_restart")
 	})
 }
 

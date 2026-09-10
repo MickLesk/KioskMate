@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -25,11 +24,7 @@ jobs:
         run: go test -race ./...
       - name: Frontend syntax
         run: |
-          node --check internal/admin/web/assets/theme.js
-          node --check internal/admin/web/assets/i18n.js
-          node --check internal/admin/web/assets/api.js
-          node --check internal/admin/web/assets/ui-components.js
-          node --check internal/admin/web/assets/app.js
+          for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
       - name: Build Linux binaries
         run: |
@@ -37,7 +32,6 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-linux-amd64 ./cmd/kioskmate
       - name: Build Debian packages
         run: |
-          VERSION=0.0.0-ci ARCH=arm64 bash scripts/package-deb.sh
-          VERSION=0.0.0-ci ARCH=amd64 bash scripts/package-deb.sh
+          python3 scripts/package-deb.py --version 0.0.0-ci --arch arm64 --arch amd64
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_arm64.deb
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_amd64.deb

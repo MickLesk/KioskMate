@@ -3,6 +3,8 @@ package supervisor
 import (
 	"io"
 	"log/slog"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +12,30 @@ import (
 	"github.com/MickLesk/KioskMate/internal/config"
 	"github.com/MickLesk/KioskMate/internal/system"
 )
+
+func TestStatusDistinguishesProcessFromReadyPage(t *testing.T) {
+	cfg := &config.Config{Kiosk: config.KioskConfig{BrowserPreset: "custom", BrowserCommand: "browser", URLs: []string{"https://ha.example/dashboard?token=private"}}}
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	browser.cmd = &exec.Cmd{Process: &os.Process{Pid: 42}}
+	browser.started = time.Now()
+	browser.requiresControl = true
+	browser.generation = 3
+
+	starting := browser.Status()
+	if !starting.Running || starting.Ready || starting.State != "starting" || starting.Generation != 3 {
+		t.Fatalf("starting status = %#v", starting)
+	}
+	if starting.URL != "https://ha.example/dashboard" {
+		t.Fatalf("status URL leaked query data: %q", starting.URL)
+	}
+
+	browser.devTools = true
+	browser.readySince = time.Now()
+	running := browser.Status()
+	if !running.Running || !running.Ready || running.State != "running" || running.ReadySince == nil {
+		t.Fatalf("ready status = %#v", running)
+	}
+}
 
 func TestRecoveryDelayUsesBoundedExponentialBackoff(t *testing.T) {
 	wants := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second}

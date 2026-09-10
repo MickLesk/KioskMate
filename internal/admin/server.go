@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/integration"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
@@ -44,6 +46,12 @@ import (
 var content embed.FS
 
 const sessionCookieName = "kioskmate_session"
+
+const (
+	loginAttemptWindow = 5 * time.Minute
+	loginAttemptLimit  = 10
+	maxAttemptClients  = 256
+)
 
 var errSetupAlreadyCompleted = errors.New("setup already completed")
 
@@ -89,7 +97,9 @@ type Server struct {
 	hardware *hardware.Service
 	logger   *slog.Logger
 	version  string
+	journal  *events.Journal
 	ready    chan struct{}
+	started  time.Time
 	mu       sync.Mutex
 	sessions map[string]Session
 	attempts map[string][]time.Time
@@ -131,8 +141,12 @@ type mqttTestRequest struct {
 	MaxPacketBytes     int    `json:"maximum_packet_size"`
 }
 
-func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger) *Server {
-	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, ready: make(chan struct{}), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
+func NewServer(cfg *config.Config, browser Browser, mqtt MQTTDiscoveryPublisher, updates *updater.Service, actions *actions.Service, hw *hardware.Service, version string, logger *slog.Logger, journals ...*events.Journal) *Server {
+	var journal *events.Journal
+	if len(journals) > 0 {
+		journal = journals[0]
+	}
+	s := &Server{cfg: cfg, browser: browser, mqtt: mqtt, updater: updates, actions: actions, hardware: hw, version: version, logger: logger, journal: journal, ready: make(chan struct{}), started: time.Now(), sessions: map[string]Session{}, attempts: map[string][]time.Time{}}
 	s.loadSessions()
 	return s
 }
@@ -215,6 +229,7 @@ func (s *Server) Ready() <-chan struct{} { return s.ready }
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
+	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/assets/", s.asset)
 	mux.HandleFunc("/api/auth/status", s.authStatus)
 	mux.HandleFunc("/api/auth/setup", s.authSetup)
@@ -227,6 +242,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/time", s.auth(s.timeStatus))
 	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
+	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
 	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
 	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
 	mux.HandleFunc("/api/terminal/run", s.auth(s.terminalRun))
@@ -308,6 +324,29 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return err
 }
 
+func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	response := map[string]any{
+		"status":         "ok",
+		"service_ready":  true,
+		"version":        s.version,
+		"uptime_seconds": int(time.Since(s.started).Seconds()),
+	}
+	if s.browser != nil {
+		browser := s.browser.Status()
+		response["browser"] = map[string]any{
+			"state":      browser.State,
+			"running":    browser.Running,
+			"ready":      browser.Ready,
+			"generation": browser.Generation,
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) systemAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -359,9 +398,11 @@ func (s *Server) privilege(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		s.audit("privilege_activate", "ok", "privilege session activated", map[string]string{"mode": body.Mode})
 		writeJSON(w, http.StatusOK, s.actions.PrivilegeStatus())
 	case http.MethodDelete:
 		s.actions.ClearPrivilege()
+		s.audit("privilege_clear", "ok", "privilege session cleared", nil)
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -494,12 +535,15 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	snapshot := s.cfg.Snapshot()
 	authenticated := s.authenticated(r)
+	allowed, retry := s.allowAttempt(r)
 	response := map[string]any{
-		"authenticated": authenticated,
-		"setupRequired": snapshot.Admin.PasswordHash == "",
-		"tokenRequired": snapshot.Admin.PasswordHash == "",
-		"configPath":    s.cfg.Path,
-		"version":       s.version,
+		"authenticated":     authenticated,
+		"setupRequired":     snapshot.Admin.PasswordHash == "",
+		"tokenRequired":     snapshot.Admin.PasswordHash == "",
+		"configPath":        s.cfg.Path,
+		"version":           s.version,
+		"rateLimited":       !allowed,
+		"retryAfterSeconds": int(retry.Round(time.Second).Seconds()),
 	}
 	if authenticated {
 		response["config"] = publicConfigSnapshot(snapshot)
@@ -520,6 +564,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if allowed, retry := s.allowAttempt(r); !allowed {
+		s.audit("setup", "rate_limited", "setup rate limit reached", map[string]string{"remote": remoteIP(r)})
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
@@ -534,6 +579,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Snapshot().Admin.Token)) != 1 {
 		s.recordFailedAttempt(r)
+		s.audit("setup", "failed", "invalid setup token", map[string]string{"remote": remoteIP(r)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid setup token"})
 		return
 	}
@@ -565,6 +611,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	session := s.createSession(w, r)
+	s.audit("setup", "ok", "admin setup completed", map[string]string{"remote": remoteIP(r)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
@@ -580,6 +627,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if allowed, retry := s.allowAttempt(r); !allowed {
+		s.audit("login", "rate_limited", "login rate limit reached", map[string]string{"remote": remoteIP(r)})
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
@@ -600,6 +648,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		s.recordFailedAttempt(r)
+		s.audit("login", "failed", "invalid admin credentials", map[string]string{"remote": remoteIP(r)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -613,6 +662,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	session := s.createSession(w, r)
+	s.audit("login", "ok", "admin session created", map[string]string{"remote": remoteIP(r)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
@@ -634,6 +684,7 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 		s.persistSessions()
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	s.audit("logout", "ok", "admin session ended", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -662,6 +713,7 @@ func (s *Server) authLogoutAll(w http.ResponseWriter, r *http.Request) {
 	s.sessions = map[string]Session{}
 	s.mu.Unlock()
 	s.persistSessions()
+	s.audit("logout_all", "ok", "all admin sessions ended", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -704,6 +756,7 @@ func (s *Server) authPassword(w http.ResponseWriter, r *http.Request) {
 	s.sessions = map[string]Session{}
 	s.mu.Unlock()
 	s.persistSessions()
+	s.audit("password_change", "ok", "admin password changed", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -745,6 +798,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 func statusConfig(cfg *config.Config) map[string]any {
 	return map[string]any{
 		"path":                     cfg.Path,
+		"load_warning":             cfg.LoadWarning,
 		"profile":                  cfg.Performance.Profile,
 		"gpu_mode":                 cfg.Performance.GPUMode,
 		"theme":                    cfg.Kiosk.Theme,
@@ -837,6 +891,33 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) eventJournal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 && value <= 500 {
+			limit = value
+		}
+	}
+	result := map[string]any{"events": []events.Event{}, "limit": limit}
+	if s.journal != nil {
+		result["events"] = s.journal.Recent(limit)
+		result["path"] = s.journal.Path()
+	} else {
+		result["warning"] = "event journal unavailable"
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) audit(action, status, message string, details map[string]string) {
+	if s.journal != nil {
+		s.journal.Record("admin", action, status, message, details)
+	}
+}
+
 func (s *Server) logsDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -874,6 +955,7 @@ func (s *Server) diagnosticsExport(w http.ResponseWriter, r *http.Request) {
 	addZipText(zw, "logs.combined.txt", strings.Join(s.combinedLogs(ctx, 1500), "\n"))
 	addZipText(zw, "logs.core.txt", strings.Join(labeledTail("core", config.LogFilePath(s.cfg.Path), 1500), "\n"))
 	addZipText(zw, "logs.browser.txt", strings.Join(labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), 1500), "\n"))
+	addZipText(zw, "events.txt", strings.Join(s.eventLines(500), "\n"))
 	if err := zw.Close(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -884,13 +966,15 @@ func (s *Server) diagnosticsExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logLines(ctx context.Context, source string, limit int) map[string]any {
-	sources := []string{"combined", "core", "browser", "journal", "status", "paths"}
+	sources := []string{"combined", "core", "browser", "events", "journal", "status", "paths"}
 	result := map[string]any{"source": source, "sources": sources}
 	switch source {
 	case "core":
 		result["lines"] = labeledTail("core", config.LogFilePath(s.cfg.Path), limit)
 	case "browser":
 		result["lines"] = labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), limit)
+	case "events":
+		result["lines"] = s.eventLines(limit)
 	case "journal":
 		lines, warning := s.journalLines(ctx, limit)
 		result["lines"] = lines
@@ -908,10 +992,43 @@ func (s *Server) logLines(ctx context.Context, source string, limit int) map[str
 	return result
 }
 
+func (s *Server) eventLines(limit int) []string {
+	if s.journal == nil {
+		return []string{"event journal unavailable"}
+	}
+	items := s.journal.Recent(limit)
+	lines := make([]string, 0, len(items))
+	for index := len(items) - 1; index >= 0; index-- {
+		event := items[index]
+		line := fmt.Sprintf("[%s] %s/%s %s", event.At.Local().Format("2006-01-02 15:04:05"), event.Component, event.Action, event.Status)
+		if event.Duration > 0 {
+			line += fmt.Sprintf(" (%d ms)", event.Duration)
+		}
+		if event.Message != "" {
+			line += ": " + event.Message
+		}
+		if len(event.Details) > 0 {
+			parts := make([]string, 0, len(event.Details))
+			for key, value := range event.Details {
+				parts = append(parts, key+"="+value)
+			}
+			sort.Strings(parts)
+			line += " [" + strings.Join(parts, ", ") + "]"
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return []string{"(event journal empty)"}
+	}
+	return lines
+}
+
 func (s *Server) combinedLogs(ctx context.Context, limit int) []string {
 	var lines []string
 	lines = append(lines, labeledTail("core", config.LogFilePath(s.cfg.Path), limit/2)...)
 	lines = append(lines, labeledTail("browser", config.BrowserLogFilePath(s.cfg.Path), limit/2)...)
+	lines = append(lines, sectionHeader("kioskmate events")...)
+	lines = append(lines, s.eventLines(max(20, limit/4))...)
 	if journal, warning := s.journalLines(ctx, max(40, limit/4)); len(journal) > 0 {
 		lines = append(lines, sectionHeader("journal")...)
 		lines = append(lines, journal...)
@@ -971,6 +1088,7 @@ func (s *Server) logPathLines() []string {
 		"== paths ==",
 		"Core log: " + config.LogFilePath(s.cfg.Path),
 		"Browser log: " + config.BrowserLogFilePath(s.cfg.Path),
+		"Event journal: " + config.EventJournalPath(s.cfg.Path),
 		"Config: " + s.cfg.Path,
 		"Config backup: " + s.cfg.Path + ".bak",
 		"Tip: run `kioskmate --admin-info` on the kiosk for full recovery paths.",
@@ -1050,10 +1168,24 @@ func redactValue(key string, value any) any {
 			}
 			return "<redacted>"
 		}
+		if strings.Contains(lower, "url") || strings.Contains(lower, "uri") {
+			return redactDiagnosticURL(typed)
+		}
 		return typed
 	default:
 		return typed
 	}
+}
+
+func redactDiagnosticURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
@@ -1148,6 +1280,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		s.audit("config_save", "ok", "configuration saved", nil)
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1184,10 +1317,15 @@ func (s *Server) configImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if r.URL.Query().Get("dry_run") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next)})
+		return
+	}
 	if err := s.cfg.Replace(next); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.audit("config_import", "ok", "configuration imported", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -1216,6 +1354,7 @@ func (s *Server) repair(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		s.audit("repair", "ok", "configuration repair completed", nil)
 		writeJSON(w, http.StatusOK, report)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1228,7 +1367,8 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		DryRun bool   `json:"dry_run"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1255,11 +1395,53 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if body.DryRun {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next)})
+		return
+	}
 	if err := s.cfg.Replace(next); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.audit("config_restore", "ok", "configuration backup restored", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+type configPreview struct {
+	PagesBefore            int  `json:"pages_before"`
+	PagesAfter             int  `json:"pages_after"`
+	KioskChanged           bool `json:"kiosk_changed"`
+	BrowserSettingsChanged bool `json:"browser_settings_changed"`
+	MQTTChanged            bool `json:"mqtt_changed"`
+	AdminChanged           bool `json:"admin_changed"`
+	TimeChanged            bool `json:"time_changed"`
+	UpdateChanged          bool `json:"update_changed"`
+	RequiresBrowserRestart bool `json:"requires_browser_restart"`
+	RequiresServiceRestart bool `json:"requires_service_restart"`
+}
+
+func configChangeSummary(current, next *config.Config) configPreview {
+	if current == nil {
+		current = &config.Config{}
+	}
+	if next == nil {
+		next = &config.Config{}
+	}
+	kioskChanged := !reflect.DeepEqual(current.Kiosk, next.Kiosk)
+	browserSettingsChanged := !reflect.DeepEqual(current.Performance, next.Performance) || !reflect.DeepEqual(current.Watchdog, next.Watchdog)
+	adminChanged := !reflect.DeepEqual(current.Admin, next.Admin)
+	return configPreview{
+		PagesBefore:            current.Kiosk.PageCount(),
+		PagesAfter:             next.Kiosk.PageCount(),
+		KioskChanged:           kioskChanged,
+		BrowserSettingsChanged: browserSettingsChanged,
+		MQTTChanged:            !reflect.DeepEqual(current.MQTT, next.MQTT),
+		AdminChanged:           adminChanged,
+		TimeChanged:            !reflect.DeepEqual(current.Time, next.Time),
+		UpdateChanged:          !reflect.DeepEqual(current.Update, next.Update),
+		RequiresBrowserRestart: kioskChanged || browserSettingsChanged,
+		RequiresServiceRestart: adminChanged,
+	}
 }
 
 type backupFile struct {
@@ -1286,6 +1468,9 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 		next.MQTT.Password = s.cfg.Snapshot().MQTT.Password
 	}
 	next.MQTT.PasswordConfigured = false
+	if err := config.Validate(&next); err != nil {
+		return nil, err
+	}
 	return &next, nil
 }
 
@@ -1295,6 +1480,16 @@ func (s *Server) backupFiles() []backupFile {
 		kind string
 	}{
 		{s.cfg.Path + ".bak", "config"},
+	}
+	if entries, err := os.ReadDir(config.BackupDir(s.cfg.Path)); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "config-") && strings.HasSuffix(entry.Name(), ".json") {
+				paths = append(paths, struct {
+					path string
+					kind string
+				}{filepath.Join(config.BackupDir(s.cfg.Path), entry.Name()), "config"})
+			}
+		}
 	}
 	var files []backupFile
 	seen := map[string]bool{}
@@ -1518,10 +1713,16 @@ func (s *Server) browserAction(action string) http.HandlerFunc {
 			}
 		}
 		status := s.browser.Status()
+		message := "browser action completed"
+		nextAction := "none"
+		if status.Running && !status.Ready {
+			message = "browser process started; page control is still connecting"
+			nextAction = "wait_for_browser_control"
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"success": true, "action": action, "browser": status,
 			"operation_id": status.Operation.ID, "status": status.Operation.State,
-			"message": "browser action completed", "next_action": "none",
+			"message": message, "next_action": nextAction,
 		})
 	}
 }
@@ -1551,9 +1752,24 @@ func shouldVerifyBrowserRunning(action string) bool {
 func waitForBrowserState(browser Browser, running bool, timeout time.Duration) supervisor.Status {
 	deadline := time.Now().Add(timeout)
 	status := browser.Status()
+	var observedAt time.Time
 	for time.Now().Before(deadline) {
 		status = browser.Status()
-		if status.Running == running {
+		if running {
+			if status.Running {
+				if status.Ready {
+					return status
+				}
+				if observedAt.IsZero() {
+					observedAt = time.Now()
+				}
+				if time.Since(observedAt) >= 750*time.Millisecond {
+					return status
+				}
+			} else if !observedAt.IsZero() || status.LastError != "" {
+				return status
+			}
+		} else if !status.Running {
 			return status
 		}
 		time.Sleep(150 * time.Millisecond)
@@ -1587,27 +1803,29 @@ func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
 		commandError = err.Error()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"running":          status.Running,
-		"pid":              status.PID,
-		"command":          command,
-		"resolved_command": resolved,
-		"command_exists":   commandExists,
-		"command_error":    commandError,
-		"args":             status.Args,
-		"active_page":      status.Active,
-		"page_name":        status.PageName,
-		"url":              status.URL,
-		"page_count":       s.cfg.Snapshot().Kiosk.PageCount(),
-		"isolated_pages":   s.cfg.Snapshot().Kiosk.IsolateSessions,
-		"profile":          s.cfg.Snapshot().Performance.Profile,
-		"gpu_mode":         s.cfg.Snapshot().Performance.GPUMode,
-		"reduce_motion":    s.cfg.Snapshot().Performance.ReduceMotion,
-		"watchdog":         s.cfg.Snapshot().Watchdog.Enabled,
-		"watchdog_status":  status.Watchdog,
-		"browser_log":      config.BrowserLogFilePath(s.cfg.Path),
-		"core_log":         config.LogFilePath(s.cfg.Path),
-		"last_error":       status.LastError,
-		"last_exit":        status.LastExit,
+		"running":            status.Running,
+		"pid":                status.PID,
+		"command":            command,
+		"resolved_command":   resolved,
+		"command_exists":     commandExists,
+		"command_error":      commandError,
+		"args":               status.Args,
+		"active_page":        status.Active,
+		"page_name":          status.PageName,
+		"url":                status.URL,
+		"page_count":         s.cfg.Snapshot().Kiosk.PageCount(),
+		"isolated_pages":     s.cfg.Snapshot().Kiosk.IsolateSessions,
+		"profile":            s.cfg.Snapshot().Performance.Profile,
+		"gpu_mode":           s.cfg.Snapshot().Performance.GPUMode,
+		"reduce_motion":      s.cfg.Snapshot().Performance.ReduceMotion,
+		"watchdog":           s.cfg.Snapshot().Watchdog.Enabled,
+		"watchdog_status":    status.Watchdog,
+		"browser_log":        config.BrowserLogFilePath(s.cfg.Path),
+		"core_log":           config.LogFilePath(s.cfg.Path),
+		"last_error":         status.LastError,
+		"last_exit":          status.LastExit,
+		"last_exit_details":  status.Exit,
+		"exit_reason_counts": status.ExitCounts,
 	})
 }
 
@@ -2633,20 +2851,28 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) Session {
 
 func (s *Server) allowAttempt(r *http.Request) (bool, time.Duration) {
 	key := remoteIP(r)
-	cutoff := time.Now().Add(-5 * time.Minute)
+	now := time.Now()
+	cutoff := now.Add(-loginAttemptWindow)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var kept []time.Time
-	for _, ts := range s.attempts[key] {
-		if ts.After(cutoff) {
-			kept = append(kept, ts)
+	for client, attempts := range s.attempts {
+		kept := attempts[:0]
+		for _, ts := range attempts {
+			if ts.After(cutoff) {
+				kept = append(kept, ts)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.attempts, client)
+		} else {
+			s.attempts[client] = kept
 		}
 	}
-	s.attempts[key] = kept
-	if len(kept) < 8 {
+	kept := s.attempts[key]
+	if len(kept) < loginAttemptLimit {
 		return true, 0
 	}
-	retry := time.Until(kept[0].Add(5 * time.Minute))
+	retry := time.Until(kept[0].Add(loginAttemptWindow))
 	if retry < time.Second {
 		retry = time.Second
 	}
@@ -2695,7 +2921,22 @@ func (s *Server) validCSRF(r *http.Request) bool {
 
 func (s *Server) recordFailedAttempt(r *http.Request) {
 	s.mu.Lock()
-	s.attempts[remoteIP(r)] = append(s.attempts[remoteIP(r)], time.Now())
+	key := remoteIP(r)
+	if _, exists := s.attempts[key]; !exists && len(s.attempts) >= maxAttemptClients {
+		var oldestClient string
+		var oldest time.Time
+		for client, attempts := range s.attempts {
+			if len(attempts) == 0 {
+				oldestClient = client
+				break
+			}
+			if oldestClient == "" || attempts[len(attempts)-1].Before(oldest) {
+				oldestClient, oldest = client, attempts[len(attempts)-1]
+			}
+		}
+		delete(s.attempts, oldestClient)
+	}
+	s.attempts[key] = append(s.attempts[key], time.Now())
 	s.mu.Unlock()
 }
 
@@ -2885,5 +3126,16 @@ func sameOrigin(r *http.Request) bool {
 }
 
 func requestIsHTTPS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	if r.TLS != nil {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }

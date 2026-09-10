@@ -3,6 +3,7 @@ import argparse
 import gzip
 import io
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -13,6 +14,7 @@ SUPPORTED_ARCHES = {
     "amd64": "amd64",
     "arm64": "arm64",
 }
+DEBIAN_VERSION = re.compile(r"^[0-9][0-9A-Za-z.+:~\-]*$")
 
 
 def main() -> int:
@@ -21,6 +23,9 @@ def main() -> int:
     parser.add_argument("--arch", choices=sorted(SUPPORTED_ARCHES), action="append", required=True)
     parser.add_argument("--root", default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
+
+    if not DEBIAN_VERSION.fullmatch(args.version):
+        parser.error("version must be a valid Debian package version")
 
     root = Path(args.root).resolve()
     dist = root / "dist"
@@ -133,15 +138,21 @@ reload_user_units() {
     UID_NAME="$(basename "$RUNTIME")"
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
-    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+    [ -S "$RUNTIME/bus" ] || continue
+    user_systemctl "$RUNTIME" "$USER_NAME" daemon-reload >/dev/null 2>&1 || true
     # prerm stops the user service during upgrades; bring enabled instances back up.
-    if XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user --quiet is-enabled kioskmate.service >/dev/null 2>&1; then
-      XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user start kioskmate.service >/dev/null 2>&1 || true
+    if user_systemctl "$RUNTIME" "$USER_NAME" --quiet is-enabled kioskmate.service >/dev/null 2>&1; then
+      user_systemctl "$RUNTIME" "$USER_NAME" start kioskmate.service >/dev/null 2>&1 || true
     fi
   done
 }
+user_systemctl() {
+  RUNTIME="$1"
+  USER_NAME="$2"
+  shift 2
+  XDG_RUNTIME_DIR="$RUNTIME" DBUS_SESSION_BUS_ADDRESS="unix:path=$RUNTIME/bus" runuser -u "$USER_NAME" -- systemctl --user "$@"
+}
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl --global enable kioskmate.service >/dev/null 2>&1 || true
   reload_user_units
 fi
 exit 0
@@ -157,8 +168,15 @@ stop_user_units() {
     UID_NAME="$(basename "$RUNTIME")"
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
-    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user stop kioskmate.service >/dev/null 2>&1 || true
+    [ -S "$RUNTIME/bus" ] || continue
+    user_systemctl "$RUNTIME" "$USER_NAME" stop kioskmate.service >/dev/null 2>&1 || true
   done
+}
+user_systemctl() {
+  RUNTIME="$1"
+  USER_NAME="$2"
+  shift 2
+  XDG_RUNTIME_DIR="$RUNTIME" DBUS_SESSION_BUS_ADDRESS="unix:path=$RUNTIME/bus" runuser -u "$USER_NAME" -- systemctl --user "$@"
 }
 if command -v systemctl >/dev/null 2>&1; then
   stop_user_units
@@ -176,12 +194,18 @@ reload_user_units() {
     UID_NAME="$(basename "$RUNTIME")"
     USER_NAME="$(getent passwd "$UID_NAME" | cut -d: -f1)"
     [ -n "$USER_NAME" ] || continue
-    XDG_RUNTIME_DIR="$RUNTIME" runuser -u "$USER_NAME" -- systemctl --user daemon-reload >/dev/null 2>&1 || true
+    [ -S "$RUNTIME/bus" ] || continue
+    user_systemctl "$RUNTIME" "$USER_NAME" daemon-reload >/dev/null 2>&1 || true
   done
+}
+user_systemctl() {
+  RUNTIME="$1"
+  USER_NAME="$2"
+  shift 2
+  XDG_RUNTIME_DIR="$RUNTIME" DBUS_SESSION_BUS_ADDRESS="unix:path=$RUNTIME/bus" runuser -u "$USER_NAME" -- systemctl --user "$@"
 }
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --global disable kioskmate.service >/dev/null 2>&1 || true
     reload_user_units
   fi
 fi

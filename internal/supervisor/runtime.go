@@ -72,6 +72,8 @@ type runtimeState struct {
 	Override     ManualOverride    `json:"override"`
 	Telemetry    []TelemetrySample `json:"telemetry"`
 	Operations   []Operation       `json:"operations,omitempty"`
+	LastExit     ExitStatus        `json:"last_exit,omitempty"`
+	ExitCounts   map[string]int    `json:"exit_reason_counts,omitempty"`
 }
 
 func (b *Browser) Recover(ctx context.Context, reason string) error {
@@ -149,7 +151,7 @@ func (b *Browser) recover(ctx context.Context, reason string, forceRestart bool)
 	b.mu.Unlock()
 	var err error
 	if running {
-		err = b.restart(ctx)
+		err = b.restart(ctx, normalizeExitReason(reason))
 	} else {
 		err = b.start(ctx)
 	}
@@ -367,6 +369,7 @@ func (b *Browser) persistRuntimeState() {
 		RecoveryRuns: append([]time.Time(nil), b.recoveryRuns...), StartCount: b.startCount, RestartCount: b.restartCount,
 		Recovery: b.recovery, Override: b.override, Telemetry: append([]TelemetrySample(nil), b.telemetry...),
 		Operations: append([]Operation(nil), b.operationHistory...),
+		LastExit:   b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts),
 	}
 	b.mu.Unlock()
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -396,6 +399,13 @@ func (b *Browser) loadRuntimeState() {
 		return
 	}
 	b.startCount, b.restartCount, b.recovery, b.override = state.StartCount, state.RestartCount, state.Recovery, state.Override
+	b.lastExitDetails, b.exitReasonCounts = state.LastExit, cloneIntMap(state.ExitCounts)
+	if b.exitReasonCounts == nil {
+		b.exitReasonCounts = map[string]int{}
+	}
+	if state.LastExit.At != nil {
+		b.lastExit = *state.LastExit.At
+	}
 	b.recoveryRuns = state.RecoveryRuns
 	b.operationHistory = state.Operations
 	if len(b.operationHistory) > 50 {

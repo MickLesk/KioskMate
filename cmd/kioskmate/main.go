@@ -19,6 +19,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/admin"
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/integration"
 	"github.com/MickLesk/KioskMate/internal/logutil"
@@ -50,6 +51,9 @@ func main() {
 		os.Exit(1)
 	}
 	logger, logFile := setupLogger(cfg)
+	if cfg.LoadWarning != "" {
+		logger.Warn("configuration recovered", "detail", cfg.LoadWarning)
+	}
 	if *adminInfo || *doctor || *repair || *adminReset || *adminPassword {
 		if err := handleCommand(*adminInfo, *doctor, *repair, *adminReset, *adminPassword, cfg, version, logFile); err != nil {
 			logger.Error("command failed", "error", err)
@@ -63,17 +67,26 @@ func main() {
 		os.Exit(1)
 	}
 	defer instanceLock.Close()
+	eventJournal, journalErr := events.Open(config.EventJournalPath(cfg.Path), 500)
+	if journalErr != nil {
+		logger.Warn("event journal unavailable", "error", journalErr)
+	} else if cfg.LoadWarning != "" {
+		eventJournal.Record("config", "automatic_restore", "warn", "configuration restored from backup", map[string]string{"detail": cfg.LoadWarning})
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	browser := supervisor.NewBrowser(cfg, logger.With("component", "browser"))
+	browser.SetEventJournal(eventJournal)
 	actionService := actions.New(cfg)
+	actionService.SetEventJournal(eventJournal)
 	updateService := updater.New(cfg, version, actionService)
+	updateService.SetEventJournal(eventJournal)
 	hardwareService := hardware.New()
 	browser.SetDisplayPower(hardwareService)
-	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"))
-	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"))
+	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"), eventJournal)
+	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"), eventJournal)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -117,7 +130,7 @@ func main() {
 	stop()
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
-	if err := browser.Stop(shutdownCtx); err != nil {
+	if err := browser.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("browser stop failed", "error", err)
 	}
 }
@@ -202,6 +215,7 @@ func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cf
 		fmt.Println("Config file:", cfg.Path)
 		fmt.Println("Config backup:", cfg.Path+".bak")
 		fmt.Println("Log file:", logFile)
+		fmt.Println("Event journal:", config.EventJournalPath(cfg.Path))
 		fmt.Println("Admin address:", cfg.Admin.Addr())
 		fmt.Println("Admin password configured:", cfg.Admin.PasswordHash != "")
 		if cfg.Admin.PasswordHash == "" {

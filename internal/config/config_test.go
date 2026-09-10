@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,6 +35,22 @@ func TestNormalizeV3EnablesSchedulerForTimeRules(t *testing.T) {
 	}
 }
 
+func TestValidateMQTTTransportSettings(t *testing.T) {
+	cfg := &Config{MQTT: MQTTConfig{Enabled: true, URL: "http://broker.local:1883", MaxPacketBytes: 1 << 20}}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("insecure HTTP MQTT URL was accepted")
+	}
+	cfg.MQTT.URL = "mqtts://broker.local:8883"
+	cfg.MQTT.CertFile = "/tmp/client.crt"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("unpaired MQTT client certificate was accepted")
+	}
+	cfg.MQTT.KeyFile = "/tmp/client.key"
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadCreatesKioskMateConfig(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, ".config", "kioskmate", "config.json")
@@ -53,6 +70,14 @@ func TestLoadCreatesKioskMateConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected config to be saved: %v", err)
+	}
+}
+
+func TestEventJournalPathUsesConfigDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".config", "kioskmate", "config.json")
+	want := filepath.Join(filepath.Dir(path), "events.jsonl")
+	if got := EventJournalPath(path); got != want {
+		t.Fatalf("event journal path = %q, want %q", got, want)
 	}
 }
 
@@ -79,6 +104,13 @@ func TestLoadPreservesExistingKioskMateConfig(t *testing.T) {
 	}
 	if cfg.MQTT.Node != "panel" || cfg.MQTT.URL != "mqtt://ha.local:1883" {
 		t.Fatalf("mqtt config = %#v", cfg.MQTT)
+	}
+	if cfg.LoadWarning == "" {
+		t.Fatal("schema migration was not reported")
+	}
+	entries, err := os.ReadDir(BackupDir(path))
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("pre-migration backup missing: entries=%d error=%v", len(entries), err)
 	}
 }
 
@@ -297,6 +329,113 @@ func TestSaveBacksUpChangedConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".bak"); err != nil {
 		t.Fatalf("expected backup before rewrite: %v", err)
+	}
+	entries, err := os.ReadDir(BackupDir(path))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one historical backup, entries=%d error=%v", len(entries), err)
+	}
+}
+
+func TestConfigBackupHistoryIsBounded(t *testing.T) {
+	path := filepath.Join(testHome(t), ".config", "kioskmate", "config.json")
+	cfg := defaults(path)
+	if err := Save(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 14; index++ {
+		cfg.Kiosk.Pages[0].Name = fmt.Sprintf("Page %02d", index)
+		if err := Save(&cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(BackupDir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 10 {
+		t.Fatalf("backup history contains %d entries, want 10", len(entries))
+	}
+}
+
+func TestLoadRecoversCorruptConfigFromBackup(t *testing.T) {
+	path := filepath.Join(testHome(t), ".config", "kioskmate", "config.json")
+	writeFile(t, path, `{"version":`)
+	writeFile(t, path+".bak", `{
+  "version": 4,
+  "admin": {"bind": "0.0.0.0", "port": 33333, "token": "recovered-token"},
+  "kiosk": {"pages": [{"page_id": "main", "name": "Main", "url": "http://ha.local:8123"}]},
+  "update": {"repository": "MickLesk/KioskMate", "service": "kioskmate.service"}
+}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin.Token != "recovered-token" || cfg.Kiosk.Pages[0].PageID != "main" {
+		t.Fatalf("recovered config = %#v", cfg)
+	}
+	if cfg.LoadWarning == "" {
+		t.Fatal("automatic recovery did not expose a warning")
+	}
+	corrupt, err := filepath.Glob(path + ".corrupt-*")
+	if err != nil || len(corrupt) != 1 {
+		t.Fatalf("corrupt config preservation = %#v, %v", corrupt, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || len(data) == 0 || string(data) == `{"version":` {
+		t.Fatalf("primary config was not restored: %q, %v", data, err)
+	}
+}
+
+func TestValidateRejectsUnsafeOrInvalidRuntimeValues(t *testing.T) {
+	cfg := defaults("")
+	cfg.Admin.TLSCert = "/tmp/admin.crt"
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("unpaired Admin TLS certificate was accepted")
+	}
+	cfg.Admin.TLSKey = "/tmp/admin.key"
+	cfg.Kiosk.Pages[0].URL = "javascript:alert(1)"
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("non-HTTP kiosk page URL was accepted")
+	}
+	cfg.Kiosk.Pages[0].URL = "https://ha.example/dashboard"
+	brightness := 101
+	cfg.Kiosk.Pages[0].DisplayOptions.Brightness = &brightness
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("out-of-range page brightness was accepted")
+	}
+	brightness = 80
+	cfg.Version = currentConfigVersion + 1
+	if err := Validate(&cfg); err == nil {
+		t.Fatal("newer config schema was accepted")
+	}
+}
+
+func TestMutateRejectsInvalidConfigWithoutChangingMemoryOrDisk(t *testing.T) {
+	path := filepath.Join(testHome(t), ".config", "kioskmate", "config.json")
+	cfg := defaults(path)
+	if err := Save(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.Mutate(func(next *Config) error {
+		next.Kiosk.Pages[0].URL = "file:///etc/passwd"
+		return nil
+	})
+	if err == nil {
+		t.Fatal("invalid config mutation was accepted")
+	}
+	if cfg.Kiosk.Pages[0].URL == "file:///etc/passwd" {
+		t.Fatal("failed mutation changed the in-memory config")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatal("failed mutation changed the persisted config")
 	}
 }
 

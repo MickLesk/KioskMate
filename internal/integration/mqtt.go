@@ -8,7 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/config"
+	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
@@ -52,6 +56,7 @@ type MQTTService struct {
 	updater          *updater.Service
 	actions          *actions.Service
 	logger           *slog.Logger
+	journal          *events.Journal
 	version          string
 	client           *mqttclient.Client
 	command          *mqttclient.Client
@@ -71,6 +76,8 @@ type MQTTService struct {
 	commandMu        sync.Mutex
 	publishMu        sync.Mutex
 	knownPageIDs     []string
+	discoveryTopics  []string
+	discoveryLoaded  bool
 	needsRestart     atomic.Bool
 }
 
@@ -88,6 +95,11 @@ type discoveryItem struct {
 	Data  map[string]any
 }
 
+type discoveryRegistry struct {
+	Version int      `json:"version"`
+	Topics  []string `json:"topics"`
+}
+
 type pageEntity struct {
 	Index int
 	Name  string
@@ -103,9 +115,13 @@ type pageHealth struct {
 	Checked      time.Time
 }
 
-func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger) *MQTTService {
+func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger, journals ...*events.Journal) *MQTTService {
 	_ = cfg.Snapshot()
-	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled", overrideDuration: time.Hour}
+	var journal *events.Journal
+	if len(journals) > 0 {
+		journal = journals[0]
+	}
+	return &MQTTService{cfg: cfg, browser: browser, hardware: hw, updater: updates, actions: actionService, version: version, logger: logger, journal: journal, cache: map[string]string{}, health: map[string]pageHealth{}, healthNext: map[string]time.Time{}, healthFailures: map[string]int{}, state: "disabled", overrideDuration: time.Hour}
 }
 
 func (s *MQTTService) ConnectionStatus() MQTTConnectionStatus {
@@ -130,7 +146,7 @@ func (s *MQTTService) ConnectionStatus() MQTTConnectionStatus {
 
 func (s *MQTTService) setConnectionResult(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousState, previousError := s.state, s.lastError
 	if err == nil {
 		now := time.Now()
 		if s.state != "connected" {
@@ -140,25 +156,39 @@ func (s *MQTTService) setConnectionResult(err error) {
 		s.lastPublished = now
 		s.lastError = ""
 		s.failures = 0
-		return
-	}
-	s.lastError = err.Error()
-	s.failures++
-	if strings.Contains(strings.ToLower(err.Error()), "not authorized") || strings.Contains(err.Error(), "0x87") {
-		s.state = "auth_error"
 	} else {
-		s.state = "error"
+		s.lastError = err.Error()
+		s.failures++
+		if strings.Contains(strings.ToLower(err.Error()), "not authorized") || strings.Contains(err.Error(), "0x87") {
+			s.state = "auth_error"
+		} else {
+			s.state = "error"
+		}
+	}
+	state, message, journal := s.state, s.lastError, s.journal
+	s.mu.Unlock()
+	if journal != nil && (state != previousState || message != previousError) {
+		status := "ok"
+		if err != nil {
+			status = "error"
+		}
+		journal.Record("mqtt", "connection", status, firstNonEmpty(message, "connected"), map[string]string{"state": state})
 	}
 }
 
 func (s *MQTTService) setConnectionState(state string) {
 	s.mu.Lock()
+	previous := s.state
 	s.state = state
 	if state == "disabled" {
 		s.lastError = ""
 		s.failures = 0
 	}
+	journal := s.journal
 	s.mu.Unlock()
+	if journal != nil && previous != state {
+		journal.Record("mqtt", "state", "info", "connection state changed", map[string]string{"state": state})
+	}
 }
 
 func (s *MQTTService) PublishNow() error {
@@ -178,19 +208,32 @@ func (s *MQTTService) ResetDiscovery() (int, error) {
 	if s.cfg.Snapshot().MQTT.URL == "" {
 		return 0, errors.New("mqtt url is empty")
 	}
+	s.publishMu.Lock()
 	s.mu.Lock()
 	client := s.mqtt()
+	s.mu.Unlock()
 	count := 0
+	topics := map[string]bool{}
 	for _, entry := range s.discoveryResetEntries() {
 		topic := strings.Trim(s.cfg.Snapshot().MQTT.Discovery, "/") + "/" + entry[0] + "/" + s.cfg.Snapshot().MQTT.Node + "/" + entry[1] + "/config"
+		topics[topic] = true
+	}
+	for _, topic := range s.loadDiscoveryRegistryLocked() {
+		topics[topic] = true
+	}
+	for topic := range topics {
 		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
-			s.mu.Unlock()
+			s.publishMu.Unlock()
 			return count, err
 		}
 		count++
 	}
+	if err := s.saveDiscoveryRegistryLocked(nil); err != nil {
+		s.publishMu.Unlock()
+		return count, err
+	}
 	s.cleaned = false
-	s.mu.Unlock()
+	s.publishMu.Unlock()
 	if err := s.publishAll(); err != nil {
 		return count, err
 	}
@@ -233,9 +276,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 			commandCtx, cancel := context.WithCancel(ctx)
 			commandCancel = cancel
 			activeKey = key
-			s.mu.Lock()
-			s.cache = map[string]string{}
-			s.mu.Unlock()
+			s.resetPublishCache()
 			go s.commands(commandCtx)
 			s.setConnectionState("connecting")
 			s.logger.Info("mqtt connection configured", "root", s.root(), "discovery", s.cfg.Snapshot().MQTT.Discovery, "version", s.cfg.Snapshot().MQTT.Version)
@@ -243,13 +284,7 @@ func (s *MQTTService) Run(ctx context.Context) {
 		if err := s.publishAll(); err != nil {
 			s.setConnectionResult(err)
 			s.logger.Warn("mqtt publish failed", "error", err)
-			s.mu.Lock()
-			if s.client != nil {
-				_ = s.client.Close()
-				s.client = nil
-			}
-			s.cache = map[string]string{}
-			s.mu.Unlock()
+			s.resetPublisher()
 		} else {
 			s.setConnectionResult(nil)
 		}
@@ -329,17 +364,38 @@ func (s *MQTTService) connectionKey() string {
 }
 
 func (s *MQTTService) closeClients() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil {
-		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
-		_ = s.client.Close()
-		s.client = nil
+	client, command := s.client, s.command
+	s.client, s.command = nil, nil
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
+		_ = client.Close()
 	}
-	if s.command != nil {
-		_ = s.command.Close()
-		s.command = nil
+	if command != nil {
+		_ = command.Close()
 	}
+}
+
+func (s *MQTTService) resetPublishCache() {
+	s.publishMu.Lock()
+	s.cache = map[string]string{}
+	s.publishMu.Unlock()
+}
+
+func (s *MQTTService) resetPublisher() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	s.mu.Lock()
+	client := s.client
+	s.client = nil
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
+	s.cache = map[string]string{}
 }
 
 func (s *MQTTService) commands(ctx context.Context) {
@@ -445,6 +501,7 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 			s.logger.Warn("mqtt page trigger failed", "topic", topic, "page", page, "error", err)
 		}
 		s.publishCommandResult(topic, command, err)
+		s.recordCommand(topic, err)
 		return
 	} else if topicIsTrigger {
 		// Topic matches a configured page trigger, but the payload does not
@@ -686,6 +743,31 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		s.logger.Warn("mqtt command failed", "command", command, "error", err)
 	}
 	s.publishCommandResult(topic, command, err)
+	s.recordCommand(topic, err)
+}
+
+func (s *MQTTService) recordCommand(topic string, err error) {
+	s.mu.Lock()
+	journal := s.journal
+	s.mu.Unlock()
+	if journal == nil {
+		return
+	}
+	status := "ok"
+	message := "MQTT command completed"
+	if err != nil {
+		status = "error"
+		message = "MQTT command failed"
+	}
+	journal.Record("mqtt", "command", status, message, map[string]string{"topic": compactTopic(topic)})
+}
+
+func compactTopic(topic string) string {
+	parts := strings.Split(strings.Trim(topic, "/"), "/")
+	if len(parts) > 3 {
+		parts = parts[len(parts)-3:]
+	}
+	return strings.Join(parts, "/")
 }
 
 // triggeredPage checks whether topic/payload matches a configured MQTT page
@@ -739,8 +821,8 @@ func (s *MQTTService) publishAll() error {
 	s.refreshOnePageHealth(pages)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	client := s.mqtt()
+	s.mu.Unlock()
 	if err := s.publishDiscovery(client, hw); err != nil {
 		return err
 	}
@@ -762,12 +844,18 @@ func (s *MQTTService) publishAll() error {
 	}
 	state := map[string]any{
 		"running":       status.Running,
+		"ready":         status.Ready,
+		"state":         status.State,
+		"generation":    status.Generation,
+		"control":       status.Control,
 		"pid":           status.PID,
 		"rss_mb":        status.Stats.RSSMB,
 		"cpu_percent":   status.Stats.CPUPercent,
 		"pids":          status.Stats.PIDs,
 		"start_count":   status.StartCount,
 		"restart_count": status.Restarts,
+		"last_exit":     status.Exit,
+		"exit_counts":   status.ExitCounts,
 		"page":          status.Active + 1,
 		"page_name":     status.PageName,
 		"page_url":      status.URL,
@@ -818,8 +906,15 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "ntp_server", cfg.Time.NTPServer, true)
 	_ = s.publishState(client, "ntp_synchronized", boolState(timeStatus.Synchronized), false)
 	_ = s.publishState(client, "browser_pid", fmt.Sprintf("%d", status.PID), false)
+	_ = s.publishState(client, "browser_ready", boolState(status.Ready), false)
+	_ = s.publishState(client, "browser_state", firstString(status.State, "unknown"), false)
+	_ = s.publishState(client, "browser_generation", fmt.Sprintf("%d", status.Generation), false)
+	_ = s.publishState(client, "browser_control_failures", fmt.Sprintf("%d", status.Control.Failures), false)
 	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
 	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
+	_ = s.publishState(client, "browser_last_exit_reason", firstString(status.Exit.Reason, "none"), false)
+	_ = s.publishState(client, "browser_last_exit_code", fmt.Sprintf("%d", status.Exit.ExitCode), false)
+	_ = s.publishState(client, "browser_last_runtime_seconds", fmt.Sprintf("%.1f", float64(status.Exit.RuntimeMS)/1000), false)
 	_ = s.publishState(client, "browser_process_count", fmt.Sprintf("%d", len(status.Stats.PIDs)), false)
 	_ = s.publishState(client, "recovery_state", firstString(status.Recovery.State, "idle"), true)
 	_ = s.publishState(client, "recovery_stage", firstString(status.Recovery.Stage, "none"), true)
@@ -861,11 +956,23 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "auth_guard", boolState(status.AuthGuard.Tripped), true)
 	_ = s.publishState(client, "auth_guard_reason", firstString(status.AuthGuard.Reason, "none"), true)
 	_ = s.publishState(client, "auth_guard_kind", firstString(status.AuthGuard.Kind, "none"), true)
+	_ = s.publishState(client, "auth_guard_confidence", firstString(status.AuthGuard.Confidence, "none"), true)
+	_ = s.publishState(client, "auth_guard_occurrences", fmt.Sprintf("%d", status.AuthGuard.Occurrences), true)
 	_ = s.publishState(client, "auth_guard_kiosk_ip", firstString(status.AuthGuard.KioskIP, "none"), true)
 	if status.AuthGuard.At != nil {
 		_ = s.publishState(client, "auth_guard_at", status.AuthGuard.At.Format(time.RFC3339), true)
 	} else {
 		_ = s.publishState(client, "auth_guard_at", "none", true)
+	}
+	if status.AuthGuard.FirstSeen != nil {
+		_ = s.publishState(client, "auth_guard_first_seen", status.AuthGuard.FirstSeen.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "auth_guard_first_seen", "none", true)
+	}
+	if status.AuthGuard.LastSeen != nil {
+		_ = s.publishState(client, "auth_guard_last_seen", status.AuthGuard.LastSeen.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "auth_guard_last_seen", "none", true)
 	}
 	_ = s.publishState(client, "page_count", fmt.Sprintf("%d", cfg.Kiosk.PageCount()), true)
 	_ = s.publishState(client, "page_number", fmt.Sprintf("%d", status.Active+1), true)
@@ -875,7 +982,7 @@ func (s *MQTTService) publishAll() error {
 		_ = s.publishState(client, "pages/"+page.ID+"/active", boolState(page.Index == status.Active), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/index", fmt.Sprintf("%d", page.Index+1), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/name", page.Name, true)
-		_ = s.publishState(client, "pages/"+page.ID+"/url", page.URL, true)
+		_ = s.publishState(client, "pages/"+page.ID+"/url", diagnosticPageURL(page.URL), true)
 		health := s.health[page.ID]
 		if health.Checked.IsZero() {
 			health = pageHealth{Checked: time.Now().UTC(), Error: "not checked yet"}
@@ -1170,8 +1277,14 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			},
 		},
 		s.diagnosticSensor(device, "browser_pid", "Browser PID", "mdi:identifier", ""),
+		s.diagnosticSensor(device, "browser_state", "Browser State", "mdi:state-machine", ""),
+		s.diagnosticSensor(device, "browser_generation", "Browser Generation", "mdi:counter", ""),
+		s.diagnosticSensor(device, "browser_control_failures", "Browser Control Reconnects", "mdi:connection", ""),
 		s.diagnosticSensor(device, "browser_start_count", "Browser Start Count", "mdi:counter", ""),
 		s.diagnosticSensor(device, "browser_restart_count", "Browser Restart Count", "mdi:restart", ""),
+		s.diagnosticSensor(device, "browser_last_exit_reason", "Browser Last Exit Reason", "mdi:exit-run", ""),
+		s.diagnosticSensor(device, "browser_last_exit_code", "Browser Last Exit Code", "mdi:numeric", ""),
+		s.diagnosticSensor(device, "browser_last_runtime_seconds", "Browser Last Runtime", "mdi:timer-outline", "s"),
 		s.diagnosticSensor(device, "browser_started", "Browser Started", "mdi:clock-start", ""),
 		s.diagnosticSensor(device, "browser_command", "Browser Command", "mdi:console", ""),
 		s.diagnosticSensor(device, "browser_last_error", "Browser Last Error", "mdi:alert-circle", ""),
@@ -1494,6 +1607,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 	items = append(items, s.runtimeDiscoveryItems(device)...)
 	items = append(items,
 		discoveryItem{
+			Topic: s.discoveryTopic("binary_sensor", "browser_ready"),
+			Data: map[string]any{
+				"name":            "Browser Ready",
+				"unique_id":       s.cfg.Snapshot().MQTT.Node + "_browser_ready",
+				"state_topic":     s.root() + "/browser_ready/state",
+				"payload_on":      "ON",
+				"payload_off":     "OFF",
+				"device_class":    "connectivity",
+				"entity_category": "diagnostic",
+				"device":          device,
+			},
+		},
+		discoveryItem{
 			Topic: s.discoveryTopic("binary_sensor", "browser_devtools"),
 			Data: map[string]any{
 				"name":            "Browser Control Connected",
@@ -1530,6 +1656,18 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		return err
 	}
 	unsupportedObjects := s.unsupportedDiscoveryObjects(status.Support)
+	activeTopics := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, object, ok := parseDiscoveryTopic(item.Topic); ok && unsupportedObjects[object] {
+			continue
+		}
+		activeTopics = append(activeTopics, item.Topic)
+	}
+	for _, topic := range staleDiscoveryTopics(s.loadDiscoveryRegistryLocked(), activeTopics) {
+		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
+			return err
+		}
+	}
 	for _, item := range items {
 		if _, object, ok := parseDiscoveryTopic(item.Topic); ok && unsupportedObjects[object] {
 			// Hardware doesn't support this entity: clear any previously
@@ -1545,7 +1683,123 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			return err
 		}
 	}
+	return s.saveDiscoveryRegistryLocked(activeTopics)
+}
+
+func (s *MQTTService) discoveryRegistryPath() string {
+	if s.cfg == nil || s.cfg.Path == "" {
+		return ""
+	}
+	return filepath.Join(config.ConfigDir(s.cfg.Path), "mqtt-discovery-topics.json")
+}
+
+func (s *MQTTService) loadDiscoveryRegistryLocked() []string {
+	if s.discoveryLoaded {
+		return append([]string(nil), s.discoveryTopics...)
+	}
+	s.discoveryLoaded = true
+	path := s.discoveryRegistryPath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var registry discoveryRegistry
+	if json.Unmarshal(data, &registry) != nil || registry.Version != 1 {
+		return nil
+	}
+	for _, topic := range registry.Topics {
+		if validDiscoveryConfigTopic(topic) {
+			s.discoveryTopics = append(s.discoveryTopics, topic)
+		}
+	}
+	sort.Strings(s.discoveryTopics)
+	return append([]string(nil), s.discoveryTopics...)
+}
+
+func (s *MQTTService) saveDiscoveryRegistryLocked(topics []string) error {
+	filtered := make([]string, 0, len(topics))
+	seen := map[string]bool{}
+	for _, topic := range topics {
+		if validDiscoveryConfigTopic(topic) && !seen[topic] {
+			seen[topic] = true
+			filtered = append(filtered, topic)
+		}
+	}
+	sort.Strings(filtered)
+	if reflect.DeepEqual(filtered, s.discoveryTopics) && s.discoveryLoaded {
+		return nil
+	}
+	path := s.discoveryRegistryPath()
+	if path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(discoveryRegistry{Version: 1, Topics: filtered}, "", "  ")
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(path), ".mqtt-discovery-*")
+		if err != nil {
+			return err
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if err := tmp.Chmod(0o600); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if _, err := tmp.Write(append(data, '\n')); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, path); err != nil {
+			return err
+		}
+	}
+	s.discoveryTopics = filtered
+	s.discoveryLoaded = true
 	return nil
+}
+
+func staleDiscoveryTopics(previous, current []string) []string {
+	wanted := make(map[string]bool, len(current))
+	for _, topic := range current {
+		wanted[topic] = true
+	}
+	var stale []string
+	for _, topic := range previous {
+		if validDiscoveryConfigTopic(topic) && !wanted[topic] {
+			stale = append(stale, topic)
+		}
+	}
+	sort.Strings(stale)
+	return stale
+}
+
+func validDiscoveryConfigTopic(topic string) bool {
+	if strings.ContainsAny(topic, "\x00+#") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(topic, "/"), "/")
+	if len(parts) < 5 || parts[len(parts)-1] != "config" {
+		return false
+	}
+	switch parts[len(parts)-4] {
+	case "binary_sensor", "button", "image", "light", "number", "select", "sensor", "switch", "text", "update":
+		return parts[len(parts)-3] != "" && parts[len(parts)-2] != ""
+	default:
+		return false
+	}
 }
 
 // unsupportedDiscoveryObjects returns the discovery object IDs that must not
@@ -1555,6 +1809,10 @@ func (s *MQTTService) unsupportedDiscoveryObjects(support hardware.Support) map[
 	unsupported := map[string]bool{}
 	if !support.DisplayStatus {
 		unsupported["display_power"] = true
+	}
+	// A Home Assistant light entity must expose a real brightness command. A
+	// display power switch remains useful when only DPMS/power is available.
+	if !support.DisplayStatus || !support.DisplayBrightness {
 		unsupported["display"] = true
 	}
 	if !support.AudioVolume {
@@ -1565,6 +1823,18 @@ func (s *MQTTService) unsupportedDiscoveryObjects(support hardware.Support) map[
 	}
 	if !support.KeyboardVisibility {
 		unsupported["keyboard"] = true
+	}
+	if !support.BatteryLevel {
+		unsupported["battery_level"] = true
+	}
+	if !support.IlluminanceLevel {
+		unsupported["illuminance_level"] = true
+	}
+	if !support.PackageUpgrades {
+		unsupported["package_upgrades"] = true
+	}
+	if !support.ProcessorTemperature {
+		unsupported["processor_temperature"] = true
 	}
 	return unsupported
 }
@@ -1634,6 +1904,10 @@ func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryIt
 		s.diagnosticSensor(device, "telemetry_rss_average", "Browser Memory 24h Average", "mdi:memory", "MB"),
 		s.diagnosticSensor(device, "telemetry_rss_maximum", "Browser Memory 24h Maximum", "mdi:memory", "MB"),
 		s.diagnosticSensor(device, "auth_guard_kind", "HA Authentication Guard Type", "mdi:shield-key", ""),
+		s.diagnosticSensor(device, "auth_guard_confidence", "HA Authentication Confidence", "mdi:shield-search", ""),
+		s.diagnosticSensor(device, "auth_guard_occurrences", "HA Authentication Signals", "mdi:counter", ""),
+		s.diagnosticSensor(device, "auth_guard_first_seen", "HA Authentication First Seen", "mdi:clock-start", ""),
+		s.diagnosticSensor(device, "auth_guard_last_seen", "HA Authentication Last Seen", "mdi:clock-alert", ""),
 		s.diagnosticSensor(device, "auth_guard_kiosk_ip", "Kiosk IP For HA", "mdi:ip-network", ""),
 	}
 	return items
@@ -1714,6 +1988,7 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 	entries := append([][2]string{}, legacyDiscoveryEntries()...)
 	entries = append(entries,
 		[2]string{"binary_sensor", "browser"},
+		[2]string{"binary_sensor", "browser_ready"},
 		[2]string{"binary_sensor", "browser_devtools"},
 		[2]string{"binary_sensor", "auth_guard"},
 		[2]string{"sensor", "auth_guard_reason"},
@@ -1748,9 +2023,15 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "rss"},
 		[2]string{"sensor", "cpu"},
 		[2]string{"sensor", "browser_pid"},
+		[2]string{"sensor", "browser_state"},
+		[2]string{"sensor", "browser_generation"},
+		[2]string{"sensor", "browser_control_failures"},
 		[2]string{"sensor", "browser_started"},
 		[2]string{"sensor", "browser_start_count"},
 		[2]string{"sensor", "browser_restart_count"},
+		[2]string{"sensor", "browser_last_exit_reason"},
+		[2]string{"sensor", "browser_last_exit_code"},
+		[2]string{"sensor", "browser_last_runtime_seconds"},
 		[2]string{"sensor", "browser_command"},
 		[2]string{"sensor", "browser_last_error"},
 		[2]string{"sensor", "mqtt_connection"},
@@ -1799,6 +2080,10 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "telemetry_rss_average"},
 		[2]string{"sensor", "telemetry_rss_maximum"},
 		[2]string{"sensor", "auth_guard_kind"},
+		[2]string{"sensor", "auth_guard_confidence"},
+		[2]string{"sensor", "auth_guard_occurrences"},
+		[2]string{"sensor", "auth_guard_first_seen"},
+		[2]string{"sensor", "auth_guard_last_seen"},
 		[2]string{"sensor", "auth_guard_kiosk_ip"},
 	)
 	for _, page := range s.pageEntities() {
@@ -1947,10 +2232,13 @@ func (s *MQTTService) publishCommandResult(topic string, command string, err err
 }
 
 func (s *MQTTService) publishOffline() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil {
-		_ = s.client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
+	client := s.client
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.Publish(s.root()+"/availability", []byte("offline"), s.retained(true))
 	}
 }
 
@@ -2358,6 +2646,9 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 	if len(pages) == 0 {
 		return
 	}
+	if s.browser.Status().AuthGuard.Tripped {
+		return
+	}
 	if s.health == nil {
 		s.health = map[string]pageHealth{}
 	}
@@ -2382,7 +2673,7 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 		if health.StatusCode == http.StatusForbidden && likelyHomeAssistantPage(page.URL) {
 			// Passive only — TripAuthGuard here falsely banned healthy kiosks when HA
 			// rate-limited /manifest.json or returned a transient proxy 403.
-			s.logger.Warn("home assistant health check returned 403", "page", page.Name, "url", page.URL)
+			s.logger.Warn("home assistant health check returned 403", "page", page.Name, "url", diagnosticPageURL(page.URL))
 		}
 	}
 	s.healthIx = (s.healthIx + 1) % len(pages)
@@ -2399,6 +2690,17 @@ func safeHealthCheckURL(target string) string {
 		parsed.RawQuery = ""
 		parsed.Fragment = ""
 	}
+	return parsed.String()
+}
+
+func diagnosticPageURL(target string) string {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "invalid"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	return parsed.String()
 }
 

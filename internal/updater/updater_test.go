@@ -141,6 +141,36 @@ func TestParseDPKGHistoryIgnoresDifferentCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestValidateDebMetadataRequiresExactReleaseAndArchitecture(t *testing.T) {
+	if err := validateDebMetadata("kioskmate", "0.8.0-alpha3", "arm64", "0.8.0-alpha3", "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	for name, values := range map[string][]string{
+		"package":      {"other", "0.8.0-alpha3", "arm64", "0.8.0-alpha3", "arm64"},
+		"version":      {"kioskmate", "0.8.0-alpha2", "arm64", "0.8.0-alpha3", "arm64"},
+		"architecture": {"kioskmate", "0.8.0-alpha3", "amd64", "0.8.0-alpha3", "arm64"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateDebMetadata(values[0], values[1], values[2], values[3], values[4]); err == nil {
+				t.Fatal("invalid package metadata was accepted")
+			}
+		})
+	}
+}
+
+func TestDebContentChecksPermissionsAndPaths(t *testing.T) {
+	listing := "-rwxr-xr-x root/root 123 ./usr/bin/kioskmate\n-rw-r--r-- root/root 456 ./usr/lib/systemd/user/kioskmate.service\n"
+	if !containsExecutableDebPath(listing, "./usr/bin/kioskmate") {
+		t.Fatal("executable binary was not detected")
+	}
+	if !containsDebPath(listing, "./usr/lib/systemd/user/kioskmate.service") {
+		t.Fatal("service file was not detected")
+	}
+	if containsExecutableDebPath("-rw-r--r-- root/root 123 ./usr/bin/kioskmate\n", "./usr/bin/kioskmate") {
+		t.Fatal("non-executable binary was accepted")
+	}
+}
+
 func TestFinishInstallKeepsLockDuringRestartWindow(t *testing.T) {
 	service := &Service{installing: true}
 	job := &Job{Stage: "restarting", ExitCode: 0}

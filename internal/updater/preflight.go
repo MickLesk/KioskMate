@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -106,7 +107,7 @@ func requiredDiskBytes(packageSize int64) int64 {
 	return packageSize*3 + reserve
 }
 
-func validateDebPackage(ctx context.Context, file string) error {
+func validateDebPackage(ctx context.Context, file, expectedVersion string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("Debian package validation requires Linux")
 	}
@@ -129,8 +130,57 @@ func validateDebPackage(ctx context.Context, file string) error {
 		return err
 	}
 	expected := map[string]string{"arm64": "arm64", "amd64": "amd64"}[runtime.GOARCH]
-	if expected == "" || architecture != expected {
-		return fmt.Errorf("Debian package architecture %q does not match %q", architecture, expected)
+	version, err := field("Version")
+	if err != nil {
+		return err
+	}
+	if err := validateDebMetadata(name, version, architecture, expectedVersion, expected); err != nil {
+		return err
+	}
+	contents, err := exec.CommandContext(ctx, "dpkg-deb", "--contents", file).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("read Debian package contents: %s", strings.TrimSpace(string(contents)))
+	}
+	listing := string(contents)
+	if !containsExecutableDebPath(listing, "./usr/bin/kioskmate") {
+		return errors.New("Debian package is missing executable /usr/bin/kioskmate")
+	}
+	if !containsDebPath(listing, "./usr/lib/systemd/user/kioskmate.service") {
+		return errors.New("Debian package is missing kioskmate.service")
 	}
 	return nil
+}
+
+func validateDebMetadata(name, version, architecture, expectedVersion, expectedArchitecture string) error {
+	if name != "kioskmate" {
+		return fmt.Errorf("unexpected Debian package name %q", name)
+	}
+	if expectedArchitecture == "" || architecture != expectedArchitecture {
+		return fmt.Errorf("Debian package architecture %q does not match %q", architecture, expectedArchitecture)
+	}
+	if strings.TrimPrefix(version, "v") != strings.TrimPrefix(expectedVersion, "v") {
+		return fmt.Errorf("Debian package version %q does not match release %q", version, expectedVersion)
+	}
+	return nil
+}
+
+func containsDebPath(listing, expected string) bool {
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.TrimPrefix(fields[len(fields)-1], "/") == strings.TrimPrefix(expected, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExecutableDebPath(listing, expected string) bool {
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.TrimPrefix(fields[len(fields)-1], "/") != strings.TrimPrefix(expected, "/") {
+			continue
+		}
+		return len(fields[0]) >= 4 && fields[0][3] == 'x'
+	}
+	return false
 }

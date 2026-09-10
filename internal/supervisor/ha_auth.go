@@ -110,7 +110,7 @@ func classifyHAResponse(status int, resource, raw string) authEvidence {
 	case u.Path == "/auth/token" && status == 400:
 		e.Kind = "token_response"
 	case (u.Path == "/auth/token" || u.Path == "/api/websocket") && (status == 401 || status == 403):
-		e.Kind, e.Reason = "auth_rejected", "Home Assistant denied the authentication endpoint"
+		e.Kind, e.Confidence, e.Reason = "auth_rejected", "probable", "Home Assistant denied the authentication endpoint"
 	case resource == "Document" && status == 403:
 		e.Kind, e.Reason = "access_denied", "Home Assistant denied the page; verify IP ban or proxy policy"
 	default:
@@ -119,18 +119,72 @@ func classifyHAResponse(status int, resource, raw string) authEvidence {
 	return e
 }
 
-func (b *Browser) blockAuthentication(e authEvidence) {
+func (b *Browser) blockAuthentication(e authEvidence) bool {
+	b.mu.Lock()
+	shouldBlock, occurrences, firstSeen, lastSeen := b.recordAuthEvidenceLocked(e, time.Now())
+	b.mu.Unlock()
+	if !shouldBlock {
+		b.logger.Warn("Home Assistant authentication signal observed", "kind", e.Kind, "confidence", e.Confidence, "status", e.Status, "occurrences", occurrences, "resource", e.Resource)
+		if b.journal != nil {
+			b.journal.Record("home_assistant", "auth_signal", "observed", e.Reason, map[string]string{"kind": e.Kind, "confidence": e.Confidence, "occurrences": fmt.Sprintf("%d", occurrences), "status": fmt.Sprintf("%d", e.Status)})
+		}
+		return false
+	}
 	b.tripAuthGuard(e.Reason)
+	origin := canonicalOrigin(e.URL)
+	kioskIP := localIPForTarget(e.URL)
 	b.mu.Lock()
 	b.authGuard.Kind, b.authGuard.Confidence = e.Kind, e.Confidence
-	b.authGuard.Origin = canonicalOrigin(e.URL)
+	b.authGuard.Origin = origin
 	b.authGuard.Resource, b.authGuard.HTTPStatus = e.Resource, e.Status
 	b.authGuard.NextAction = e.Action
-	if ip := localIPForTarget(e.URL); ip != "" {
-		b.authGuard.KioskIP = ip
+	b.authGuard.FirstSeen, b.authGuard.LastSeen = &firstSeen, &lastSeen
+	b.authGuard.Occurrences = occurrences
+	if kioskIP != "" {
+		b.authGuard.KioskIP = kioskIP
 	}
 	b.mu.Unlock()
 	b.persistAuthGuard()
+	return true
+}
+
+func (b *Browser) recordAuthEvidenceLocked(e authEvidence, now time.Time) (bool, int, time.Time, time.Time) {
+	if b.authEvidenceSeen == nil {
+		b.authEvidenceSeen = map[string][]time.Time{}
+	}
+	key := strings.Join([]string{canonicalOrigin(e.URL), e.Kind, fmt.Sprintf("%d", e.Status)}, "|")
+	cutoff := now.Add(-30 * time.Second)
+	oldestKey := ""
+	oldestSeen := now
+	for evidenceKey, observations := range b.authEvidenceSeen {
+		kept := observations[:0]
+		for _, seen := range observations {
+			if seen.After(cutoff) {
+				kept = append(kept, seen)
+			}
+		}
+		if len(kept) == 0 {
+			delete(b.authEvidenceSeen, evidenceKey)
+			continue
+		}
+		b.authEvidenceSeen[evidenceKey] = kept
+		if kept[0].Before(oldestSeen) {
+			oldestKey, oldestSeen = evidenceKey, kept[0]
+		}
+	}
+	if _, exists := b.authEvidenceSeen[key]; !exists && len(b.authEvidenceSeen) >= 128 && oldestKey != "" {
+		delete(b.authEvidenceSeen, oldestKey)
+	}
+	kept := b.authEvidenceSeen[key][:0]
+	for _, seen := range b.authEvidenceSeen[key] {
+		if seen.After(cutoff) {
+			kept = append(kept, seen)
+		}
+	}
+	kept = append(kept, now)
+	b.authEvidenceSeen[key] = kept
+	confirmed := e.Confidence == "confirmed" || e.Confidence == "probable"
+	return confirmed || len(kept) >= 2, len(kept), kept[0], kept[len(kept)-1]
 }
 
 func localIPForTarget(raw string) string {

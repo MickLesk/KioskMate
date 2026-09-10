@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,6 +33,59 @@ func TestMQTTConnectionStatusTracksSuccessAndAuthFailure(t *testing.T) {
 	service.setConnectionResult(errors.New("mqtt connack failed: not authorized (reason=0x87)"))
 	if got := service.ConnectionStatus().State; got != "auth_error" {
 		t.Fatalf("auth status = %q", got)
+	}
+}
+
+func TestConnectionStatusDoesNotWaitForSlowBrokerPublish(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		close(accepted)
+		<-release
+		_ = conn.Close()
+	}()
+
+	cfg := mqttTestConfig(t)
+	cfg.MQTT.Enabled = true
+	cfg.MQTT.URL = "mqtt://" + listener.Addr().String()
+	cfg.Kiosk.Pages = nil
+	cfg.Kiosk.URLs = nil
+	hw := hardware.New()
+	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = hw.Status(warmupCtx)
+	warmupCancel()
+	service := NewMQTTService(cfg, &fakeBrowser{}, hw, nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	done := make(chan struct{})
+	go func() {
+		_ = service.PublishNow()
+		close(done)
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("publisher did not connect to test broker")
+	}
+
+	started := time.Now()
+	_ = service.ConnectionStatus()
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("ConnectionStatus blocked for %s during broker publish", elapsed)
+	}
+	close(release)
+	_ = listener.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publisher did not finish after broker connection closed")
 	}
 }
 
@@ -64,6 +118,7 @@ type fakeBrowser struct {
 	nexts        int
 	previous     int
 	resetSession int
+	status       supervisor.Status
 }
 
 func (b *fakeBrowser) Start(context.Context) error {
@@ -115,7 +170,9 @@ func (b *fakeBrowser) TripAuthGuard(string) {}
 func (b *fakeBrowser) NoteDisplayPower(string) {}
 
 func (b *fakeBrowser) Status() supervisor.Status {
-	return supervisor.Status{Active: b.active}
+	status := b.status
+	status.Active = b.active
+	return status
 }
 
 func TestMQTTCommandsControlBrowserPages(t *testing.T) {
@@ -165,8 +222,27 @@ func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
 	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	items := service.discoveryResetEntries()
 
-	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") || !hasDiscoveryEntry(items, "binary_sensor", "auth_guard") || !hasDiscoveryEntry(items, "binary_sensor", "browser_devtools") {
+	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") || !hasDiscoveryEntry(items, "binary_sensor", "auth_guard") || !hasDiscoveryEntry(items, "binary_sensor", "browser_devtools") || !hasDiscoveryEntry(items, "binary_sensor", "browser_ready") || !hasDiscoveryEntry(items, "sensor", "browser_state") || !hasDiscoveryEntry(items, "sensor", "browser_control_failures") {
 		t.Fatalf("discovery entries missing browser/display controls: %#v", items)
+	}
+}
+
+func TestUnsupportedDiscoveryObjectsFollowHardwareCapabilities(t *testing.T) {
+	service := NewMQTTService(mqttTestConfig(t), &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	unsupported := service.unsupportedDiscoveryObjects(hardware.Support{DisplayStatus: true})
+
+	for _, object := range []string{"display", "volume", "microphone", "keyboard", "battery_level", "illuminance_level", "package_upgrades", "processor_temperature"} {
+		if !unsupported[object] {
+			t.Fatalf("unsupported object %q was not marked for cleanup", object)
+		}
+	}
+	if unsupported["display_power"] {
+		t.Fatal("display power switch was removed although display power is supported")
+	}
+
+	unsupported = service.unsupportedDiscoveryObjects(hardware.Support{DisplayStatus: true, DisplayBrightness: true})
+	if unsupported["display"] {
+		t.Fatal("display light was removed although power and brightness are supported")
 	}
 }
 
@@ -312,6 +388,14 @@ func TestHomeAssistantHealthCheckUsesPublicManifest(t *testing.T) {
 	}
 }
 
+func TestDiagnosticPageURLRemovesCredentialsAndQuery(t *testing.T) {
+	got := diagnosticPageURL("https://user:secret@ha.example:8123/dashboard/main?token=private#view")
+	want := "https://ha.example:8123/dashboard/main"
+	if got != want {
+		t.Fatalf("diagnosticPageURL() = %q, want %q", got, want)
+	}
+}
+
 func TestRefreshOnePageHealthRotates(t *testing.T) {
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -332,6 +416,54 @@ func TestRefreshOnePageHealthRotates(t *testing.T) {
 	service.refreshOnePageHealth(pages)
 	if service.health["second"].OK || service.health["second"].StatusCode != http.StatusForbidden {
 		t.Fatalf("second rotation health = %#v", service.health)
+	}
+}
+
+func TestRefreshOnePageHealthPausesWhileAuthGuardIsTripped(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	browser := &fakeBrowser{status: supervisor.Status{AuthGuard: supervisor.AuthGuardStatus{Tripped: true}}}
+	service := NewMQTTService(mqttTestConfig(t), browser, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.refreshOnePageHealth([]pageEntity{{ID: "main", URL: server.URL}})
+	if requests != 0 {
+		t.Fatalf("health requests = %d, want 0 while auth guard is tripped", requests)
+	}
+}
+
+func TestDiscoveryRegistryRoundTripAndFiltersUnsafeTopics(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	wanted := []string{
+		"homeassistant/sensor/kioskmate_test/version/config",
+		"homeassistant/button/kioskmate_test/restart/config",
+		"homeassistant/button/kioskmate_test/restart/config",
+		"house/control/danger",
+	}
+	if err := service.saveDiscoveryRegistryLocked(wanted); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got := reloaded.loadDiscoveryRegistryLocked()
+	if len(got) != 2 || got[0] != "homeassistant/button/kioskmate_test/restart/config" || got[1] != "homeassistant/sensor/kioskmate_test/version/config" {
+		t.Fatalf("registry topics = %#v", got)
+	}
+}
+
+func TestStaleDiscoveryTopicsOnlyReturnsRemovedValidTopics(t *testing.T) {
+	previous := []string{
+		"homeassistant/sensor/node/keep/config",
+		"homeassistant/sensor/node/remove/config",
+		"untrusted/topic",
+	}
+	current := []string{"homeassistant/sensor/node/keep/config"}
+	got := staleDiscoveryTopics(previous, current)
+	if len(got) != 1 || got[0] != "homeassistant/sensor/node/remove/config" {
+		t.Fatalf("stale topics = %#v", got)
 	}
 }
 
