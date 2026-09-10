@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.8.0-alpha2` includes the authentication safety, lifecycle diagnostics and capability-aware discovery improvements described below.
+KioskMate `0.8.0` includes the authentication safety, lifecycle diagnostics and capability-aware discovery improvements described below.
 
 The Admin UI is organized by task:
 
@@ -77,8 +77,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.8.0-alpha2/kioskmate_0.8.0-alpha2_arm64.deb
-sudo apt install ./kioskmate_0.8.0-alpha2_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.8.0/kioskmate_0.8.0_arm64.deb
+sudo apt install ./kioskmate_0.8.0_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
@@ -209,14 +209,14 @@ The event journal is stored at `~/.config/kioskmate/events.jsonl`. It is bounded
 ## Packaging
 
 ```bash
-VERSION=0.8.0-alpha2 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.8.0-alpha2 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.8.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.8.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 The shell command is a compatibility wrapper around the canonical, cross-platform package builder. Both architectures can be built in one invocation without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.8.0-alpha2 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.8.0 --arch arm64 --arch amd64
 ```
 
 The package installs:

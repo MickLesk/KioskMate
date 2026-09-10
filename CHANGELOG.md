@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.8.0
+
 ### Runtime reliability and diagnostics
 - Added structured browser exit details and persisted reason counters so controlled stops, restarts, recovery actions, startup failures and crashes are distinguishable in Admin and Home Assistant.
 - Added explicit service-shutdown handling, browser runtime duration and exit-code diagnostics, and privacy-safe URL reporting.
