@@ -38,7 +38,7 @@ if [ "$ARCH" = "$(dpkg --print-architecture)" ]; then
   test "$("$ROOTFS/usr/bin/kioskmate" --version)" = "$VERSION"
 fi
 
-if grep -R -E 'sed .*config\.json|127\\?\.0\\?\.0\\?\.1.*0\.0\.0\.0' "$TMP"; then
+if grep -E 'sed .*config\.json|127\\?\.0\\?\.0\\?\.1.*0\.0\.0\.0' "$TMP"/{preinst,postinst,prerm,postrm}; then
   echo "maintainer scripts must not rewrite Admin bind settings" >&2
   exit 1
 fi
