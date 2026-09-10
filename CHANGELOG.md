@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Runtime reliability and diagnostics
+- Added structured browser exit details and persisted reason counters so controlled stops, restarts, recovery actions, startup failures and crashes are distinguishable in Admin and Home Assistant.
+- Added explicit service-shutdown handling, browser runtime duration and exit-code diagnostics, and privacy-safe URL reporting.
+- Paused passive Home Assistant page health checks while the authentication guard is active to avoid repeated requests during an IP ban or rejected session.
+- Hardened Home Assistant authentication evidence with confidence levels, corroboration for generic page `403` responses, bounded retention and first/last-seen metadata.
+
+### Configuration and Admin security
+- Added dry-run previews for configuration imports and restores, including changed areas, page counts and required browser or service restarts.
+- Added rolling atomic configuration backups with bounded history while preserving the existing last-known-good backup.
+- Improved login throttling with bounded client state, stale-entry pruning, `Retry-After` status and a persistent visible countdown after reload.
+- Expanded sensitive-value redaction for URLs in Admin responses and the structured event journal.
+
+### Build quality
+- Canonicalized the English and German translation catalog and made canonical form, parity and referenced-key validation a build gate.
+- Enabled CI for development branches, added race testing to release builds and strengthened Debian artifact verification with embedded-version checks.
+
 ## v0.8.0-alpha2
 
 ### Diagnostics and Home Assistant

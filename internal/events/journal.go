@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -204,10 +205,24 @@ func cleanDetails(details map[string]string) map[string]string {
 		key = clean(key)
 		lowerKey := strings.ToLower(key)
 		if key != "" && !strings.Contains(lowerKey, "password") && !strings.Contains(lowerKey, "token") && !strings.Contains(lowerKey, "secret") && !strings.Contains(lowerKey, "private_key") {
+			if strings.Contains(lowerKey, "url") || strings.Contains(lowerKey, "uri") {
+				value = cleanURL(value)
+			}
 			result[key] = clean(value)
 		}
 	}
 	return result
+}
+
+func cleanURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func cloneDetails(details map[string]string) map[string]string {

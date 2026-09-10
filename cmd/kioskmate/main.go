@@ -130,7 +130,7 @@ func main() {
 	stop()
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
-	if err := browser.Stop(shutdownCtx); err != nil {
+	if err := browser.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("browser stop failed", "error", err)
 	}
 }

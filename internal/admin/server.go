@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,12 @@ import (
 var content embed.FS
 
 const sessionCookieName = "kioskmate_session"
+
+const (
+	loginAttemptWindow = 5 * time.Minute
+	loginAttemptLimit  = 10
+	maxAttemptClients  = 256
+)
 
 var errSetupAlreadyCompleted = errors.New("setup already completed")
 
@@ -528,12 +535,15 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	snapshot := s.cfg.Snapshot()
 	authenticated := s.authenticated(r)
+	allowed, retry := s.allowAttempt(r)
 	response := map[string]any{
-		"authenticated": authenticated,
-		"setupRequired": snapshot.Admin.PasswordHash == "",
-		"tokenRequired": snapshot.Admin.PasswordHash == "",
-		"configPath":    s.cfg.Path,
-		"version":       s.version,
+		"authenticated":     authenticated,
+		"setupRequired":     snapshot.Admin.PasswordHash == "",
+		"tokenRequired":     snapshot.Admin.PasswordHash == "",
+		"configPath":        s.cfg.Path,
+		"version":           s.version,
+		"rateLimited":       !allowed,
+		"retryAfterSeconds": int(retry.Round(time.Second).Seconds()),
 	}
 	if authenticated {
 		response["config"] = publicConfigSnapshot(snapshot)
@@ -1157,10 +1167,24 @@ func redactValue(key string, value any) any {
 			}
 			return "<redacted>"
 		}
+		if strings.Contains(lower, "url") || strings.Contains(lower, "uri") {
+			return redactDiagnosticURL(typed)
+		}
 		return typed
 	default:
 		return typed
 	}
+}
+
+func redactDiagnosticURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
@@ -1292,6 +1316,10 @@ func (s *Server) configImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if r.URL.Query().Get("dry_run") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next)})
+		return
+	}
 	if err := s.cfg.Replace(next); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -1338,7 +1366,8 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		DryRun bool   `json:"dry_run"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1365,12 +1394,53 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if body.DryRun {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next)})
+		return
+	}
 	if err := s.cfg.Replace(next); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.audit("config_restore", "ok", "configuration backup restored", nil)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+type configPreview struct {
+	PagesBefore            int  `json:"pages_before"`
+	PagesAfter             int  `json:"pages_after"`
+	KioskChanged           bool `json:"kiosk_changed"`
+	BrowserSettingsChanged bool `json:"browser_settings_changed"`
+	MQTTChanged            bool `json:"mqtt_changed"`
+	AdminChanged           bool `json:"admin_changed"`
+	TimeChanged            bool `json:"time_changed"`
+	UpdateChanged          bool `json:"update_changed"`
+	RequiresBrowserRestart bool `json:"requires_browser_restart"`
+	RequiresServiceRestart bool `json:"requires_service_restart"`
+}
+
+func configChangeSummary(current, next *config.Config) configPreview {
+	if current == nil {
+		current = &config.Config{}
+	}
+	if next == nil {
+		next = &config.Config{}
+	}
+	kioskChanged := !reflect.DeepEqual(current.Kiosk, next.Kiosk)
+	browserSettingsChanged := !reflect.DeepEqual(current.Performance, next.Performance) || !reflect.DeepEqual(current.Watchdog, next.Watchdog)
+	adminChanged := !reflect.DeepEqual(current.Admin, next.Admin)
+	return configPreview{
+		PagesBefore:            current.Kiosk.PageCount(),
+		PagesAfter:             next.Kiosk.PageCount(),
+		KioskChanged:           kioskChanged,
+		BrowserSettingsChanged: browserSettingsChanged,
+		MQTTChanged:            !reflect.DeepEqual(current.MQTT, next.MQTT),
+		AdminChanged:           adminChanged,
+		TimeChanged:            !reflect.DeepEqual(current.Time, next.Time),
+		UpdateChanged:          !reflect.DeepEqual(current.Update, next.Update),
+		RequiresBrowserRestart: kioskChanged || browserSettingsChanged,
+		RequiresServiceRestart: adminChanged,
+	}
 }
 
 type backupFile struct {
@@ -1409,6 +1479,16 @@ func (s *Server) backupFiles() []backupFile {
 		kind string
 	}{
 		{s.cfg.Path + ".bak", "config"},
+	}
+	if entries, err := os.ReadDir(config.BackupDir(s.cfg.Path)); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "config-") && strings.HasSuffix(entry.Name(), ".json") {
+				paths = append(paths, struct {
+					path string
+					kind string
+				}{filepath.Join(config.BackupDir(s.cfg.Path), entry.Name()), "config"})
+			}
+		}
 	}
 	var files []backupFile
 	seen := map[string]bool{}
@@ -1722,27 +1802,29 @@ func (s *Server) browserDiagnostics(w http.ResponseWriter, r *http.Request) {
 		commandError = err.Error()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"running":          status.Running,
-		"pid":              status.PID,
-		"command":          command,
-		"resolved_command": resolved,
-		"command_exists":   commandExists,
-		"command_error":    commandError,
-		"args":             status.Args,
-		"active_page":      status.Active,
-		"page_name":        status.PageName,
-		"url":              status.URL,
-		"page_count":       s.cfg.Snapshot().Kiosk.PageCount(),
-		"isolated_pages":   s.cfg.Snapshot().Kiosk.IsolateSessions,
-		"profile":          s.cfg.Snapshot().Performance.Profile,
-		"gpu_mode":         s.cfg.Snapshot().Performance.GPUMode,
-		"reduce_motion":    s.cfg.Snapshot().Performance.ReduceMotion,
-		"watchdog":         s.cfg.Snapshot().Watchdog.Enabled,
-		"watchdog_status":  status.Watchdog,
-		"browser_log":      config.BrowserLogFilePath(s.cfg.Path),
-		"core_log":         config.LogFilePath(s.cfg.Path),
-		"last_error":       status.LastError,
-		"last_exit":        status.LastExit,
+		"running":            status.Running,
+		"pid":                status.PID,
+		"command":            command,
+		"resolved_command":   resolved,
+		"command_exists":     commandExists,
+		"command_error":      commandError,
+		"args":               status.Args,
+		"active_page":        status.Active,
+		"page_name":          status.PageName,
+		"url":                status.URL,
+		"page_count":         s.cfg.Snapshot().Kiosk.PageCount(),
+		"isolated_pages":     s.cfg.Snapshot().Kiosk.IsolateSessions,
+		"profile":            s.cfg.Snapshot().Performance.Profile,
+		"gpu_mode":           s.cfg.Snapshot().Performance.GPUMode,
+		"reduce_motion":      s.cfg.Snapshot().Performance.ReduceMotion,
+		"watchdog":           s.cfg.Snapshot().Watchdog.Enabled,
+		"watchdog_status":    status.Watchdog,
+		"browser_log":        config.BrowserLogFilePath(s.cfg.Path),
+		"core_log":           config.LogFilePath(s.cfg.Path),
+		"last_error":         status.LastError,
+		"last_exit":          status.LastExit,
+		"last_exit_details":  status.Exit,
+		"exit_reason_counts": status.ExitCounts,
 	})
 }
 
@@ -2768,20 +2850,28 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) Session {
 
 func (s *Server) allowAttempt(r *http.Request) (bool, time.Duration) {
 	key := remoteIP(r)
-	cutoff := time.Now().Add(-5 * time.Minute)
+	now := time.Now()
+	cutoff := now.Add(-loginAttemptWindow)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var kept []time.Time
-	for _, ts := range s.attempts[key] {
-		if ts.After(cutoff) {
-			kept = append(kept, ts)
+	for client, attempts := range s.attempts {
+		kept := attempts[:0]
+		for _, ts := range attempts {
+			if ts.After(cutoff) {
+				kept = append(kept, ts)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.attempts, client)
+		} else {
+			s.attempts[client] = kept
 		}
 	}
-	s.attempts[key] = kept
-	if len(kept) < 8 {
+	kept := s.attempts[key]
+	if len(kept) < loginAttemptLimit {
 		return true, 0
 	}
-	retry := time.Until(kept[0].Add(5 * time.Minute))
+	retry := time.Until(kept[0].Add(loginAttemptWindow))
 	if retry < time.Second {
 		retry = time.Second
 	}
@@ -2830,7 +2920,22 @@ func (s *Server) validCSRF(r *http.Request) bool {
 
 func (s *Server) recordFailedAttempt(r *http.Request) {
 	s.mu.Lock()
-	s.attempts[remoteIP(r)] = append(s.attempts[remoteIP(r)], time.Now())
+	key := remoteIP(r)
+	if _, exists := s.attempts[key]; !exists && len(s.attempts) >= maxAttemptClients {
+		var oldestClient string
+		var oldest time.Time
+		for client, attempts := range s.attempts {
+			if len(attempts) == 0 {
+				oldestClient = client
+				break
+			}
+			if oldestClient == "" || attempts[len(attempts)-1].Before(oldest) {
+				oldestClient, oldest = client, attempts[len(attempts)-1]
+			}
+		}
+		delete(s.attempts, oldestClient)
+	}
+	s.attempts[key] = append(s.attempts[key], time.Now())
 	s.mu.Unlock()
 }
 

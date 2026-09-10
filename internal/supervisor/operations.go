@@ -93,7 +93,15 @@ func (b *Browser) Stop(ctx context.Context) error {
 	b.manuallyStopped = true
 	b.cancelRecoveryLocked()
 	b.mu.Unlock()
-	return b.operate(ctx, "stop", func() error { return b.stop(ctx) })
+	return b.operate(ctx, "stop", func() error { return b.stop(ctx, "manual_stop") })
+}
+
+func (b *Browser) Shutdown(ctx context.Context) error {
+	b.mu.Lock()
+	b.manuallyStopped = true
+	b.cancelRecoveryLocked()
+	b.mu.Unlock()
+	return b.operate(ctx, "shutdown", func() error { return b.stop(ctx, "service_shutdown") })
 }
 
 func (b *Browser) Restart(ctx context.Context) error {
@@ -102,7 +110,7 @@ func (b *Browser) Restart(ctx context.Context) error {
 		b.manuallyStopped = false
 		b.cancelRecoveryLocked()
 		b.mu.Unlock()
-		return b.restart(ctx)
+		return b.restart(ctx, "manual_restart")
 	})
 }
 

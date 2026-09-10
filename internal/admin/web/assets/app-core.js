@@ -106,6 +106,8 @@
         mobileNavOpen: false,
       };
 
+	  let authCountdownTimer = null;
+
       const DIRTY_PREFIXES = {
         "kiosk-pages": ["page-name-", "page-url-", "page-disabled-", "scheduler-", "rotation-", "rule-"],
         "kiosk-display": ["kiosk-", "perf-", "watchdog-"],
@@ -544,6 +546,8 @@
       }
 
       function renderLogin() {
+		if (authCountdownTimer) clearInterval(authCountdownTimer);
+		authCountdownTimer = null;
         const setup = !!state.auth?.setupRequired;
         root.innerHTML = `
 		  <main class="login-shell">
@@ -556,7 +560,7 @@
 				${setup ? field("setup-token", t("setupToken"), "text", "one-time-code") : ""}
 				<div class="password-field">${field("auth-password", t("password"), "password", "current-password")}<button type="button" class="password-toggle" data-action="password-toggle" aria-label="${esc(t("showPassword"))}" title="${esc(t("showPassword"))}">◉</button></div>
 				<div id="auth-error" class="login-error" role="alert" hidden></div>
-				<button class="primary login-submit" data-busy="auth">${esc(setup ? t("createPassword") : t("signIn"))}</button>
+				<button class="primary login-submit" data-busy="auth" data-login-label="${esc(setup ? t("createPassword") : t("signIn"))}">${esc(setup ? t("createPassword") : t("signIn"))}</button>
 			  </div>
 			  <footer class="login-footer">
 				<div class="login-selects">
@@ -570,6 +574,7 @@
 		  </main>`;
         document.getElementById("auth-form").addEventListener("submit", async (event) => {
           event.preventDefault();
+		  let retryDelay = 0;
 		  setBusy("auth", true);
 		  const errorBox = document.getElementById("auth-error");
 		  if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
@@ -587,12 +592,14 @@
 			refreshCore(false).then(() => { if (state.auth?.authenticated) renderAppIfIdle(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
 		  } catch (error) {
 			const currentError = document.getElementById("auth-error");
-			const message = error.retryAfter > 0 ? t("loginRetryAfter").replace("{seconds}", String(error.retryAfter)) : (error.message || t("loginFailed"));
+			retryDelay = Number(error.retryAfter || 0);
+			const message = retryDelay > 0 ? t("loginRetryAfter").replace("{seconds}", String(retryDelay)) : (error.message || t("loginFailed"));
 			if (currentError) { currentError.hidden = false; currentError.textContent = message; }
 			const password = document.getElementById("auth-password");
 			password?.focus();
 		  } finally {
 			setBusy("auth", false);
+			if (retryDelay > 0) startAuthCountdown(retryDelay);
 		  }
         });
 		document.querySelector('[data-action="password-toggle"]')?.addEventListener("click", () => {
@@ -602,9 +609,42 @@
 		});
         document.getElementById("login-lang").addEventListener("change", (event) => setLanguage(event.target.value));
         document.getElementById("login-theme").addEventListener("change", (event) => setTheme(event.target.value));
+		if (state.auth?.rateLimited && Number(state.auth?.retryAfterSeconds || 0) > 0) startAuthCountdown(Number(state.auth.retryAfterSeconds));
       }
 
+	  function startAuthCountdown(seconds) {
+		if (authCountdownTimer) clearInterval(authCountdownTimer);
+		const until = Date.now() + Math.max(1, Number(seconds || 0)) * 1000;
+		const update = () => {
+		  const button = document.querySelector('[data-busy="auth"]');
+		  const errorBox = document.getElementById("auth-error");
+		  const remaining = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+		  if (remaining <= 0) {
+			clearInterval(authCountdownTimer);
+			authCountdownTimer = null;
+			if (button) {
+			  button.disabled = false;
+			  button.textContent = button.dataset.loginLabel || t("signIn");
+			}
+			if (errorBox) errorBox.hidden = true;
+			return;
+		  }
+		  if (button) {
+			button.disabled = true;
+			button.textContent = t("loginRetryButton").replace("{seconds}", String(remaining));
+		  }
+		  if (errorBox) {
+			errorBox.hidden = false;
+			errorBox.textContent = t("loginRetryAfter").replace("{seconds}", String(remaining));
+		  }
+		};
+		update();
+		authCountdownTimer = setInterval(update, 1000);
+	  }
+
       function renderApp() {
+		if (authCountdownTimer) clearInterval(authCountdownTimer);
+		authCountdownTimer = null;
         const browser = state.status?.browser || {};
         const mqtt = state.status?.mqtt || {};
         const timeInfo = state.time || {};

@@ -32,6 +32,18 @@ func TestJournalPersistsBoundedEvents(t *testing.T) {
 	}
 }
 
+func TestJournalRedactsURLDetails(t *testing.T) {
+	j, err := Open(filepath.Join(t.TempDir(), "events.jsonl"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Record("page", "check", "ok", "checked", map[string]string{"page_url": "https://user:secret@example.test/dashboard?token=private#view"})
+	got := j.Recent(1)[0].Details["page_url"]
+	if got != "https://example.test/dashboard" {
+		t.Fatalf("redacted URL = %q", got)
+	}
+}
+
 func TestJournalRecordDuration(t *testing.T) {
 	j, err := Open(filepath.Join(t.TempDir(), "events.jsonl"), 10)
 	if err != nil {

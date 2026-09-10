@@ -64,6 +64,7 @@ type fakeBrowser struct {
 	nexts        int
 	previous     int
 	resetSession int
+	status       supervisor.Status
 }
 
 func (b *fakeBrowser) Start(context.Context) error {
@@ -115,7 +116,9 @@ func (b *fakeBrowser) TripAuthGuard(string) {}
 func (b *fakeBrowser) NoteDisplayPower(string) {}
 
 func (b *fakeBrowser) Status() supervisor.Status {
-	return supervisor.Status{Active: b.active}
+	status := b.status
+	status.Active = b.active
+	return status
 }
 
 func TestMQTTCommandsControlBrowserPages(t *testing.T) {
@@ -331,6 +334,14 @@ func TestHomeAssistantHealthCheckUsesPublicManifest(t *testing.T) {
 	}
 }
 
+func TestDiagnosticPageURLRemovesCredentialsAndQuery(t *testing.T) {
+	got := diagnosticPageURL("https://user:secret@ha.example:8123/dashboard/main?token=private#view")
+	want := "https://ha.example:8123/dashboard/main"
+	if got != want {
+		t.Fatalf("diagnosticPageURL() = %q, want %q", got, want)
+	}
+}
+
 func TestRefreshOnePageHealthRotates(t *testing.T) {
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -351,6 +362,22 @@ func TestRefreshOnePageHealthRotates(t *testing.T) {
 	service.refreshOnePageHealth(pages)
 	if service.health["second"].OK || service.health["second"].StatusCode != http.StatusForbidden {
 		t.Fatalf("second rotation health = %#v", service.health)
+	}
+}
+
+func TestRefreshOnePageHealthPausesWhileAuthGuardIsTripped(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	browser := &fakeBrowser{status: supervisor.Status{AuthGuard: supervisor.AuthGuardStatus{Tripped: true}}}
+	service := NewMQTTService(mqttTestConfig(t), browser, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service.refreshOnePageHealth([]pageEntity{{ID: "main", URL: server.URL}})
+	if requests != 0 {
+		t.Fatalf("health requests = %d, want 0 while auth guard is tripped", requests)
 	}
 }
 

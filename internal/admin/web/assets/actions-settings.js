@@ -119,12 +119,17 @@ function bindSettings() {
       async function importConfig(event) {
         const file = event.target.files?.[0];
         if (!file) return;
-        await runAction("config-import", async () => {
-          const text = await file.text();
-          await request("/api/config/import", { method: "POST", body: text, headers: { "Content-Type": "application/json" } });
-          await refreshCore();
-          renderApp();
-        }, t("saved"));
+		const text = await file.text();
+		const preview = await runAction("config-import", () => request("/api/config/import?dry_run=1", { method: "POST", body: text, headers: { "Content-Type": "application/json" } }), t("configValidated"));
+		event.target.value = "";
+		if (!preview?.summary) return;
+		openConfigPreview(preview.summary, t("importConfig"), async () => {
+		  await runAction("config-import-apply", async () => {
+			await request("/api/config/import", { method: "POST", body: text, headers: { "Content-Type": "application/json" } });
+			await refreshCore();
+			renderApp();
+		  }, t("saved"));
+		});
       }
 
       async function saveRawConfig() {
@@ -150,13 +155,45 @@ function bindSettings() {
       }
 
       async function restoreBackup(path) {
-        if (!confirm(t("confirmRestore"))) return;
-        await runAction("restore", async () => {
-          await postJSON("/api/config/restore", { path });
-          await refreshCore();
-          renderApp();
-        }, t("saved"));
+		const preview = await runAction("restore-preview", () => postJSON("/api/config/restore", { path, dry_run: true }), t("configValidated"));
+		if (!preview?.summary) return;
+		openConfigPreview(preview.summary, t("restore"), async () => {
+		  await runAction("restore", async () => {
+			await postJSON("/api/config/restore", { path });
+			await refreshCore();
+			renderApp();
+		  }, t("saved"));
+		});
       }
+
+	  function openConfigPreview(summary, title, apply) {
+		const changes = [
+		  ["kiosk_changed", "kiosk"],
+		  ["browser_settings_changed", "browserSettings"],
+		  ["mqtt_changed", "mqtt"],
+		  ["admin_changed", "adminAccess"],
+		  ["time_changed", "time"],
+		  ["update_changed", "update"],
+		].filter(([key]) => summary[key]).map(([, label]) => `<span class="chip warn">${esc(t(label))}</span>`).join("");
+		openModal(`
+		  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="config-preview-title">
+			<div class="modal-head"><div><h3 id="config-preview-title">${esc(title)}</h3><div class="hint">${esc(t("configPreviewHint"))}</div></div><button data-modal-close>${esc(t("close"))}</button></div>
+			<div class="modal-body grid">
+			  <div class="status-grid">
+				${metric(t("pagesBefore"), summary.pages_before ?? 0, "")}
+				${metric(t("pagesAfter"), summary.pages_after ?? 0, "")}
+			  </div>
+			  <div><label>${esc(t("changedAreas"))}</label><div class="workflow-line">${changes || `<span class="chip ok">${esc(t("noChanges"))}</span>`}</div></div>
+			  ${summary.requires_browser_restart ? `<div class="notice warn"><strong>${esc(t("browserRestartRequired"))}</strong><span>${esc(t("browserRestartAfterImportHint"))}</span></div>` : ""}
+			  ${summary.requires_service_restart ? `<div class="notice warn"><strong>${esc(t("serviceRestartRequired"))}</strong><span>${esc(t("serviceRestartAfterImportHint"))}</span></div>` : ""}
+			</div>
+			<div class="modal-foot"><button data-modal-close>${esc(t("cancel"))}</button><button class="primary" data-action="config-preview-apply">${esc(t("applyConfig"))}</button></div>
+		  </div>`);
+		document.querySelector('[data-action="config-preview-apply"]')?.addEventListener("click", async () => {
+		  closeModal();
+		  await apply();
+		});
+	  }
 
       async function checkRepair() {
         await runAction("repair-check", async () => {

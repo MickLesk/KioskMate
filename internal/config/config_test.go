@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -321,6 +322,31 @@ func TestSaveBacksUpChangedConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".bak"); err != nil {
 		t.Fatalf("expected backup before rewrite: %v", err)
+	}
+	entries, err := os.ReadDir(BackupDir(path))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one historical backup, entries=%d error=%v", len(entries), err)
+	}
+}
+
+func TestConfigBackupHistoryIsBounded(t *testing.T) {
+	path := filepath.Join(testHome(t), ".config", "kioskmate", "config.json")
+	cfg := defaults(path)
+	if err := Save(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 14; index++ {
+		cfg.Kiosk.Pages[0].Name = fmt.Sprintf("Page %02d", index)
+		if err := Save(&cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(BackupDir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 10 {
+		t.Fatalf("backup history contains %d entries, want 10", len(entries))
 	}
 }
 

@@ -297,8 +297,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 				sockets[params.ID] = params.URL
 			case "Network.webSocketFrameReceived":
 				if b.isHAAuthResource(sockets[params.ID], "/api/websocket") && homeAssistantAuthFailureFrame(params.Response.Payload) {
-					b.blockAuthentication(authEvidence{Kind: "invalid_token", Confidence: "confirmed", URL: sockets[params.ID], Resource: "WebSocket", Reason: "Home Assistant rejected this browser session", Action: "sign_in"})
-					return context.Canceled
+					if b.blockAuthentication(authEvidence{Kind: "invalid_token", Confidence: "confirmed", URL: sockets[params.ID], Resource: "WebSocket", Reason: "Home Assistant rejected this browser session", Action: "sign_in"}) {
+						return context.Canceled
+					}
 				}
 			case "Network.responseReceived":
 				raw := params.Response.URL
@@ -313,8 +314,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 					continue
 				}
 				if evidence.Kind != "" {
-					b.blockAuthentication(evidence)
-					return context.Canceled
+					if b.blockAuthentication(evidence) {
+						return context.Canceled
+					}
 				}
 			case "Network.loadingFinished":
 				if evidence, ok := tokenFailures[params.ID]; ok {
@@ -338,8 +340,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 					}
 					if json.Unmarshal([]byte(body.Body), &failure) == nil && failure.Error == "invalid_grant" {
 						evidence.Kind, evidence.Confidence, evidence.Reason, evidence.Action = "invalid_grant", "confirmed", "Home Assistant refresh grant is no longer valid", "sign_in"
-						b.blockAuthentication(evidence)
-						return context.Canceled
+						if b.blockAuthentication(evidence) {
+							return context.Canceled
+						}
 					}
 				}
 			}

@@ -16,6 +16,13 @@ const languages = Object.keys(translations);
 const referenced = new Set([...app.matchAll(/\bt\(["']([^"']+)["']\)/g)].map((match) => match[1]));
 const allKeys = new Set(languages.flatMap((language) => Object.keys(translations[language])));
 const failures = [];
+const canonical = `"use strict";\n\nwindow.KIOSKMATE_I18N = ${JSON.stringify(translations, null, 2)};\n`;
+
+if (process.argv.includes("--write")) {
+  fs.writeFileSync("internal/admin/web/assets/i18n.js", canonical);
+} else if (source !== canonical) {
+  failures.push("i18n.js is not canonical; run `node scripts/check-i18n.mjs --write`");
+}
 
 for (const language of languages) {
   for (const key of referenced) {
@@ -31,4 +38,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`i18n parity ok: ${languages.length} languages, ${referenced.size} referenced keys`);
+console.log(`i18n parity ok: ${languages.length} languages, ${allKeys.size} total keys, ${referenced.size} statically referenced keys`);

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MickLesk/KioskMate/internal/config"
 )
@@ -28,6 +29,41 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 	}
 	if !strings.HasPrefix(hash, "argon2id$") {
 		t.Fatalf("hash = %q, want Argon2id", hash)
+	}
+}
+
+func TestAuthStatusReportsRateLimitAndAttemptMapIsBounded(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(cfg, &fakeActionBrowser{}, nil, nil, nil, nil, "test", slog.Default())
+	now := time.Now()
+	server.attempts["192.0.2.10"] = make([]time.Time, loginAttemptLimit)
+	for index := range server.attempts["192.0.2.10"] {
+		server.attempts["192.0.2.10"][index] = now
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req.RemoteAddr = "192.0.2.10:1234"
+	rec := httptest.NewRecorder()
+	server.authStatus(rec, req)
+	var status struct {
+		RateLimited       bool `json:"rateLimited"`
+		RetryAfterSeconds int  `json:"retryAfterSeconds"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.RateLimited || status.RetryAfterSeconds <= 0 {
+		t.Fatalf("unexpected rate limit status: %#v", status)
+	}
+	for index := 0; index < maxAttemptClients+20; index++ {
+		failed := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+		failed.RemoteAddr = fmt.Sprintf("198.51.100.%d:1234", index)
+		server.recordFailedAttempt(failed)
+	}
+	if len(server.attempts) > maxAttemptClients {
+		t.Fatalf("attempt map has %d clients, want at most %d", len(server.attempts), maxAttemptClients)
 	}
 }
 

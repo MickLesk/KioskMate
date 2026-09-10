@@ -14,8 +14,10 @@ grep -q 'usr/bin/kioskmate$' "$CONTENTS"
 grep -q 'usr/lib/systemd/user/kioskmate.service$' "$CONTENTS"
 
 test "$(dpkg-deb -f "$DEB" Package)" = "kioskmate"
-test -n "$(dpkg-deb -f "$DEB" Version)"
-case "$(dpkg-deb -f "$DEB" Architecture)" in
+VERSION="$(dpkg-deb -f "$DEB" Version)"
+ARCH="$(dpkg-deb -f "$DEB" Architecture)"
+test -n "$VERSION"
+case "$ARCH" in
   amd64|arm64) ;;
   *) echo "unsupported package architecture" >&2; exit 1 ;;
 esac
@@ -26,6 +28,15 @@ for script in preinst postinst prerm; do
   test -x "$TMP/$script"
   bash -n "$TMP/$script"
 done
+
+ROOTFS="$TMP/rootfs"
+mkdir -p "$ROOTFS"
+dpkg-deb --extract "$DEB" "$ROOTFS"
+test -x "$ROOTFS/usr/bin/kioskmate"
+test -r "$ROOTFS/usr/lib/systemd/user/kioskmate.service"
+if [ "$ARCH" = "$(dpkg --print-architecture)" ]; then
+  test "$("$ROOTFS/usr/bin/kioskmate" --version)" = "$VERSION"
+fi
 
 if grep -R -E 'sed .*config\.json|127\\?\.0\\?\.0\\?\.1.*0\.0\.0\.0' "$TMP"; then
   echo "maintainer scripts must not rewrite Admin bind settings" >&2

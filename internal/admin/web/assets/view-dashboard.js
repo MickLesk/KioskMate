@@ -10,6 +10,7 @@ function renderDashboard() {
 		const recovery = browser.recovery || {};
 		const telemetry = browser.telemetry || {};
 		const override = browser.override || {};
+		const lastExit = browser.last_exit_details || {};
         const pages = normalizePages(cfg.kiosk?.pages, cfg.kiosk?.urls);
         const activeIndex = Number(browser.active || 0);
         const activePage = pages[activeIndex] || {};
@@ -82,9 +83,12 @@ function renderDashboard() {
                     ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
                     ${healthRow(t("browserControl"), browser.devtools ? t("connected") : t("notConnected"), browser.devtools ? "ok" : "warn")}
                     ${browser.control?.failures ? healthRow(t("browserControlFailures"), `${browser.control.failures}: ${browser.control.last_error || "-"}`, "warn") : ""}
-                    ${healthRow(t("browserGeneration"), String(browser.generation || 0), "")}
+					${healthRow(t("browserGeneration"), String(browser.generation || 0), "")}
+					${lastExit.reason ? healthRow(t("lastExitReason"), String(lastExit.reason).replaceAll("_", " "), lastExit.expected ? "" : "bad") : ""}
+					${lastExit.at ? healthRow(t("lastBrowserRuntime"), `${formatDuration(Math.round(Number(lastExit.runtime_ms || 0) / 1000))} · ${t("exitCode")} ${lastExit.exit_code ?? "-"}`, lastExit.expected ? "" : "warn") : ""}
                     ${healthRow(t("haThemeSync"), formatThemeStatus(browser.theme_status), browser.theme_status?.state === "applied" ? "ok" : browser.theme_status?.state === "failed" ? "bad" : "")}
                     ${healthRow(t("authGuard"), browser.auth_guard?.tripped ? `${t("blocked")}: ${browser.auth_guard.reason || "-"}` : t("ready"), browser.auth_guard?.tripped ? "bad" : "ok")}
+					${browser.auth_guard?.tripped ? healthRow(t("authEvidence"), `${browser.auth_guard.confidence || "-"} · ${browser.auth_guard.occurrences || 1} ${t("signals")}`, browser.auth_guard.confidence === "confirmed" ? "bad" : "warn") : ""}
 					${browser.auth_guard?.tripped && browser.auth_guard?.kiosk_ip ? healthRow(t("kioskIPAddress"), browser.auth_guard.kiosk_ip, "warn") : ""}
 					${healthRow(t("recoveryState"), recovery.state || t("idle"), recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : recovery.state === "backoff" ? "warn" : "ok")}
 					${recovery.backoff_until ? healthRow(t("backoffUntil"), formatDate(recovery.backoff_until), "warn") : ""}

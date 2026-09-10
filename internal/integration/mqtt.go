@@ -818,6 +818,8 @@ func (s *MQTTService) publishAll() error {
 		"pids":          status.Stats.PIDs,
 		"start_count":   status.StartCount,
 		"restart_count": status.Restarts,
+		"last_exit":     status.Exit,
+		"exit_counts":   status.ExitCounts,
 		"page":          status.Active + 1,
 		"page_name":     status.PageName,
 		"page_url":      status.URL,
@@ -874,6 +876,9 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "browser_control_failures", fmt.Sprintf("%d", status.Control.Failures), false)
 	_ = s.publishState(client, "browser_start_count", fmt.Sprintf("%d", status.StartCount), false)
 	_ = s.publishState(client, "browser_restart_count", fmt.Sprintf("%d", status.Restarts), false)
+	_ = s.publishState(client, "browser_last_exit_reason", firstString(status.Exit.Reason, "none"), false)
+	_ = s.publishState(client, "browser_last_exit_code", fmt.Sprintf("%d", status.Exit.ExitCode), false)
+	_ = s.publishState(client, "browser_last_runtime_seconds", fmt.Sprintf("%.1f", float64(status.Exit.RuntimeMS)/1000), false)
 	_ = s.publishState(client, "browser_process_count", fmt.Sprintf("%d", len(status.Stats.PIDs)), false)
 	_ = s.publishState(client, "recovery_state", firstString(status.Recovery.State, "idle"), true)
 	_ = s.publishState(client, "recovery_stage", firstString(status.Recovery.Stage, "none"), true)
@@ -915,11 +920,23 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "auth_guard", boolState(status.AuthGuard.Tripped), true)
 	_ = s.publishState(client, "auth_guard_reason", firstString(status.AuthGuard.Reason, "none"), true)
 	_ = s.publishState(client, "auth_guard_kind", firstString(status.AuthGuard.Kind, "none"), true)
+	_ = s.publishState(client, "auth_guard_confidence", firstString(status.AuthGuard.Confidence, "none"), true)
+	_ = s.publishState(client, "auth_guard_occurrences", fmt.Sprintf("%d", status.AuthGuard.Occurrences), true)
 	_ = s.publishState(client, "auth_guard_kiosk_ip", firstString(status.AuthGuard.KioskIP, "none"), true)
 	if status.AuthGuard.At != nil {
 		_ = s.publishState(client, "auth_guard_at", status.AuthGuard.At.Format(time.RFC3339), true)
 	} else {
 		_ = s.publishState(client, "auth_guard_at", "none", true)
+	}
+	if status.AuthGuard.FirstSeen != nil {
+		_ = s.publishState(client, "auth_guard_first_seen", status.AuthGuard.FirstSeen.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "auth_guard_first_seen", "none", true)
+	}
+	if status.AuthGuard.LastSeen != nil {
+		_ = s.publishState(client, "auth_guard_last_seen", status.AuthGuard.LastSeen.Format(time.RFC3339), true)
+	} else {
+		_ = s.publishState(client, "auth_guard_last_seen", "none", true)
 	}
 	_ = s.publishState(client, "page_count", fmt.Sprintf("%d", cfg.Kiosk.PageCount()), true)
 	_ = s.publishState(client, "page_number", fmt.Sprintf("%d", status.Active+1), true)
@@ -929,7 +946,7 @@ func (s *MQTTService) publishAll() error {
 		_ = s.publishState(client, "pages/"+page.ID+"/active", boolState(page.Index == status.Active), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/index", fmt.Sprintf("%d", page.Index+1), true)
 		_ = s.publishState(client, "pages/"+page.ID+"/name", page.Name, true)
-		_ = s.publishState(client, "pages/"+page.ID+"/url", page.URL, true)
+		_ = s.publishState(client, "pages/"+page.ID+"/url", diagnosticPageURL(page.URL), true)
 		health := s.health[page.ID]
 		if health.Checked.IsZero() {
 			health = pageHealth{Checked: time.Now().UTC(), Error: "not checked yet"}
@@ -1229,6 +1246,9 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		s.diagnosticSensor(device, "browser_control_failures", "Browser Control Reconnects", "mdi:connection", ""),
 		s.diagnosticSensor(device, "browser_start_count", "Browser Start Count", "mdi:counter", ""),
 		s.diagnosticSensor(device, "browser_restart_count", "Browser Restart Count", "mdi:restart", ""),
+		s.diagnosticSensor(device, "browser_last_exit_reason", "Browser Last Exit Reason", "mdi:exit-run", ""),
+		s.diagnosticSensor(device, "browser_last_exit_code", "Browser Last Exit Code", "mdi:numeric", ""),
+		s.diagnosticSensor(device, "browser_last_runtime_seconds", "Browser Last Runtime", "mdi:timer-outline", "s"),
 		s.diagnosticSensor(device, "browser_started", "Browser Started", "mdi:clock-start", ""),
 		s.diagnosticSensor(device, "browser_command", "Browser Command", "mdi:console", ""),
 		s.diagnosticSensor(device, "browser_last_error", "Browser Last Error", "mdi:alert-circle", ""),
@@ -1720,6 +1740,10 @@ func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryIt
 		s.diagnosticSensor(device, "telemetry_rss_average", "Browser Memory 24h Average", "mdi:memory", "MB"),
 		s.diagnosticSensor(device, "telemetry_rss_maximum", "Browser Memory 24h Maximum", "mdi:memory", "MB"),
 		s.diagnosticSensor(device, "auth_guard_kind", "HA Authentication Guard Type", "mdi:shield-key", ""),
+		s.diagnosticSensor(device, "auth_guard_confidence", "HA Authentication Confidence", "mdi:shield-search", ""),
+		s.diagnosticSensor(device, "auth_guard_occurrences", "HA Authentication Signals", "mdi:counter", ""),
+		s.diagnosticSensor(device, "auth_guard_first_seen", "HA Authentication First Seen", "mdi:clock-start", ""),
+		s.diagnosticSensor(device, "auth_guard_last_seen", "HA Authentication Last Seen", "mdi:clock-alert", ""),
 		s.diagnosticSensor(device, "auth_guard_kiosk_ip", "Kiosk IP For HA", "mdi:ip-network", ""),
 	}
 	return items
@@ -1841,6 +1865,9 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "browser_started"},
 		[2]string{"sensor", "browser_start_count"},
 		[2]string{"sensor", "browser_restart_count"},
+		[2]string{"sensor", "browser_last_exit_reason"},
+		[2]string{"sensor", "browser_last_exit_code"},
+		[2]string{"sensor", "browser_last_runtime_seconds"},
 		[2]string{"sensor", "browser_command"},
 		[2]string{"sensor", "browser_last_error"},
 		[2]string{"sensor", "mqtt_connection"},
@@ -1889,6 +1916,10 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "telemetry_rss_average"},
 		[2]string{"sensor", "telemetry_rss_maximum"},
 		[2]string{"sensor", "auth_guard_kind"},
+		[2]string{"sensor", "auth_guard_confidence"},
+		[2]string{"sensor", "auth_guard_occurrences"},
+		[2]string{"sensor", "auth_guard_first_seen"},
+		[2]string{"sensor", "auth_guard_last_seen"},
 		[2]string{"sensor", "auth_guard_kiosk_ip"},
 	)
 	for _, page := range s.pageEntities() {
@@ -2448,6 +2479,9 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 	if len(pages) == 0 {
 		return
 	}
+	if s.browser.Status().AuthGuard.Tripped {
+		return
+	}
 	if s.health == nil {
 		s.health = map[string]pageHealth{}
 	}
@@ -2472,7 +2506,7 @@ func (s *MQTTService) refreshOnePageHealth(pages []pageEntity) {
 		if health.StatusCode == http.StatusForbidden && likelyHomeAssistantPage(page.URL) {
 			// Passive only — TripAuthGuard here falsely banned healthy kiosks when HA
 			// rate-limited /manifest.json or returned a transient proxy 403.
-			s.logger.Warn("home assistant health check returned 403", "page", page.Name, "url", page.URL)
+			s.logger.Warn("home assistant health check returned 403", "page", page.Name, "url", diagnosticPageURL(page.URL))
 		}
 	}
 	s.healthIx = (s.healthIx + 1) % len(pages)
@@ -2489,6 +2523,17 @@ func safeHealthCheckURL(target string) string {
 		parsed.RawQuery = ""
 		parsed.Fragment = ""
 	}
+	return parsed.String()
+}
+
+func diagnosticPageURL(target string) string {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "invalid"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	return parsed.String()
 }
 

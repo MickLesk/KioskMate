@@ -531,6 +531,10 @@ func EventJournalPath(path string) string {
 	return filepath.Join(ConfigDir(path), "events.jsonl")
 }
 
+func BackupDir(path string) string {
+	return filepath.Join(ConfigDir(path), "backups")
+}
+
 func defaults(path string) Config {
 	return Config{
 		mu:      &sync.RWMutex{},
@@ -1034,7 +1038,38 @@ func backupIfChanged(path string, next []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path+".bak", current, info.Mode().Perm())
+	backupDir := BackupDir(path)
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return err
+	}
+	name := "config-" + time.Now().UTC().Format("20060102T150405.000000000Z") + ".json"
+	if err := atomicWriteFile(filepath.Join(backupDir, name), current, info.Mode().Perm()); err != nil {
+		return err
+	}
+	if err := pruneConfigBackups(backupDir, 10); err != nil {
+		return err
+	}
+	return atomicWriteFile(path+".bak", current, info.Mode().Perm())
+}
+
+func pruneConfigBackups(dir string, keep int) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "config-") && strings.HasSuffix(entry.Name(), ".json") {
+			names = append(names, entry.Name())
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names[:max(0, len(names)-keep)] {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func defaultBrowserDataDir() string {

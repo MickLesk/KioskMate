@@ -55,6 +55,9 @@ type Browser struct {
 	hotSince         time.Time
 	lastError        string
 	lastExit         time.Time
+	lastExitDetails  ExitStatus
+	exitReasonCounts map[string]int
+	stopReason       string
 	watchdog         WatchdogStatus
 	watchdogRuns     []time.Time
 	scheduler        SchedulerStatus
@@ -69,6 +72,7 @@ type Browser struct {
 	control          *cdpSession
 	themeStatus      ThemeStatus
 	authGuard        AuthGuardStatus
+	authEvidenceSeen map[string][]time.Time
 	recovery         RecoveryStatus
 	telemetry        []TelemetrySample
 	override         ManualOverride
@@ -97,6 +101,8 @@ type Status struct {
 	Watchdog   WatchdogStatus          `json:"watchdog"`
 	LastError  string                  `json:"last_error,omitempty"`
 	LastExit   *time.Time              `json:"last_exit,omitempty"`
+	Exit       ExitStatus              `json:"last_exit_details"`
+	ExitCounts map[string]int          `json:"exit_reason_counts"`
 	DevTools   bool                    `json:"devtools"`
 	Control    ControlStatus           `json:"control"`
 	Theme      ThemeStatus             `json:"theme_status"`
@@ -104,6 +110,16 @@ type Status struct {
 	Recovery   RecoveryStatus          `json:"recovery"`
 	Telemetry  TelemetrySummary        `json:"telemetry"`
 	Override   ManualOverride          `json:"override"`
+}
+
+type ExitStatus struct {
+	At         *time.Time `json:"at,omitempty"`
+	Expected   bool       `json:"expected"`
+	Reason     string     `json:"reason,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	ExitCode   int        `json:"exit_code"`
+	RuntimeMS  int64      `json:"runtime_ms"`
+	Generation uint64     `json:"generation"`
 }
 
 type ControlStatus struct {
@@ -138,6 +154,9 @@ type AuthGuardStatus struct {
 	SuggestedAction string     `json:"suggested_action,omitempty"`
 	KioskIP         string     `json:"kiosk_ip,omitempty"`
 	At              *time.Time `json:"at,omitempty"`
+	FirstSeen       *time.Time `json:"first_seen,omitempty"`
+	LastSeen        *time.Time `json:"last_seen,omitempty"`
+	Occurrences     int        `json:"occurrences"`
 }
 
 type WatchdogStatus struct {
@@ -172,7 +191,7 @@ type SchedulerStatus struct {
 }
 
 func NewBrowser(cfg *config.Config, logger *slog.Logger) *Browser {
-	browser := &Browser{cfg: cfg, logger: logger}
+	browser := &Browser{cfg: cfg, logger: logger, exitReasonCounts: map[string]int{}, authEvidenceSeen: map[string][]time.Time{}}
 	browser.loadAuthGuard()
 	browser.loadRuntimeState()
 	return browser
@@ -348,12 +367,13 @@ func (b *Browser) openBrowserLog() *os.File {
 	return file
 }
 
-func (b *Browser) stop(ctx context.Context) error {
+func (b *Browser) stop(ctx context.Context, reason string) error {
 	b.mu.Lock()
 	cmd := b.cmd
 	done := b.done
 	if cmd != nil {
 		b.stopping = true
+		b.stopReason = normalizeExitReason(reason)
 	}
 	b.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
@@ -382,14 +402,14 @@ func (b *Browser) stop(ctx context.Context) error {
 	}
 }
 
-func (b *Browser) restart(ctx context.Context) error {
+func (b *Browser) restart(ctx context.Context, reason string) error {
 	if err := b.authenticationAllowed(); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	running := b.cmd != nil && b.cmd.Process != nil
 	b.mu.Unlock()
-	if err := b.stop(ctx); err != nil {
+	if err := b.stop(ctx, reason); err != nil {
 		return err
 	}
 	if err := b.start(ctx); err != nil {
@@ -458,10 +478,10 @@ func (b *Browser) setActive(ctx context.Context, index int) error {
 		if navErr := b.navigateDevTools(ctx, target); navErr == nil {
 			err = nil
 		} else {
-			err = b.restart(ctx)
+			err = b.restart(ctx, "page_navigation_recovery")
 		}
 	} else {
-		err = b.restart(ctx)
+		err = b.restart(ctx, "page_session_change")
 	}
 	if err == nil && control != nil && brightness > 0 {
 		_ = control.SetBrightness(ctx, brightness)
@@ -495,7 +515,7 @@ func (b *Browser) resetSession(ctx context.Context) error {
 	b.mu.Lock()
 	active := b.active
 	b.mu.Unlock()
-	if err := b.stop(ctx); err != nil {
+	if err := b.stop(ctx, "session_reset"); err != nil {
 		return err
 	}
 	dir := browserUserDataDir(cfg, active)
@@ -542,7 +562,7 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation}
+	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation, Exit: b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts)}
 	status.Control = ControlStatus{Required: b.requiresControl, Connected: b.devTools, Failures: b.controlFailures, LastError: b.controlError}
 	if !b.controlConnected.IsZero() {
 		connected := b.controlConnected
@@ -761,12 +781,14 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 	err := cmd.Wait()
 	b.mu.Lock()
 	expected := b.stopping
+	stopReason := b.stopReason
 	runtime := time.Duration(0)
 	if b.cmd == cmd && !b.started.IsZero() {
 		runtime = time.Since(b.started)
 	}
 	if b.cmd == cmd {
 		b.cmd = nil
+		b.stopReason = ""
 	}
 	done := b.done
 	if b.cmd == nil {
@@ -775,6 +797,21 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		b.readySince = time.Time{}
 	}
 	b.lastExit = time.Now()
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	exitReason := classifyProcessExit(expected, stopReason, runtime, err)
+	if b.exitReasonCounts == nil {
+		b.exitReasonCounts = map[string]int{}
+	}
+	b.exitReasonCounts[exitReason]++
+	exitAt := b.lastExit
+	generation := b.generation
+	b.lastExitDetails = ExitStatus{At: &exitAt, Expected: expected, Reason: exitReason, ExitCode: exitCode, RuntimeMS: runtime.Milliseconds(), Generation: generation}
+	if err != nil && !errors.Is(err, os.ErrProcessDone) {
+		b.lastExitDetails.Error = err.Error()
+	}
 	if expected {
 		b.lastError = ""
 		b.stopping = false
@@ -812,7 +849,7 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 			status = "error"
 			message = "browser exited unexpectedly"
 		}
-		details := map[string]string{"expected": strconv.FormatBool(expected), "runtime_ms": strconv.FormatInt(runtime.Milliseconds(), 10)}
+		details := map[string]string{"expected": strconv.FormatBool(expected), "runtime_ms": strconv.FormatInt(runtime.Milliseconds(), 10), "exit_code": strconv.Itoa(exitCode), "category": exitReason, "generation": strconv.FormatUint(generation, 10)}
 		if lastError != "" {
 			details["reason"] = lastError
 		}
@@ -847,6 +884,36 @@ func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
 		return
 	}
 	b.logger.Info("browser exited", "runtime", runtime)
+}
+
+func normalizeExitReason(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	reason = strings.NewReplacer(" ", "_", "-", "_", "/", "_").Replace(reason)
+	if reason == "" {
+		return "controlled_stop"
+	}
+	return reason
+}
+
+func classifyProcessExit(expected bool, stopReason string, runtime time.Duration, err error) string {
+	if expected {
+		return normalizeExitReason(stopReason)
+	}
+	if runtime > 0 && runtime < 5*time.Second {
+		return "startup_exit"
+	}
+	if err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return "process_crash"
+	}
+	return "unexpected_exit"
+}
+
+func cloneIntMap(source map[string]int) map[string]int {
+	result := make(map[string]int, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func (b *Browser) writeCrashDiagnostic(cmd *exec.Cmd, runtime time.Duration, lastError string) {
@@ -1401,7 +1468,7 @@ func (b *Browser) tripAuthGuard(reason string) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = b.Stop(ctx)
+			_ = b.operate(ctx, "auth-guard-stop", func() error { return b.stop(ctx, "authentication_guard") })
 		}()
 	}
 }
@@ -1409,6 +1476,7 @@ func (b *Browser) tripAuthGuard(reason string) {
 func (b *Browser) clearAuthGuard() {
 	b.mu.Lock()
 	b.authGuard = AuthGuardStatus{}
+	b.authEvidenceSeen = map[string][]time.Time{}
 	b.mu.Unlock()
 	if b.cfg.Path != "" {
 		_ = os.Remove(b.authGuardPath())
