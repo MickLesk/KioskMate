@@ -403,6 +403,35 @@ func TestValidateRejectsUnsafeOrInvalidRuntimeValues(t *testing.T) {
 	}
 }
 
+func TestMutateRejectsInvalidConfigWithoutChangingMemoryOrDisk(t *testing.T) {
+	path := filepath.Join(testHome(t), ".config", "kioskmate", "config.json")
+	cfg := defaults(path)
+	if err := Save(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.Mutate(func(next *Config) error {
+		next.Kiosk.Pages[0].URL = "file:///etc/passwd"
+		return nil
+	})
+	if err == nil {
+		t.Fatal("invalid config mutation was accepted")
+	}
+	if cfg.Kiosk.Pages[0].URL == "file:///etc/passwd" {
+		t.Fatal("failed mutation changed the in-memory config")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatal("failed mutation changed the persisted config")
+	}
+}
+
 func testHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()

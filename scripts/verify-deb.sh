@@ -24,7 +24,7 @@ esac
 
 dpkg-deb --control "$DEB" "$TMP"
 test "$(tail -c 1 "$TMP/control" | wc -l)" -eq 1
-for script in preinst postinst prerm; do
+for script in preinst postinst prerm postrm; do
   test -x "$TMP/$script"
   bash -n "$TMP/$script"
 done

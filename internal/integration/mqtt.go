@@ -8,7 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +76,8 @@ type MQTTService struct {
 	commandMu        sync.Mutex
 	publishMu        sync.Mutex
 	knownPageIDs     []string
+	discoveryTopics  []string
+	discoveryLoaded  bool
 	needsRestart     atomic.Bool
 }
 
@@ -88,6 +93,11 @@ type MQTTConnectionStatus struct {
 type discoveryItem struct {
 	Topic string
 	Data  map[string]any
+}
+
+type discoveryRegistry struct {
+	Version int      `json:"version"`
+	Topics  []string `json:"topics"`
 }
 
 type pageEntity struct {
@@ -201,13 +211,24 @@ func (s *MQTTService) ResetDiscovery() (int, error) {
 	s.mu.Lock()
 	client := s.mqtt()
 	count := 0
+	topics := map[string]bool{}
 	for _, entry := range s.discoveryResetEntries() {
 		topic := strings.Trim(s.cfg.Snapshot().MQTT.Discovery, "/") + "/" + entry[0] + "/" + s.cfg.Snapshot().MQTT.Node + "/" + entry[1] + "/config"
+		topics[topic] = true
+	}
+	for _, topic := range s.loadDiscoveryRegistryLocked() {
+		topics[topic] = true
+	}
+	for topic := range topics {
 		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
 			s.mu.Unlock()
 			return count, err
 		}
 		count++
+	}
+	if err := s.saveDiscoveryRegistryLocked(nil); err != nil {
+		s.mu.Unlock()
+		return count, err
 	}
 	s.cleaned = false
 	s.mu.Unlock()
@@ -1620,6 +1641,18 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		return err
 	}
 	unsupportedObjects := s.unsupportedDiscoveryObjects(status.Support)
+	activeTopics := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, object, ok := parseDiscoveryTopic(item.Topic); ok && unsupportedObjects[object] {
+			continue
+		}
+		activeTopics = append(activeTopics, item.Topic)
+	}
+	for _, topic := range staleDiscoveryTopics(s.loadDiscoveryRegistryLocked(), activeTopics) {
+		if err := client.Publish(topic, []byte{}, s.retained(true)); err != nil {
+			return err
+		}
+	}
 	for _, item := range items {
 		if _, object, ok := parseDiscoveryTopic(item.Topic); ok && unsupportedObjects[object] {
 			// Hardware doesn't support this entity: clear any previously
@@ -1635,7 +1668,123 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 			return err
 		}
 	}
+	return s.saveDiscoveryRegistryLocked(activeTopics)
+}
+
+func (s *MQTTService) discoveryRegistryPath() string {
+	if s.cfg == nil || s.cfg.Path == "" {
+		return ""
+	}
+	return filepath.Join(config.ConfigDir(s.cfg.Path), "mqtt-discovery-topics.json")
+}
+
+func (s *MQTTService) loadDiscoveryRegistryLocked() []string {
+	if s.discoveryLoaded {
+		return append([]string(nil), s.discoveryTopics...)
+	}
+	s.discoveryLoaded = true
+	path := s.discoveryRegistryPath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var registry discoveryRegistry
+	if json.Unmarshal(data, &registry) != nil || registry.Version != 1 {
+		return nil
+	}
+	for _, topic := range registry.Topics {
+		if validDiscoveryConfigTopic(topic) {
+			s.discoveryTopics = append(s.discoveryTopics, topic)
+		}
+	}
+	sort.Strings(s.discoveryTopics)
+	return append([]string(nil), s.discoveryTopics...)
+}
+
+func (s *MQTTService) saveDiscoveryRegistryLocked(topics []string) error {
+	filtered := make([]string, 0, len(topics))
+	seen := map[string]bool{}
+	for _, topic := range topics {
+		if validDiscoveryConfigTopic(topic) && !seen[topic] {
+			seen[topic] = true
+			filtered = append(filtered, topic)
+		}
+	}
+	sort.Strings(filtered)
+	if reflect.DeepEqual(filtered, s.discoveryTopics) && s.discoveryLoaded {
+		return nil
+	}
+	path := s.discoveryRegistryPath()
+	if path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(discoveryRegistry{Version: 1, Topics: filtered}, "", "  ")
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(path), ".mqtt-discovery-*")
+		if err != nil {
+			return err
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if err := tmp.Chmod(0o600); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if _, err := tmp.Write(append(data, '\n')); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, path); err != nil {
+			return err
+		}
+	}
+	s.discoveryTopics = filtered
+	s.discoveryLoaded = true
 	return nil
+}
+
+func staleDiscoveryTopics(previous, current []string) []string {
+	wanted := make(map[string]bool, len(current))
+	for _, topic := range current {
+		wanted[topic] = true
+	}
+	var stale []string
+	for _, topic := range previous {
+		if validDiscoveryConfigTopic(topic) && !wanted[topic] {
+			stale = append(stale, topic)
+		}
+	}
+	sort.Strings(stale)
+	return stale
+}
+
+func validDiscoveryConfigTopic(topic string) bool {
+	if strings.ContainsAny(topic, "\x00+#") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(topic, "/"), "/")
+	if len(parts) < 5 || parts[len(parts)-1] != "config" {
+		return false
+	}
+	switch parts[len(parts)-4] {
+	case "binary_sensor", "button", "image", "light", "number", "select", "sensor", "switch", "text", "update":
+		return parts[len(parts)-3] != "" && parts[len(parts)-2] != ""
+	default:
+		return false
+	}
 }
 
 // unsupportedDiscoveryObjects returns the discovery object IDs that must not

@@ -687,7 +687,10 @@
                   <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">↻</button>
                 </div>
               </header>
-              <section class="content">${renderView()}</section>
+              <section class="content">
+                ${state.status?.config?.load_warning ? stateBanner("warn", t("configurationRecovered"), state.status.config.load_warning) : ""}
+                ${renderView()}
+              </section>
             </main>
           </div>`;
         bindShell();

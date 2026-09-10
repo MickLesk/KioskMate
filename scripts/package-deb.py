@@ -3,6 +3,7 @@ import argparse
 import gzip
 import io
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -13,6 +14,7 @@ SUPPORTED_ARCHES = {
     "amd64": "amd64",
     "arm64": "arm64",
 }
+DEBIAN_VERSION = re.compile(r"^[0-9][0-9A-Za-z.+:~\-]*$")
 
 
 def main() -> int:
@@ -21,6 +23,9 @@ def main() -> int:
     parser.add_argument("--arch", choices=sorted(SUPPORTED_ARCHES), action="append", required=True)
     parser.add_argument("--root", default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
+
+    if not DEBIAN_VERSION.fullmatch(args.version):
+        parser.error("version must be a valid Debian package version")
 
     root = Path(args.root).resolve()
     dist = root / "dist"

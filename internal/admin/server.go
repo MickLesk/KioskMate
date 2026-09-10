@@ -798,6 +798,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 func statusConfig(cfg *config.Config) map[string]any {
 	return map[string]any{
 		"path":                     cfg.Path,
+		"load_warning":             cfg.LoadWarning,
 		"profile":                  cfg.Performance.Profile,
 		"gpu_mode":                 cfg.Performance.GPUMode,
 		"theme":                    cfg.Kiosk.Theme,

@@ -266,6 +266,9 @@ func saveLocked(cfg *Config) error {
 		cfg.Path = defaultPath()
 	}
 	normalize(cfg)
+	if err := Validate(cfg); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o700); err != nil {
 		return err
 	}

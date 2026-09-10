@@ -32,7 +32,6 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-linux-amd64 ./cmd/kioskmate
       - name: Build Debian packages
         run: |
-          VERSION=0.0.0-ci ARCH=arm64 bash scripts/package-deb.sh
-          VERSION=0.0.0-ci ARCH=amd64 bash scripts/package-deb.sh
+          python3 scripts/package-deb.py --version 0.0.0-ci --arch arm64 --arch amd64
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_arm64.deb
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_amd64.deb

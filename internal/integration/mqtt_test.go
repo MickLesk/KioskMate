@@ -381,6 +381,38 @@ func TestRefreshOnePageHealthPausesWhileAuthGuardIsTripped(t *testing.T) {
 	}
 }
 
+func TestDiscoveryRegistryRoundTripAndFiltersUnsafeTopics(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	service := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	wanted := []string{
+		"homeassistant/sensor/kioskmate_test/version/config",
+		"homeassistant/button/kioskmate_test/restart/config",
+		"homeassistant/button/kioskmate_test/restart/config",
+		"house/control/danger",
+	}
+	if err := service.saveDiscoveryRegistryLocked(wanted); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewMQTTService(cfg, &fakeBrowser{}, hardware.New(), nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got := reloaded.loadDiscoveryRegistryLocked()
+	if len(got) != 2 || got[0] != "homeassistant/button/kioskmate_test/restart/config" || got[1] != "homeassistant/sensor/kioskmate_test/version/config" {
+		t.Fatalf("registry topics = %#v", got)
+	}
+}
+
+func TestStaleDiscoveryTopicsOnlyReturnsRemovedValidTopics(t *testing.T) {
+	previous := []string{
+		"homeassistant/sensor/node/keep/config",
+		"homeassistant/sensor/node/remove/config",
+		"untrusted/topic",
+	}
+	current := []string{"homeassistant/sensor/node/keep/config"}
+	got := staleDiscoveryTopics(previous, current)
+	if len(got) != 1 || got[0] != "homeassistant/sensor/node/remove/config" {
+		t.Fatalf("stale topics = %#v", got)
+	}
+}
+
 func mqttTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{

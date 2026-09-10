@@ -213,7 +213,7 @@ VERSION=0.8.0-alpha2 ARCH=arm64 bash scripts/package-deb.sh
 VERSION=0.8.0-alpha2 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
-Cross-platform packaging without `dpkg-deb`:
+The shell command is a compatibility wrapper around the canonical, cross-platform package builder. Both architectures can be built in one invocation without `dpkg-deb`:
 
 ```bash
 python scripts/package-deb.py --version 0.8.0-alpha2 --arch arm64 --arch amd64
