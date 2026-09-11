@@ -40,7 +40,7 @@ jobs:
             curl --silent --fail http://127.0.0.1:33339/healthz >/dev/null && break
             sleep 1
           done
-          OUT=/tmp/kioskmate-benchmark.csv REPORT=/tmp/kioskmate-benchmark.json INTERVAL=1 bash scripts/benchmark.sh 2
+          HEALTH_URL=http://127.0.0.1:33339/healthz OUT=/tmp/kioskmate-benchmark.csv REPORT=/tmp/kioskmate-benchmark.json INTERVAL=1 bash scripts/benchmark.sh 2
           test "$(wc -l < /tmp/kioskmate-benchmark.csv)" -gt 1
           jq -e '.schema_version == 1 and .csv_rows > 0 and .csv_sha256 != "" and .final_health.soak.status == "collecting"' /tmp/kioskmate-benchmark.json
       - name: Build Debian packages
