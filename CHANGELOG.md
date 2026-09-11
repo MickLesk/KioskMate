@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.0-alpha2
+
+### Home Assistant safety and release qualification
+- Changed Admin page checks, Browser Doctor and recovery verification to probe the Home Assistant origin through `/manifest.json` instead of issuing anonymous requests to the configured dashboard URL.
+- Removed diagnostic `403` responses as a source of authentication-guard trips; guard decisions remain limited to the safe startup preflight and corroborated browser-session evidence.
+- Added the persistent Raspberry Pi stability-gate status to the Dashboard with measured progress, failed criteria and direct access to the detailed report.
+
 ## v0.9.0-alpha1
 
 ### Runtime and performance

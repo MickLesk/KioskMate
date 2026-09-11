@@ -18,6 +18,7 @@ function bindView() {
       function bindDashboard() {
         bindBrowserButtons();
         bindHardware();
+		loadDashboardSoakReport();
         document.querySelector('[data-action="dashboard-page-check"]')?.addEventListener("click", checkDashboardPage);
         document.querySelector('[data-action="dashboard-render-check"]')?.addEventListener("click", renderCheckDashboardPage);
         document.querySelector('[data-action="dashboard-preview-open"]')?.addEventListener("click", openDashboardPreview);
@@ -31,6 +32,18 @@ function bindView() {
           renderApp();
         });
       }
+
+	  function loadDashboardSoakReport() {
+		const lastLoad = Number(state.loaded.dashboardSoakAt || 0);
+		if (Date.now() - lastLoad < 60_000) return;
+		state.loaded.dashboardSoakAt = Date.now();
+		getJSON("/api/browser/soak-report").then((report) => {
+		  state.soakReport = report;
+		  if (state.view === "dashboard") renderAppIfIdle();
+		}).catch(() => {
+		  state.loaded.dashboardSoakAt = 0;
+		});
+	  }
 
       function bindBrowserButtons() {
         const actions = {

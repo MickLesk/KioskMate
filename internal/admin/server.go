@@ -2010,12 +2010,9 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	if status.URL == "" {
 		add("active_page", "warn", "No active kiosk URL is available.", "")
-	} else if pageResult := checkHTTPPage(ctx, status.URL, s.version); pageResult["ok"] == true {
+	} else if pageResult := checkHTTPPage(ctx, status.URL, s.version, s.isHomeAssistantTarget(status.URL)); pageResult["ok"] == true {
 		add("active_page", "ok", "Active page is reachable from the kiosk host.", pageResult)
 	} else {
-		if pageResult["statusCode"] == http.StatusForbidden && isHomeAssistantURL(status.URL) {
-			s.browser.TripAuthGuard("Home Assistant returned HTTP 403 during Browser Doctor")
-		}
 		add("active_page", "error", "Active page is not reachable from the kiosk host.", pageResult)
 	}
 	add("logs", "ok", "Log files checked.", map[string]any{
@@ -2071,7 +2068,7 @@ func (s *Server) browserRecover(w http.ResponseWriter, r *http.Request) {
 	}
 	step("start", "ok", map[string]any{"pid": status.PID, "url": status.URL})
 	if status.URL != "" {
-		page := checkHTTPPage(ctx, status.URL, s.version)
+		page := checkHTTPPage(ctx, status.URL, s.version, s.isHomeAssistantTarget(status.URL))
 		level := "error"
 		if page["ok"] == true {
 			level = "ok"
@@ -2558,43 +2555,25 @@ func (s *Server) browserCheckPage(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	req.Header.Set("User-Agent", "KioskMate/"+s.version)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "url": target, "error": err.Error(), "category": "network", "hint": "The kiosk host could not reach this page. Check DNS, network, firewall and the Home Assistant URL."})
-		return
-	}
-	defer resp.Body.Close()
-	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 400
-	category, hint := pageCheckHint(target, resp)
-	if resp.StatusCode == http.StatusForbidden && isHomeAssistantURL(target) {
-		s.browser.TripAuthGuard("Home Assistant returned HTTP 403 during page check")
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":         ok,
-		"url":        target,
-		"final_url":  resp.Request.URL.String(),
-		"status":     resp.Status,
-		"statusCode": resp.StatusCode,
-		"category":   category,
-		"hint":       hint,
-	})
+	writeJSON(w, http.StatusOK, checkHTTPPage(ctx, target, s.version, s.isHomeAssistantTarget(target)))
 }
 
-func checkHTTPPage(ctx context.Context, target string, version string) map[string]any {
-	result := map[string]any{"ok": false, "url": target}
+func checkHTTPPage(ctx context.Context, target string, version string, homeAssistant bool) map[string]any {
+	result := map[string]any{"ok": false, "url": redactDiagnosticURL(target)}
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		result["error"] = "only http and https URLs can be checked"
 		result["category"] = "invalid_url"
 		return result
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	probeTarget, probeScope, err := pageProbeTarget(target, homeAssistant)
+	if err != nil {
+		result["error"] = err.Error()
+		result["category"] = "invalid_url"
+		return result
+	}
+	result["probe_url"] = redactDiagnosticURL(probeTarget)
+	result["probe_scope"] = probeScope
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeTarget, nil)
 	if err != nil {
 		result["error"] = err.Error()
 		result["category"] = "invalid_url"
@@ -2611,14 +2590,53 @@ func checkHTTPPage(ctx context.Context, target string, version string) map[strin
 	defer resp.Body.Close()
 	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 400
-	category, hint := pageCheckHint(target, resp)
+	category, hint := pageCheckHint(target, resp, homeAssistant)
 	result["ok"] = ok
-	result["final_url"] = resp.Request.URL.String()
+	result["final_url"] = redactDiagnosticURL(resp.Request.URL.String())
 	result["status"] = resp.Status
 	result["statusCode"] = resp.StatusCode
 	result["category"] = category
 	result["hint"] = hint
 	return result
+}
+
+func pageProbeTarget(target string, homeAssistant bool) (string, string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		if err == nil {
+			err = errors.New("URL must include a scheme and host")
+		}
+		return "", "", err
+	}
+	if !homeAssistant {
+		return parsed.String(), "page", nil
+	}
+	parsed.User = nil
+	parsed.Path = "/manifest.json"
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), "home_assistant_origin", nil
+}
+
+func (s *Server) isHomeAssistantTarget(target string) bool {
+	if isHomeAssistantURL(target) || s.cfg == nil {
+		return isHomeAssistantURL(target)
+	}
+	targetURL, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || targetURL.Scheme == "" || targetURL.Host == "" {
+		return false
+	}
+	for _, page := range s.cfg.Snapshot().Kiosk.Pages {
+		if page.SourceType != "home_assistant" {
+			continue
+		}
+		pageURL, err := url.Parse(strings.TrimSpace(page.URL))
+		if err == nil && strings.EqualFold(pageURL.Scheme, targetURL.Scheme) && strings.EqualFold(pageURL.Host, targetURL.Host) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasDoctorLevel(checks []map[string]any, level string) bool {
@@ -2856,13 +2874,13 @@ func tailText(text string, limit int) string {
 	return text
 }
 
-func pageCheckHint(target string, resp *http.Response) (string, string) {
+func pageCheckHint(target string, resp *http.Response, homeAssistant bool) (string, string) {
 	finalURL := ""
 	if resp != nil && resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
 	}
 	lowerTarget := strings.ToLower(target + " " + finalURL)
-	isHA := strings.Contains(lowerTarget, "8123") || strings.Contains(lowerTarget, "homeassistant") || strings.Contains(lowerTarget, "home-assistant")
+	isHA := homeAssistant || strings.Contains(lowerTarget, "8123") || strings.Contains(lowerTarget, "homeassistant") || strings.Contains(lowerTarget, "home-assistant")
 	if resp.StatusCode == http.StatusForbidden {
 		if isHA {
 			return "home_assistant_forbidden", "Home Assistant returned 403. Remove the kiosk IP from ip_bans.yaml, restart Home Assistant if needed, then reset the KioskMate HA browser session."
@@ -2877,6 +2895,9 @@ func pageCheckHint(target string, resp *http.Response) (string, string) {
 	}
 	if resp.StatusCode >= 400 {
 		return "http_error", "The page returned an HTTP error. Check the URL and backend service."
+	}
+	if isHA {
+		return "ok", "The Home Assistant origin is reachable. Use Render Check to verify the authenticated dashboard session."
 	}
 	return "ok", "The kiosk host can reach this page."
 }

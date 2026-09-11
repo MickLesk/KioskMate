@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MickLesk/KioskMate/internal/config"
@@ -15,7 +16,8 @@ import (
 )
 
 type fakeActionBrowser struct {
-	status supervisor.Status
+	status     supervisor.Status
+	guardTrips []string
 }
 
 func (b *fakeActionBrowser) Start(context.Context) error {
@@ -56,7 +58,9 @@ func (b *fakeActionBrowser) CaptureScreenshot(context.Context) ([]byte, error) {
 	return nil, nil
 }
 
-func (b *fakeActionBrowser) TripAuthGuard(string) {}
+func (b *fakeActionBrowser) TripAuthGuard(reason string) {
+	b.guardTrips = append(b.guardTrips, reason)
+}
 
 func (b *fakeActionBrowser) NoteDisplayPower(string) {}
 
@@ -111,6 +115,36 @@ func TestBrowserDoctorReportsStoppedBrowser(t *testing.T) {
 	}
 	if _, ok := body["checks"].([]any); !ok {
 		t.Fatalf("checks missing: %#v", body)
+	}
+}
+
+func TestBrowserPageCheckDoesNotTripAuthGuard(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/manifest.json" {
+			t.Errorf("path = %q, want /manifest.json", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer upstream.Close()
+	target := upstream.URL + "/dashboard/main?kiosk"
+	cfg := &config.Config{
+		Path: filepath.Join(t.TempDir(), "config.json"),
+		Kiosk: config.KioskConfig{Pages: []config.KioskPage{{
+			PageID: "home", Name: "Home", URL: target, SourceType: "home_assistant",
+		}}},
+	}
+	browser := &fakeActionBrowser{}
+	server := NewServer(cfg, browser, nil, nil, nil, hardware.New(), "test", slog.Default())
+	req := httptest.NewRequest(http.MethodPost, "/api/browser/check-page", strings.NewReader(`{"url":"`+target+`"}`))
+	rec := httptest.NewRecorder()
+
+	server.browserCheckPage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(browser.guardTrips) != 0 {
+		t.Fatalf("diagnostic check tripped auth guard: %#v", browser.guardTrips)
 	}
 }
 

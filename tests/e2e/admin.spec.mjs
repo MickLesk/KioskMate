@@ -27,6 +27,7 @@ test("login and dashboard remain usable", async ({ page }) => {
   await signIn(page);
   await expect(page.locator("[data-action=\"browser-reload\"]").first()).toBeVisible();
   await expect(page.locator("[data-action=\"action-center\"]")).toBeVisible();
+	await expect(page.locator('button[data-view="kiosk-display"]', { hasText: /stability|Stabilität/i })).toBeVisible();
   await expectNoDocumentOverflow(page);
 });
 

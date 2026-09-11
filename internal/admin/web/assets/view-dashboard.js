@@ -33,6 +33,7 @@ function renderDashboard() {
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
+			${renderDashboardSoakNotice()}
 			${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
             ${schedulerNeedsAttention ? stateBanner("warn", t("scheduler"), schedulerReasonKey === "disabled" ? t("schedulerDisabledWithRulesHint") : t("schedulerNoActiveRuleHint"), `<button data-view="kiosk-pages">${esc(t("manageFlow"))}</button>`) : ""}
             ${stateBanner(browserKnown ? (browser.ready ? "ok" : browser.running ? "warn" : "bad") : "warn", browserKnown ? (browser.ready ? t("displayReady") : browser.running ? t("displayConnecting") : t("displayNeedsAttention")) : t("loading"), browserMessage, browser.running
@@ -127,6 +128,26 @@ function renderDashboard() {
             </div>
           </div>`;
       }
+
+	  function renderDashboardSoakNotice() {
+		const soak = state.soakReport;
+		if (!soak?.status) return "";
+		const required = Math.max(1, Number(soak.required_seconds || 86400));
+		const elapsed = Math.max(0, Number(soak.duration_seconds || 0));
+		const progress = Math.min(100, Math.round((elapsed / required) * 100));
+		const status = soak.status === "passed" ? "passed" : soak.status === "failed" ? "failed" : "collecting";
+		const failedChecks = (soak.checks || []).filter((check) => !check.ok && check.id !== "duration");
+		let message = t("soakDashboardCollecting")
+		  .replace("{elapsed}", formatDuration(elapsed))
+		  .replace("{required}", formatDuration(required))
+		  .replace("{progress}", String(progress));
+		if (status === "passed") message = t("soakDashboardPassed").replace("{duration}", formatDuration(elapsed));
+		if (status === "failed") {
+		  const reasons = failedChecks.map((check) => t(`soakCheck_${check.id}`)).join(", ") || t("unknownError");
+		  message = t("soakDashboardFailed").replace("{reasons}", reasons);
+		}
+		return stateBanner(status === "passed" ? "ok" : status === "failed" ? "bad" : "warn", `${t("releaseReadiness")}: ${t(`soakStatus_${status}`)}`, message, `<button data-view="kiosk-display">${esc(t("openStabilityDetails"))}</button>`);
+	  }
 
       function renderUpdateNotice() {
         const update = state.update || {};
