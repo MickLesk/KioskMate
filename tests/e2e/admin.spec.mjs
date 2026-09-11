@@ -54,3 +54,23 @@ test("MQTT and update workspaces render without hidden fatal errors", async ({ p
   await expect(page.locator('[data-action="update-preflight"]')).toBeVisible();
   await expectNoDocumentOverflow(page);
 });
+
+test("performance workspace exposes the persistent soak report", async ({ page }) => {
+  await signIn(page);
+  await openView(page, "kiosk-display");
+  await expect(page.locator('[data-action="soak-download"]')).toBeVisible();
+  await expect(page.locator(".soak-check")).toHaveCount(1);
+  await expectNoDocumentOverflow(page);
+});
+
+test("save actions only become sticky for unsaved settings", async ({ page }) => {
+  await signIn(page);
+  await openView(page, "kiosk-display");
+  const saveBar = page.locator(".save-bar");
+  await expect(saveBar).not.toHaveClass(/dirty/);
+  await expect(saveBar).toHaveCSS("position", "static");
+  await page.locator("#kiosk-zoom").fill("130");
+  await expect(saveBar).toHaveClass(/dirty/);
+  await expect(saveBar).toHaveCSS("position", "sticky");
+  await expectNoDocumentOverflow(page);
+});

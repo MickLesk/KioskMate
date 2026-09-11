@@ -81,6 +81,7 @@
         updateHistory: { entries: [], rollback_available: false, rollback_target: "" },
         updatePreflight: null,
 		telemetry: null,
+		soakReport: null,
         diagnostics: null,
         repair: null,
         pageFilter: "",

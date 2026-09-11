@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/MickLesk/KioskMate/internal/actions"
 	"github.com/MickLesk/KioskMate/internal/admin"
@@ -59,6 +60,24 @@ func (b *fixtureBrowser) CaptureScreenshot(context.Context) ([]byte, error) {
 		return nil, err
 	}
 	return os.ReadFile(name)
+}
+func (b *fixtureBrowser) Recover(ctx context.Context, _ string) error { return b.Start(ctx) }
+func (b *fixtureBrowser) SetOverride(context.Context, int, time.Duration, string) error {
+	return nil
+}
+func (b *fixtureBrowser) ClearOverride() error { return nil }
+func (b *fixtureBrowser) Telemetry() supervisor.TelemetryHistory {
+	return supervisor.TelemetryHistory{Summary: supervisor.TelemetrySummary{
+		Samples: 12, CPUAverage: 35, RSSAverageMB: 280, ProcessMaximum: 7, MemoryMetric: "pss_or_rss_fallback",
+	}}
+}
+func (b *fixtureBrowser) ResetTelemetry() error { return nil }
+func (b *fixtureBrowser) SoakReport() supervisor.SoakReport {
+	return supervisor.SoakReport{
+		Status: "collecting", RequiredSeconds: 24 * 60 * 60,
+		Summary: supervisor.TelemetrySummary{Samples: 12, MemoryMetric: "pss_or_rss_fallback"},
+		Checks:  []supervisor.SoakCheck{{ID: "duration", OK: false, Current: int64(720), Target: int64(86400)}},
+	}
 }
 
 func main() {

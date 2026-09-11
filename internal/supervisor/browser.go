@@ -43,43 +43,48 @@ type Browser struct {
 	manuallyStopped  bool
 	generation       uint64
 
-	mu               sync.Mutex
-	cmd              *exec.Cmd
-	done             chan struct{}
-	stopping         bool
-	started          time.Time
-	startCount       int
-	restartCount     int
-	active           int
-	lastStat         system.ProcessTreeStats
-	hotSince         time.Time
-	lastError        string
-	lastExit         time.Time
-	lastExitDetails  ExitStatus
-	exitReasonCounts map[string]int
-	stopReason       string
-	watchdog         WatchdogStatus
-	watchdogRuns     []time.Time
-	scheduler        SchedulerStatus
-	rotationIndex    int
-	rotationUntil    time.Time
-	devTools         bool
-	requiresControl  bool
-	readySince       time.Time
-	controlFailures  int
-	controlError     string
-	controlConnected time.Time
-	control          *cdpSession
-	navigation       NavigationStatus
-	duplicateRoots   []int
-	themeStatus      ThemeStatus
-	authGuard        AuthGuardStatus
-	authEvidenceSeen map[string][]time.Time
-	recovery         RecoveryStatus
-	telemetry        []TelemetrySample
-	override         ManualOverride
-	displayPower     string
-	idleBlanked      bool
+	mu                 sync.Mutex
+	cmd                *exec.Cmd
+	done               chan struct{}
+	stopping           bool
+	started            time.Time
+	startCount         int
+	restartCount       int
+	active             int
+	lastStat           system.ProcessTreeStats
+	hotSince           time.Time
+	lastError          string
+	lastExit           time.Time
+	lastExitDetails    ExitStatus
+	exitReasonCounts   map[string]int
+	stopReason         string
+	watchdog           WatchdogStatus
+	watchdogRuns       []time.Time
+	scheduler          SchedulerStatus
+	rotationIndex      int
+	rotationUntil      time.Time
+	devTools           bool
+	requiresControl    bool
+	readySince         time.Time
+	controlFailures    int
+	controlError       string
+	controlConnected   time.Time
+	control            *cdpSession
+	navigation         NavigationStatus
+	duplicateRoots     []int
+	themeStatus        ThemeStatus
+	authGuard          AuthGuardStatus
+	authEvidenceSeen   map[string][]time.Time
+	recovery           RecoveryStatus
+	telemetry          []TelemetrySample
+	telemetryStarted   time.Time
+	telemetryStarts    int
+	telemetryRestarts  int
+	telemetryExits     map[string]int
+	telemetryDuplicate bool
+	override           ManualOverride
+	displayPower       string
+	idleBlanked        bool
 }
 
 type Status struct {
@@ -221,6 +226,12 @@ func NewBrowser(cfg *config.Config, logger *slog.Logger) *Browser {
 	browser := &Browser{cfg: cfg, logger: logger, exitReasonCounts: map[string]int{}, authEvidenceSeen: map[string][]time.Time{}}
 	browser.loadAuthGuard()
 	browser.loadRuntimeState()
+	if browser.telemetryStarted.IsZero() {
+		browser.telemetryStarted = time.Now()
+		browser.telemetryStarts = browser.startCount
+		browser.telemetryRestarts = browser.restartCount
+		browser.telemetryExits = cloneIntMap(browser.exitReasonCounts)
+	}
 	return browser
 }
 
@@ -1016,11 +1027,15 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 			b.mu.Lock()
 			b.lastStat = stats
 			b.duplicateRoots = duplicates
+			duplicateObserved := len(duplicates) > 0 && !b.telemetryDuplicate
+			if duplicateObserved {
+				b.telemetryDuplicate = true
+			}
 			if !b.started.IsZero() && time.Since(b.started) >= stableRuntime && b.recovery.Attempts > 0 {
 				b.recovery.Attempts = 0
 				b.recovery.BackoffUntil = nil
 			}
-			persist := b.recordTelemetryLocked(stats)
+			persist := b.recordTelemetryLocked(stats) || duplicateObserved
 			cfg := b.cfg.Snapshot()
 			if !cfg.Watchdog.Enabled {
 				b.mu.Unlock()

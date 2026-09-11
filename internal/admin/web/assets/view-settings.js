@@ -52,6 +52,7 @@ function renderSettingsAdmin() {
         const watchdog = cfg.watchdog || {};
 		const recommendation = state.status?.profile_recommendation || {};
 		const telemetry = state.telemetry?.summary || state.status?.browser?.telemetry || {};
+		const soak = state.soakReport || {};
         return `
           <div class="page-stack">
             <div class="settings-columns">
@@ -83,6 +84,16 @@ function renderSettingsAdmin() {
 				${renderTelemetryChart(state.telemetry?.samples || [])}
 			  </div>
 			</div>
+			<div class="card">
+			  <div class="head"><div><h3>${esc(t("soakTest"))}</h3><span class="section-kicker">${esc(t("soakTestHint"))}</span></div><span class="chip ${soak.status === "passed" ? "ok" : soak.status === "failed" ? "bad" : "warn"}">${esc(t(`soakStatus_${soak.status || "collecting"}`))}</span></div>
+			  <div class="body telemetry-panel">
+				${statusTile(t("soakElapsed"), formatDuration(Number(soak.duration_seconds || 0)), soak.duration_seconds >= soak.required_seconds ? "ok" : "", `${t("target")}: ${formatDuration(Number(soak.required_seconds || 86400))}`)}
+				${statusTile(t("browserRestarts"), soak.browser_restarts ?? 0, Number(soak.browser_restarts || 0) > 1 ? "warn" : "ok", `${t("browserStarts")}: ${soak.browser_starts ?? 0}`)}
+				${statusTile(t("samples"), soak.summary?.samples || 0, "", `${t("memoryPssHint")}`)}
+				<div class="soak-checks">${renderSoakChecks(soak.checks || [])}</div>
+				<div class="actions"><button data-action="soak-download">${esc(t("downloadSoakReport"))}</button><button data-action="telemetry-reset">${esc(t("startNewSoak"))}</button></div>
+			  </div>
+			</div>
             <div class="card">
               <div class="head"><div><h3>${esc(t("watchdog"))}</h3><span class="section-kicker">${esc(t("browserProtection"))}</span></div>${switchHtml("watchdog-enabled", t("enabled"), watchdog.enabled !== false)}</div>
               <div class="body form-grid four-fields">
@@ -107,6 +118,15 @@ function renderSettingsAdmin() {
             <div class="save-bar"><span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span><div class="actions">${button("save", "browser-settings-save")}${button("saveRestart", "browser-settings-save-restart", "primary")}</div></div>
           </div>`;
       }
+
+	  function renderSoakChecks(checks) {
+		if (!checks.length) return `<div class="empty">${esc(t("telemetryCollecting"))}</div>`;
+		return checks.map((check) => {
+		  const value = typeof check.current === "boolean" ? t(check.current ? "yes" : "no") : String(check.current ?? "-");
+		  const target = typeof check.target === "boolean" ? t(check.target ? "yes" : "no") : String(check.target ?? "-");
+		  return `<div class="soak-check"><span class="state-indicator ${check.ok ? "ok" : "warn"}" aria-hidden="true"></span><div><strong>${esc(t(`soakCheck_${check.id}`))}</strong><small>${esc(t("current"))}: ${esc(value)} · ${esc(t("target"))}: ${esc(target)}</small></div><span class="chip ${check.ok ? "ok" : "warn"}">${esc(t(check.ok ? "passed" : "pending"))}</span></div>`;
+		}).join("");
+	  }
 
       function renderSettingsConfig() {
         const cfg = state.config || {};

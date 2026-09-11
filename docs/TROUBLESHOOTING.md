@@ -50,4 +50,6 @@ Package upgrades preserve `~/.config/kioskmate/config.json`, create a backup and
 HEALTH_URL=http://127.0.0.1:33333/healthz bash scripts/benchmark.sh 900
 ```
 
+For longer validation, use the 24-hour soak panel under **Kiosk -> Display and rendering**. Start a fresh measurement before testing and download `kioskmate-soak-report.json` afterwards. The report retains failure evidence across service restarts; do not reset it after a failure until the report has been saved.
+
 Compare browser PSS rather than summed RSS. CPU is reported across the complete Chromium tree, where 100 percent equals one fully occupied CPU core. The CSV records renderer/GPU roles, navigation timing, heartbeat, duplicate roots and lifecycle counters.

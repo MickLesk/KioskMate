@@ -49,11 +49,36 @@ type TelemetrySummary struct {
 	ProcessMaximum    int        `json:"process_maximum"`
 	BrowserStartCount int        `json:"browser_start_count"`
 	RestartCount      int        `json:"restart_count"`
+	MemoryMetric      string     `json:"memory_metric"`
 }
 
 type TelemetryHistory struct {
 	Summary TelemetrySummary  `json:"summary"`
 	Samples []TelemetrySample `json:"samples"`
+}
+
+type SoakCheck struct {
+	ID      string `json:"id"`
+	OK      bool   `json:"ok"`
+	Current any    `json:"current,omitempty"`
+	Target  any    `json:"target,omitempty"`
+}
+
+type SoakReport struct {
+	GeneratedAt       time.Time        `json:"generated_at"`
+	StartedAt         time.Time        `json:"started_at"`
+	DurationSeconds   int64            `json:"duration_seconds"`
+	RequiredSeconds   int64            `json:"required_seconds"`
+	Status            string           `json:"status"`
+	Passed            bool             `json:"passed"`
+	Starts            int              `json:"browser_starts"`
+	Restarts          int              `json:"browser_restarts"`
+	ExitCounts        map[string]int   `json:"exit_reason_counts"`
+	DuplicateObserved bool             `json:"duplicate_browser_observed"`
+	Summary           TelemetrySummary `json:"summary"`
+	AuthGuard         AuthGuardStatus  `json:"auth_guard"`
+	Recovery          RecoveryStatus   `json:"recovery"`
+	Checks            []SoakCheck      `json:"checks"`
 }
 
 type ManualOverride struct {
@@ -65,15 +90,20 @@ type ManualOverride struct {
 }
 
 type runtimeState struct {
-	RecoveryRuns []time.Time       `json:"recovery_runs,omitempty"`
-	StartCount   int               `json:"start_count"`
-	RestartCount int               `json:"restart_count"`
-	Recovery     RecoveryStatus    `json:"recovery"`
-	Override     ManualOverride    `json:"override"`
-	Telemetry    []TelemetrySample `json:"telemetry"`
-	Operations   []Operation       `json:"operations,omitempty"`
-	LastExit     ExitStatus        `json:"last_exit,omitempty"`
-	ExitCounts   map[string]int    `json:"exit_reason_counts,omitempty"`
+	RecoveryRuns       []time.Time       `json:"recovery_runs,omitempty"`
+	StartCount         int               `json:"start_count"`
+	RestartCount       int               `json:"restart_count"`
+	Recovery           RecoveryStatus    `json:"recovery"`
+	Override           ManualOverride    `json:"override"`
+	Telemetry          []TelemetrySample `json:"telemetry"`
+	Operations         []Operation       `json:"operations,omitempty"`
+	LastExit           ExitStatus        `json:"last_exit,omitempty"`
+	ExitCounts         map[string]int    `json:"exit_reason_counts,omitempty"`
+	TelemetryStarted   time.Time         `json:"telemetry_started_at,omitempty"`
+	TelemetryStarts    int               `json:"telemetry_start_baseline,omitempty"`
+	TelemetryRestarts  int               `json:"telemetry_restart_baseline,omitempty"`
+	TelemetryExits     map[string]int    `json:"telemetry_exit_baseline,omitempty"`
+	TelemetryDuplicate bool              `json:"telemetry_duplicate_observed,omitempty"`
 }
 
 func (b *Browser) Recover(ctx context.Context, reason string) error {
@@ -306,9 +336,70 @@ func (b *Browser) Telemetry() TelemetryHistory {
 func (b *Browser) ResetTelemetry() error {
 	b.mu.Lock()
 	b.telemetry = nil
+	b.telemetryStarted = time.Now()
+	b.telemetryStarts = b.startCount
+	b.telemetryRestarts = b.restartCount
+	b.telemetryExits = cloneIntMap(b.exitReasonCounts)
+	b.telemetryDuplicate = false
 	b.mu.Unlock()
 	b.persistRuntimeState()
 	return nil
+}
+
+func (b *Browser) SoakReport() SoakReport {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.soakReportLocked(time.Now())
+}
+
+func (b *Browser) soakReportLocked(now time.Time) SoakReport {
+	const required = 24 * time.Hour
+	started := b.telemetryStarted
+	if started.IsZero() {
+		started = now
+	}
+	duration := now.Sub(started)
+	if duration < 0 {
+		duration = 0
+	}
+	starts := maxRuntimeInt(0, b.startCount-b.telemetryStarts)
+	restarts := maxRuntimeInt(0, b.restartCount-b.telemetryRestarts)
+	exits := counterDelta(b.exitReasonCounts, b.telemetryExits)
+	duplicate := b.telemetryDuplicate || len(b.duplicateRoots) > 0
+	summary := b.telemetrySummaryLocked()
+	expectedSamples := int(duration / telemetryInterval)
+	if expectedSamples < 1 {
+		expectedSamples = 1
+	}
+	minimumSamples := expectedSamples * 8 / 10
+	if minimumSamples < 1 {
+		minimumSamples = 1
+	}
+	checks := []SoakCheck{
+		{ID: "duration", OK: duration >= required, Current: int64(duration.Seconds()), Target: int64(required.Seconds())},
+		{ID: "samples", OK: len(b.telemetry) >= minimumSamples, Current: len(b.telemetry), Target: minimumSamples},
+		{ID: "duplicates", OK: !duplicate, Current: duplicate, Target: false},
+		{ID: "restarts", OK: restarts <= 1, Current: restarts, Target: 1},
+		{ID: "auth_guard", OK: !b.authGuard.Tripped, Current: b.authGuard.Tripped, Target: false},
+		{ID: "recovery_budget", OK: b.recovery.Stage != "restart_budget", Current: b.recovery.Stage, Target: "available"},
+	}
+	passed := true
+	for _, check := range checks {
+		passed = passed && check.OK
+	}
+	status := "collecting"
+	if duration >= required {
+		if passed {
+			status = "passed"
+		} else {
+			status = "failed"
+		}
+	}
+	return SoakReport{
+		GeneratedAt: now, StartedAt: started, DurationSeconds: int64(duration.Seconds()), RequiredSeconds: int64(required.Seconds()),
+		Status: status, Passed: passed, Starts: starts, Restarts: restarts, ExitCounts: exits,
+		DuplicateObserved: duplicate, Summary: summary, AuthGuard: b.authGuard, Recovery: b.recovery, Checks: checks,
+	}
 }
 
 func (b *Browser) recordTelemetryLocked(stats system.ProcessTreeStats) bool {
@@ -328,7 +419,7 @@ func (b *Browser) recordTelemetryLocked(stats system.ProcessTreeStats) bool {
 }
 
 func (b *Browser) telemetrySummaryLocked() TelemetrySummary {
-	summary := TelemetrySummary{Samples: len(b.telemetry), BrowserStartCount: b.startCount, RestartCount: b.restartCount}
+	summary := TelemetrySummary{Samples: len(b.telemetry), BrowserStartCount: b.startCount, RestartCount: b.restartCount, MemoryMetric: "pss_or_rss_fallback"}
 	if len(b.telemetry) == 0 {
 		return summary
 	}
@@ -370,6 +461,8 @@ func (b *Browser) persistRuntimeState() {
 		Recovery: b.recovery, Override: b.override, Telemetry: append([]TelemetrySample(nil), b.telemetry...),
 		Operations: append([]Operation(nil), b.operationHistory...),
 		LastExit:   b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts),
+		TelemetryStarted: b.telemetryStarted, TelemetryStarts: b.telemetryStarts, TelemetryRestarts: b.telemetryRestarts,
+		TelemetryExits: cloneIntMap(b.telemetryExits), TelemetryDuplicate: b.telemetryDuplicate,
 	}
 	b.mu.Unlock()
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -407,6 +500,8 @@ func (b *Browser) loadRuntimeState() {
 		b.lastExit = *state.LastExit.At
 	}
 	b.recoveryRuns = state.RecoveryRuns
+	b.telemetryStarted, b.telemetryStarts, b.telemetryRestarts = state.TelemetryStarted, state.TelemetryStarts, state.TelemetryRestarts
+	b.telemetryExits, b.telemetryDuplicate = cloneIntMap(state.TelemetryExits), state.TelemetryDuplicate
 	b.operationHistory = state.Operations
 	if len(b.operationHistory) > 50 {
 		b.operationHistory = b.operationHistory[len(b.operationHistory)-50:]
@@ -460,4 +555,21 @@ func minRuntimeInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func maxRuntimeInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func counterDelta(current, baseline map[string]int) map[string]int {
+	delta := map[string]int{}
+	for key, value := range current {
+		if difference := value - baseline[key]; difference > 0 {
+			delta[key] = difference
+		}
+	}
+	return delta
 }

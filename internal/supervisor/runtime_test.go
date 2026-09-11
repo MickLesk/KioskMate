@@ -70,6 +70,54 @@ func TestTelemetryPersistsAndRestoresRuntimeCounters(t *testing.T) {
 	}
 }
 
+func TestSoakReportRequiresStableTwentyFourHourWindow(t *testing.T) {
+	cfg := schedulerTestConfig()
+	browser := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	now := time.Date(2026, time.September, 11, 12, 0, 0, 0, time.UTC)
+	browser.telemetryStarted = now.Add(-24 * time.Hour)
+	browser.telemetryStarts = 4
+	browser.telemetryRestarts = 2
+	browser.startCount = 5
+	browser.restartCount = 2
+	for i := 0; i < 1152; i++ {
+		browser.telemetry = append(browser.telemetry, TelemetrySample{
+			At: now.Add(-time.Duration(1151-i) * time.Minute), CPUPercent: 75, RSSMB: 420, ProcessCount: 7,
+		})
+	}
+
+	report := browser.soakReportLocked(now)
+	if report.Status != "passed" || !report.Passed || report.Starts != 1 || report.Restarts != 0 {
+		t.Fatalf("stable soak report = %#v", report)
+	}
+
+	browser.telemetryDuplicate = true
+	browser.restartCount = 4
+	browser.authGuard.Tripped = true
+	report = browser.soakReportLocked(now)
+	if report.Status != "failed" || report.Passed || !report.DuplicateObserved || report.Restarts != 2 {
+		t.Fatalf("failed soak report = %#v", report)
+	}
+}
+
+func TestResetTelemetryStartsFreshSoakBaselines(t *testing.T) {
+	browser := NewBrowser(schedulerTestConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	browser.startCount = 12
+	browser.restartCount = 5
+	browser.exitReasonCounts = map[string]int{"crash": 3}
+	browser.telemetry = []TelemetrySample{{At: time.Now(), RSSMB: 100}}
+	browser.telemetryDuplicate = true
+
+	if err := browser.ResetTelemetry(); err != nil {
+		t.Fatal(err)
+	}
+	if len(browser.telemetry) != 0 || browser.telemetryStarts != 12 || browser.telemetryRestarts != 5 || browser.telemetryDuplicate {
+		t.Fatalf("reset telemetry state = %#v", browser)
+	}
+	if browser.telemetryExits["crash"] != 3 {
+		t.Fatalf("exit baseline = %#v", browser.telemetryExits)
+	}
+}
+
 func TestSchedulerManualOverrideExpiresBackToWorkflow(t *testing.T) {
 	cfg := schedulerTestConfig()
 	cfg.Kiosk.Scheduler.Enabled = true

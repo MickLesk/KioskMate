@@ -6,6 +6,7 @@
 - Added display-session readiness checks for real Wayland/X11 sockets, duplicate Chromium root cleanup and role-specific browser PSS/CPU telemetry.
 - Added DevTools heartbeat, document readiness, navigation load and first-frame timing with a richer benchmark export.
 - Extended staged recovery visibility and exposed non-sensitive runtime metrics through the local health endpoint.
+- Added a persistent 24-hour Raspberry Pi soak report with sampling coverage, restart, duplicate-browser, Home Assistant guard and recovery-budget gates plus JSON export.
 
 ### Home Assistant and MQTT
 - Hardened Home Assistant auth classification fixtures for transport timeouts, top-level 401/403 responses, invalid grants and unrelated resource failures.

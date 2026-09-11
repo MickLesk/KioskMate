@@ -137,6 +137,8 @@ Durations are currently stored as Go JSON durations in nanoseconds. The watchdog
 
 For dashboards with sustained Chromium CPU/GPU load on Raspberry Pi hardware, use **Kiosk -> Display and rendering -> Performance profile -> Low power** or apply **Safe Mode**. Chromium will still show several processes for a single kiosk window; the low-power profile reduces renderer/raster parallelism and expensive GPU raster features.
 
+Before promoting a build, open **Kiosk -> Display and rendering**, start a new measurement and leave the real dashboard running for 24 hours. The persistent soak report survives service restarts and checks telemetry coverage, browser restarts, duplicate Chromium roots, Home Assistant authentication blocks and recovery-budget exhaustion. Download the JSON report from the same panel for release evidence.
+
 ## MQTT
 
 ```json

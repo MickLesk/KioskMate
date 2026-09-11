@@ -130,6 +130,7 @@ type runtimeBrowser interface {
 	ClearOverride() error
 	Telemetry() supervisor.TelemetryHistory
 	ResetTelemetry() error
+	SoakReport() supervisor.SoakReport
 }
 
 type operationBrowser interface {
@@ -330,6 +331,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/recovery", s.auth(s.browserRecovery))
 	mux.HandleFunc("/api/browser/override", s.auth(s.browserOverride))
 	mux.HandleFunc("/api/browser/telemetry", s.auth(s.browserTelemetry))
+	mux.HandleFunc("/api/browser/soak-report", s.auth(s.browserSoakReport))
 	mux.HandleFunc("/api/browser/operations", s.auth(s.browserOperations))
 	mux.HandleFunc("/api/browser/profile-recommendation", s.auth(s.browserProfileRecommendation))
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
@@ -2152,6 +2154,22 @@ func (s *Server) browserTelemetry(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) browserSoakReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	runtime, ok := s.browser.(runtimeBrowser)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "runtime soak reporting is unavailable"})
+		return
+	}
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", `attachment; filename="kioskmate-soak-report.json"`)
+	}
+	writeJSON(w, http.StatusOK, runtime.SoakReport())
 }
 
 func (s *Server) browserProfileRecommendation(w http.ResponseWriter, r *http.Request) {

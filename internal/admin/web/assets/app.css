@@ -935,6 +935,39 @@ p {
   gap: 10px;
 }
 
+.soak-checks {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.soak-check {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field);
+}
+
+.soak-check div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.soak-check small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.soak-check .state-indicator.ok { background: var(--green); }
+.soak-check .state-indicator.warn { background: var(--amber); }
+
 .telemetry-chart,
 .telemetry-empty {
   grid-column: 1 / -1;
@@ -956,6 +989,11 @@ p {
   .telemetry-chart,
   .telemetry-empty {
     grid-column: 1;
+  }
+
+  .soak-checks {
+    grid-column: 1;
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1259,9 +1297,6 @@ p {
 }
 
 .save-bar {
-  position: sticky;
-  bottom: 12px;
-  z-index: 12;
   display: flex;
   min-height: 58px;
   align-items: center;
@@ -1281,6 +1316,9 @@ p {
 }
 
 .save-bar.dirty {
+  position: sticky;
+  bottom: 12px;
+  z-index: 12;
   border-color: var(--amber);
 }
 

@@ -59,6 +59,7 @@ Theme: **Production-ready kiosk experience**. Existing 0.8 capabilities count on
 - [x] Add a release smoke test for both package architectures.
 - [x] Update README, hardware documentation and troubleshooting for 0.9.
 - [x] Build and verify local `0.9.0-dev` arm64 and amd64 packages.
+- [x] Add a persistent, downloadable 24-hour target-device soak report with explicit stability gates.
 - [ ] Run a Raspberry Pi 4 24-hour soak with no duplicate browser tree, restart storm or HA request storm. *(Target device required.)*
 
 ## Release gates

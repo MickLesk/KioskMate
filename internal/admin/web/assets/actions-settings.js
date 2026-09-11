@@ -8,6 +8,7 @@ function bindSettings() {
         document.querySelector('[data-action="safe-mode"]')?.addEventListener("click", applySafeMode);
 		document.querySelector('[data-action="profile-recommendation-apply"]')?.addEventListener("click", applyProfileRecommendation);
 		document.querySelector('[data-action="telemetry-reset"]')?.addEventListener("click", resetTelemetry);
+		document.querySelector('[data-action="soak-download"]')?.addEventListener("click", () => { window.location.href = "/api/browser/soak-report?download=1"; });
         document.querySelector('[data-action="browser-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
         document.querySelector('[data-action="config-export"]')?.addEventListener("click", () => { window.location.href = "/api/config/export"; });
         document.querySelector('[data-action="config-import"]')?.addEventListener("click", () => document.getElementById("config-import-file").click());
@@ -42,7 +43,11 @@ function bindSettings() {
         }
 		if (state.view === "kiosk-display" && !state.loaded.telemetry) {
 		  state.loaded.telemetry = true;
-		  getJSON("/api/browser/telemetry").then((data) => { state.telemetry = data; if (state.view === "kiosk-display") renderAppIfIdle(); }).catch(() => { state.loaded.telemetry = false; });
+		  Promise.all([getJSON("/api/browser/telemetry"), getJSON("/api/browser/soak-report")]).then(([telemetry, soakReport]) => {
+			state.telemetry = telemetry;
+			state.soakReport = soakReport;
+			if (state.view === "kiosk-display") renderAppIfIdle();
+		  }).catch(() => { state.loaded.telemetry = false; });
 		}
       }
 
@@ -60,6 +65,7 @@ function bindSettings() {
 		await runAction("telemetry-reset", async () => {
 		  await request("/api/browser/telemetry", { method: "DELETE" });
 		  state.telemetry = await getJSON("/api/browser/telemetry");
+		  state.soakReport = await getJSON("/api/browser/soak-report");
 		  await refreshCore();
 		  renderApp();
 		}, t("telemetryReset"));
