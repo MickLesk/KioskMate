@@ -28,12 +28,26 @@ jobs:
           go test -race ./...
           for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
+          bash -n scripts/*.sh
 
       - name: Verify responsive Admin UI
         run: |
           npm install --no-save --no-package-lock @playwright/test@1.63.0
           npx playwright install --with-deps chromium
           npx playwright test --config scripts/playwright.config.mjs
+
+      - name: Verify benchmark evidence
+        run: |
+          go run ./scripts/e2e-server -port 33339 >/tmp/kioskmate-e2e.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:33339/healthz >/dev/null && break
+            sleep 1
+          done
+          HEALTH_URL=http://127.0.0.1:33339/healthz OUT=/tmp/kioskmate-benchmark.csv REPORT=/tmp/kioskmate-benchmark.json INTERVAL=1 bash scripts/benchmark.sh 2
+          test "$(wc -l < /tmp/kioskmate-benchmark.csv)" -gt 1
+          jq -e '.schema_version == 1 and .csv_rows > 0 and .csv_sha256 != "" and .final_health.soak.status == "collecting"' /tmp/kioskmate-benchmark.json
 
       - name: Build deb packages
         run: |

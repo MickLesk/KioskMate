@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.0-alpha1
+
 ### Runtime and performance
 - Added display-session readiness checks for real Wayland/X11 sockets, duplicate Chromium root cleanup and role-specific browser PSS/CPU telemetry.
 - Added DevTools heartbeat, document readiness, navigation load and first-frame timing with a richer benchmark export.
