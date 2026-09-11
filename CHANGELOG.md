@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.0-alpha3
+
 ### Admin live view
 - Added automatic DevTools snapshots for the Dashboard with an immediate first image and selectable off, 5-second live, 15-second, 30-second, one-minute and five-minute refresh modes.
 - Paused background captures outside the Dashboard and while the Admin tab is hidden, avoiding a second browser, iframe restrictions and unnecessary Home Assistant requests.
