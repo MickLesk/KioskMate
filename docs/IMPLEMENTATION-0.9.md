@@ -63,8 +63,8 @@ Theme: **Production-ready kiosk experience**. Existing 0.8 capabilities count on
 
 ## Release gates
 
-- [ ] `gofmt`, `go vet`, `go test`, `go test -race` on Linux. *(All local gates pass; the race detector is verified by Linux CI.)*
+- [x] `gofmt`, `go vet`, `go test`, `go test -race` on Linux.
 - [x] JavaScript syntax, i18n parity and embedded-asset contract checks.
 - [x] Admin E2E and HA/CDP/MQTT integration fixtures.
-- [ ] Debian metadata, install, upgrade and service-file verification. *(Metadata and package contents pass locally; lifecycle verification runs in Linux CI.)*
+- [x] Debian metadata, install, upgrade and service-file verification.
 - [ ] Measured comparison against 0.8.0 on the same Raspberry Pi dashboard.
