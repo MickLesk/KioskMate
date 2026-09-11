@@ -130,6 +130,9 @@ type runtimeBrowser interface {
 	ClearOverride() error
 	Telemetry() supervisor.TelemetryHistory
 	ResetTelemetry() error
+}
+
+type soakReporter interface {
 	SoakReport() supervisor.SoakReport
 }
 
@@ -413,6 +416,20 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 				"attempts":      browser.Recovery.Attempts,
 				"backoff_until": browser.Recovery.BackoffUntil,
 			},
+		}
+		if reporter, ok := s.browser.(soakReporter); ok {
+			report := reporter.SoakReport()
+			response["soak"] = map[string]any{
+				"status":                     report.Status,
+				"passed":                     report.Passed,
+				"started_at":                 report.StartedAt,
+				"duration_seconds":           report.DurationSeconds,
+				"required_seconds":           report.RequiredSeconds,
+				"samples":                    report.Summary.Samples,
+				"browser_starts":             report.Starts,
+				"browser_restarts":           report.Restarts,
+				"duplicate_browser_observed": report.DuplicateObserved,
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -2161,7 +2178,7 @@ func (s *Server) browserSoakReport(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	runtime, ok := s.browser.(runtimeBrowser)
+	runtime, ok := s.browser.(soakReporter)
 	if !ok {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "runtime soak reporting is unavailable"})
 		return

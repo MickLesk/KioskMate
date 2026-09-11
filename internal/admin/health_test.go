@@ -2,10 +2,14 @@ package admin
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"github.com/MickLesk/KioskMate/internal/config"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 )
 
@@ -32,6 +36,28 @@ func TestHealthRemainsOKWhenBrowserIsStopped(t *testing.T) {
 	}
 	if body.Status != "ok" || body.Version != "0.8.0-test" || body.Browser.State != "failed" || body.Browser.Running || body.Browser.Ready {
 		t.Fatalf("unexpected health response: %#v", body)
+	}
+}
+
+func TestHealthIncludesSafeSoakSummary(t *testing.T) {
+	cfg := &config.Config{Path: filepath.Join(t.TempDir(), "config.json")}
+	browser := supervisor.NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(cfg, browser, nil, nil, nil, nil, "0.9.0-test", nil)
+	recorder := httptest.NewRecorder()
+	server.health(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	var body struct {
+		Soak struct {
+			Status          string `json:"status"`
+			RequiredSeconds int64  `json:"required_seconds"`
+			Samples         int    `json:"samples"`
+		} `json:"soak"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Soak.Status != "collecting" || body.Soak.RequiredSeconds != 24*60*60 || body.Soak.Samples != 0 {
+		t.Fatalf("soak summary = %#v", body.Soak)
 	}
 }
 

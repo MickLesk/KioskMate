@@ -50,7 +50,7 @@ For comparable results, use the same dashboard, resolution, Chromium package and
 HEALTH_URL=http://127.0.0.1:33333/healthz bash scripts/benchmark.sh 900
 ```
 
-For a release-candidate test, reset the runtime measurement in **Kiosk -> Display and rendering** and run the production dashboard for 24 hours. KioskMate persists the measurement window and exposes a downloadable soak report; a passing report requires adequate samples, no duplicate browser root, no authentication block and no restart storm.
+The benchmark writes raw samples to CSV and a companion JSON report containing host metadata, the CSV checksum and final browser/soak health. For a release-candidate test, reset the runtime measurement in **Kiosk -> Display and rendering** and run the production dashboard for 24 hours. KioskMate persists the measurement window and exposes a downloadable soak report; a passing report requires adequate samples, no duplicate browser root, no authentication block and no restart storm. Run `kioskmate --soak-report` to collect the same evidence from a local shell.
 
 Chromium intentionally uses separate browser, renderer, GPU and utility processes. Diagnose role-specific CPU/PSS in the Dashboard instead of treating process count or virtual address space as resident memory.
 

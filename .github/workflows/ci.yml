@@ -26,10 +26,23 @@ jobs:
         run: |
           for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
+          bash -n scripts/*.sh
       - name: Build Linux binaries
         run: |
           GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-linux-arm64 ./cmd/kioskmate
           GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-linux-amd64 ./cmd/kioskmate
+      - name: Verify benchmark evidence
+        run: |
+          go run ./scripts/e2e-server -port 33339 >/tmp/kioskmate-e2e.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:33339/healthz >/dev/null && break
+            sleep 1
+          done
+          OUT=/tmp/kioskmate-benchmark.csv REPORT=/tmp/kioskmate-benchmark.json INTERVAL=1 bash scripts/benchmark.sh 2
+          test "$(wc -l < /tmp/kioskmate-benchmark.csv)" -gt 1
+          jq -e '.schema_version == 1 and .csv_rows > 0 and .csv_sha256 != "" and .final_health.soak.status == "collecting"' /tmp/kioskmate-benchmark.json
       - name: Build Debian packages
         run: |
           python3 scripts/package-deb.py --version 0.0.0-ci --arch arm64 --arch amd64

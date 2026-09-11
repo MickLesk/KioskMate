@@ -34,6 +34,7 @@ func main() {
 	printVersion := flag.Bool("version", false, "Print version and exit")
 	adminInfo := flag.Bool("admin-info", false, "Print admin diagnostics and exit")
 	doctor := flag.Bool("doctor", false, "Print system diagnostics and exit")
+	soakReport := flag.Bool("soak-report", false, "Print the persistent Raspberry Pi soak report as JSON and exit")
 	repair := flag.Bool("repair", false, "Repair config and user service defaults")
 	adminReset := flag.Bool("admin-reset", false, "Remove admin password hash and return to setup mode")
 	adminPassword := flag.Bool("admin-password", false, "Set admin password from KIOSKMATE_ADMIN_PASSWORD")
@@ -49,6 +50,16 @@ func main() {
 	if err != nil {
 		consoleLogger.Error("load config", "error", err)
 		os.Exit(1)
+	}
+	if *soakReport {
+		if cfg.LoadWarning != "" {
+			fmt.Fprintln(os.Stderr, "configuration warning:", cfg.LoadWarning)
+		}
+		if err := writeSoakReport(os.Stdout, cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "write soak report:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	logger, logFile := setupLogger(cfg)
 	if cfg.LoadWarning != "" {
@@ -242,6 +253,14 @@ func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cf
 		fmt.Println(string(data))
 	}
 	return nil
+}
+
+func writeSoakReport(w io.Writer, cfg *config.Config) error {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	report := supervisor.NewBrowser(cfg, logger).SoakReport()
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
 }
 
 func fileExists(path string) bool {
