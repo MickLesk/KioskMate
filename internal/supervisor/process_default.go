@@ -18,3 +18,5 @@ func terminateProcessTree(pid int) error {
 	}
 	return exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
 }
+
+func findProfileBrowserRoots(profile string, exclude int) []int { return nil }

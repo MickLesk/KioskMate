@@ -70,6 +70,8 @@ type Browser struct {
 	controlError     string
 	controlConnected time.Time
 	control          *cdpSession
+	navigation       NavigationStatus
+	duplicateRoots   []int
 	themeStatus      ThemeStatus
 	authGuard        AuthGuardStatus
 	authEvidenceSeen map[string][]time.Time
@@ -105,6 +107,9 @@ type Status struct {
 	ExitCounts map[string]int          `json:"exit_reason_counts"`
 	DevTools   bool                    `json:"devtools"`
 	Control    ControlStatus           `json:"control"`
+	Navigation NavigationStatus        `json:"navigation"`
+	Duplicates []int                   `json:"duplicate_browser_roots,omitempty"`
+	Display    DisplaySessionStatus    `json:"display_session"`
 	Theme      ThemeStatus             `json:"theme_status"`
 	AuthGuard  AuthGuardStatus         `json:"auth_guard"`
 	Recovery   RecoveryStatus          `json:"recovery"`
@@ -128,6 +133,28 @@ type ControlStatus struct {
 	Failures      int        `json:"failures"`
 	LastError     string     `json:"last_error,omitempty"`
 	LastConnected *time.Time `json:"last_connected,omitempty"`
+}
+
+type NavigationStatus struct {
+	State              string     `json:"state"`
+	URL                string     `json:"url,omitempty"`
+	Started            *time.Time `json:"started,omitempty"`
+	Loaded             *time.Time `json:"loaded,omitempty"`
+	FirstFrame         *time.Time `json:"first_frame,omitempty"`
+	LoadDurationMS     int64      `json:"load_duration_ms"`
+	FirstFrameMS       int64      `json:"first_frame_ms"`
+	LastHeartbeat      *time.Time `json:"last_heartbeat,omitempty"`
+	HeartbeatLatencyMS int64      `json:"heartbeat_latency_ms"`
+	Responsive         bool       `json:"responsive"`
+	DocumentState      string     `json:"document_state,omitempty"`
+	Error              string     `json:"error,omitempty"`
+}
+
+type DisplaySessionStatus struct {
+	Ready    bool   `json:"ready"`
+	Type     string `json:"type,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type ThemeStatus struct {
@@ -271,6 +298,11 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	if command == "" {
 		return errors.New("no supported browser found")
 	}
+	if supportsCDP(preset) {
+		if _, err = waitForDisplaySession(ctx); err != nil {
+			return err
+		}
+	}
 	launchURL := target
 	profile := browserUserDataDir(cfg, active)
 	if supportsCDP(preset) {
@@ -281,6 +313,13 @@ func (b *Browser) start(ctx context.Context) (err error) {
 			return fmt.Errorf("harden Chromium profile: %w", err)
 		}
 		launchURL = "about:blank"
+		staleRoots := findProfileBrowserRoots(profile, 0)
+		for _, pid := range staleRoots {
+			b.logger.Warn("removing stale Chromium profile owner", "pid", pid, "profile", profile)
+			if err := terminateProcessTree(pid); err != nil {
+				return fmt.Errorf("stop stale Chromium process %d: %w", pid, err)
+			}
+		}
 	}
 	args := browserArgs(cfg, preset, launchURL, cfg.Kiosk.ExtraArgs, active)
 	if err = ctx.Err(); err != nil {
@@ -319,6 +358,8 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	b.controlFailures = 0
 	b.controlError = ""
 	b.controlConnected = time.Time{}
+	b.navigation = NavigationStatus{}
+	b.duplicateRoots = nil
 	b.themeStatus = ThemeStatus{State: "pending", Configured: cfg.Kiosk.Theme}
 	b.recovery.State, b.recovery.Stage = "starting", "attach"
 	b.recovery.LastResult = "browser process started; connecting page control"
@@ -562,7 +603,7 @@ func (b *Browser) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	command, args, err := b.command()
-	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation, Exit: b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts)}
+	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Navigation: b.navigation, Duplicates: append([]int(nil), b.duplicateRoots...), Display: displaySessionStatus(), Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation, Exit: b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts)}
 	status.Control = ControlStatus{Required: b.requiresControl, Connected: b.devTools, Failures: b.controlFailures, LastError: b.controlError}
 	if !b.controlConnected.IsZero() {
 		connected := b.controlConnected
@@ -969,7 +1010,12 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 				return
 			}
 			b.mu.Lock()
+			active := b.active
+			b.mu.Unlock()
+			duplicates := findProfileBrowserRoots(browserUserDataDir(b.cfg.Snapshot(), active), pid)
+			b.mu.Lock()
 			b.lastStat = stats
+			b.duplicateRoots = duplicates
 			if !b.started.IsZero() && time.Since(b.started) >= stableRuntime && b.recovery.Attempts > 0 {
 				b.recovery.Attempts = 0
 				b.recovery.BackoffUntil = nil

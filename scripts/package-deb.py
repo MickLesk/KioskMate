@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import gzip
+import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -72,6 +74,10 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
 
     shutil.copy2(root / "README.md", pkg / "usr/share/doc/kioskmate/README.md")
     shutil.copy2(root / "packaging/systemd/kioskmate.service", pkg / "usr/lib/systemd/user/kioskmate.service")
+    sbom = create_sbom(root, pkg / "usr/bin/kioskmate", version, arch)
+    sbom_text = json.dumps(sbom, indent=2, sort_keys=True) + "\n"
+    write_text(pkg / "usr/share/doc/kioskmate/sbom.spdx.json", sbom_text)
+    write_text(dist / f"kioskmate_{version}_{arch}.spdx.json", sbom_text)
 
     write_text(pkg / "DEBIAN/control", control_file(version, arch))
     write_text(pkg / "DEBIAN/preinst", maintainer_preinst())
@@ -90,6 +96,70 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
     out.write_bytes(deb)
     shutil.rmtree(pkg)
     print(out)
+
+
+def create_sbom(root: Path, binary: Path, version: str, arch: str) -> dict:
+    output = subprocess.run(
+        ["go", "list", "-m", "-json", "all"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    modules = decode_json_stream(output)
+    packages = [
+        {
+            "SPDXID": "SPDXRef-Package-KioskMate",
+            "name": "KioskMate",
+            "versionInfo": version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "NOASSERTION",
+            "checksums": [{"algorithm": "SHA256", "checksumValue": hashlib.sha256(binary.read_bytes()).hexdigest()}],
+            "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl", "referenceLocator": f"pkg:github/MickLesk/KioskMate@{version}"}],
+        }
+    ]
+    relationships = []
+    for index, module in enumerate(modules[1:], start=1):
+        module_path = module.get("Path", "")
+        module_version = module.get("Version", "") or "unknown"
+        spdx_id = f"SPDXRef-GoModule-{index}"
+        packages.append({
+            "SPDXID": spdx_id,
+            "name": module_path,
+            "versionInfo": module_version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "NOASSERTION",
+            "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl", "referenceLocator": f"pkg:golang/{module_path}@{module_version}"}],
+        })
+        relationships.append({"spdxElementId": "SPDXRef-Package-KioskMate", "relationshipType": "DEPENDS_ON", "relatedSpdxElement": spdx_id})
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": f"KioskMate-{version}-{arch}",
+        "documentNamespace": f"https://github.com/MickLesk/KioskMate/releases/download/v{version}/sbom-{arch}",
+        "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: KioskMate package-deb.py"]},
+        "packages": packages,
+        "relationships": relationships,
+    }
+
+
+def decode_json_stream(source: str) -> list[dict]:
+    decoder = json.JSONDecoder()
+    offset = 0
+    values = []
+    while offset < len(source):
+        while offset < len(source) and source[offset].isspace():
+            offset += 1
+        if offset >= len(source):
+            break
+        value, offset = decoder.raw_decode(source, offset)
+        values.append(value)
+    return values
 
 
 def write_text(path: Path, content: str) -> None:

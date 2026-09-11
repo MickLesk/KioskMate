@@ -28,7 +28,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.8.0` includes the authentication safety, lifecycle diagnostics and capability-aware discovery improvements described below.
+KioskMate `0.8.0` is the current stable release. The `dev-kiosk-0.9` branch develops the production-readiness work for `0.9.0`: browser lifecycle timing, Chromium role metrics, display-session readiness, duplicate-root cleanup, workflow conflict diagnostics, MQTT command correlation, trusted proxy handling and responsive Admin E2E coverage.
 
 The Admin UI is organized by task:
 
@@ -88,7 +88,7 @@ For amd64, use the `_amd64.deb` asset.
 
 KioskMate checks for updates when the service starts and every six hours. Available releases appear in the Admin header and Dashboard. Installing a Debian update requires passwordless sudo, a sudo password or the root password. Credentials can optionally remain in process memory for 15 minutes; they are never stored in the config file or on disk.
 
-The updater can run a preflight before installation, validates the downloaded package name, architecture and SHA-256 digest, creates a private configuration backup, records the result in `~/.config/kioskmate/update-history.json` and verifies the expected version after restart. When a previously working package is known, **Settings -> Updates -> Rollback** reinstalls that digest-verified GitHub release with APT's explicit downgrade option.
+The updater can run a preflight before installation, displays the exact privilege scope, validates the downloaded package name, architecture and SHA-256 digest, creates a private configuration backup, records the result in `~/.config/kioskmate/update-history.json` and verifies the expected version after restart. When a previously working package is known, **Settings -> Updates -> Rollback** reinstalls that digest-verified GitHub release with APT's explicit downgrade option.
 
 ## Config
 
@@ -185,6 +185,8 @@ Diagnostic entities also expose the Home Assistant authentication guard, Chromiu
 
 If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
 
+Use **MQTT -> Preview discovery changes** before publishing to see retained topics that will be added, kept, removed or omitted because the host lacks the required hardware capability. Commands accept a JSON envelope such as `{"command":"reload","correlation_id":"ha-42"}` and publish their result to `kioskmate/<node>/command/result`.
+
 ## Home Assistant 403 / White Page Troubleshooting
 
 If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication guard and stops Chromium to prevent a reconnect loop. Remove the kiosk IP from `ip_bans.yaml`, restart Home Assistant, then use **Dashboard -> Reset HA session** exactly once. The reset waits for all Chromium processes, backs up the old session under `~/.config/kioskmate/Browser/SessionBackups`, clears current Chromium authentication and saved login storage, and starts a clean session. KioskMate never stores or automatically resubmits the Home Assistant password; Home Assistant keeps the authenticated session in its browser storage after the successful manual login.
@@ -192,6 +194,8 @@ If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication gu
 If HTTP checks are OK but the display is white, use **Dashboard -> Refresh snapshot** or **Kiosk -> Pages -> Render check**. For the active Chromium display this captures the real signed-in browser session through the local DevTools connection. Snapshots are only captured on demand and cached briefly.
 
 Regular Home Assistant health checks use the unauthenticated `/manifest.json` endpoint and exponential error backoff. They do not submit or reuse Home Assistant credentials.
+
+KioskMate distinguishes a network failure, a protected subresource response, an expired browser session and a corroborated probable IP ban. A lone camera/image `403` is not enough to trip the guard. Once the guard is active, automatic health requests and reconnect attempts pause until an explicit recovery action is selected.
 
 KioskMate **Kiosk theme** `dark` and `light` emulate the corresponding OS `prefers-color-scheme` value on Chromium's active rendering target. This matches TouchKio's Electron `nativeTheme` behavior and preserves the Home Assistant user's selected custom theme. Save the browser settings and restart the display after changing the mode. The Dashboard reports whether Home Assistant actually applied the requested mode. Use `force-dark` only for pages or custom cards that ignore `prefers-color-scheme`; it consumes more CPU/GPU.
 
@@ -205,6 +209,8 @@ The Logs page can show core logs, browser logs, the structured KioskMate event j
 - **Diagnostic bundle** for a ZIP containing redacted config, runtime status and logs.
 
 The event journal is stored at `~/.config/kioskmate/events.jsonl`. It is bounded and rotated automatically. It records browser operations, Home Assistant authentication guards, MQTT connection/command state, admin security actions and maintenance/update jobs without storing passwords or MQTT payloads.
+
+If Chromium never starts, check **Dashboard -> Health and protection -> Display session**. KioskMate waits for a real Wayland socket (`$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`) or X11 socket before launching the browser and retains an actionable reason when neither exists. See [Troubleshooting](docs/TROUBLESHOOTING.md) for commands and state interpretation.
 
 ## Packaging
 
@@ -224,6 +230,7 @@ The package installs:
 - `/usr/bin/kioskmate`
 - `/usr/lib/systemd/user/kioskmate.service`
 - `/usr/share/doc/kioskmate/README.md`
+- `/usr/share/doc/kioskmate/sbom.spdx.json`
 
 Release tags matching `v0*` build and upload:
 
@@ -236,8 +243,8 @@ Release tags matching `v0*` build and upload:
 bash scripts/benchmark.sh 180
 ```
 
-The script writes a CSV with load average, memory usage and the hottest KioskMate/Chromium processes every two seconds.
+The script writes a CSV with load average, host memory, browser process count/PSS/CPU, renderer and GPU role metrics, navigation load/first-frame/heartbeat timing, duplicate roots and start/restart/recovery counters every two seconds. Set `HEALTH_URL=http://127.0.0.1:33333/healthz` to include the runtime API fields.
 
 ## Security
 
-The Admin API requires an authenticated session, bearer token or `X-KioskMate-Token` header for privileged endpoints. Browser sessions use strict same-site cookies and state-changing session requests must have the same origin. Config API responses and exports redact Admin and MQTT secrets. Optional built-in TLS can be configured with `admin.tls_cert` and `admin.tls_key`. Keep the Admin UI inside a trusted LAN and avoid exposing it directly to the internet.
+The Admin API requires an authenticated session, bearer token or `X-KioskMate-Token` header for privileged endpoints. Browser sessions use strict same-site cookies and state-changing session requests must have the same origin. Config API responses and exports redact Admin and MQTT secrets. Optional built-in TLS can be configured with `admin.tls_cert` and `admin.tls_key`. Forwarded client addresses are ignored unless the direct peer is listed in `admin.trusted_proxies`; only configure proxies you control. The built-in terminal is disabled by default and must be explicitly enabled. Keep the Admin UI inside a trusted LAN and avoid exposing it directly to the internet.

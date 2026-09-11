@@ -7,6 +7,7 @@ function renderHardware() {
         const timeInfo = state.time || {};
         const zone = timeInfo.timezone || timeCfg.timezone || "Europe/Berlin";
         const zoneOptions = (state.timezones.length ? state.timezones : ["UTC", "Europe/Berlin"]).map((item) => [item, item]);
+        const capabilityHints = Object.entries(hw.hints || {});
         return `
           <div class="page-stack">
             <section class="status-strip">
@@ -32,11 +33,18 @@ function renderHardware() {
                 <div class="body form-grid">
                   ${field("time-ntp", t("ntpServer"), "text", "", timeCfg.ntp_server || "pool.ntp.org")}
                   ${selectHtml("time-zone", t("timezone"), zone, zoneOptions)}
+                  <div class="span-2">${kvTable([
+                    [t("activeNTPServer"), [timeInfo.server, timeInfo.server_address].filter(Boolean).join(" · ") || "-"],
+                    [t("ntpPollInterval"), timeInfo.poll_interval_seconds ? `${formatValue(timeInfo.poll_interval_seconds)} s` : "-"],
+                    [t("ntpRootDistance"), timeInfo.root_distance_ms ? `${formatValue(timeInfo.root_distance_ms)} ms` : "-"],
+                    [t("lastChecked"), formatDate(timeInfo.checked_at)],
+                  ])}</div>
                   <button data-action="time-save" class="primary span-2">${esc(t("applyTimeSettings"))}</button>
                 </div>
               </div>
               <div class="card"><div class="head"><h3>${esc(t("device"))}</h3></div><div class="body">${kvTable(objectEntries(hw.device))}</div></div>
             </div>
+            ${capabilityHints.length ? `<div class="card"><div class="head"><div><h3>${esc(t("capabilityHints"))}</h3><span class="section-kicker">${esc(t("capabilityHintsHint"))}</span></div><span class="chip">${capabilityHints.length}</span></div><div class="body recovery-list">${capabilityHints.map(([capability, hint]) => `<div class="recovery-step"><strong>${esc(t(capability))}</strong><span class="hint">${esc(t("capabilityHint_" + hint))}</span></div>`).join("")}</div></div>` : ""}
             <details class="card disclosure"><summary>${esc(t("technicalDetails"))}</summary><div class="disclosure-body settings-columns"><div>${kvTable(objectEntries(hw.system))}</div><div>${kvTable(objectEntries(hw.support))}</div></div></details>
           </div>`;
       }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,12 +36,14 @@ type Config struct {
 }
 
 type AdminConfig struct {
-	Bind         string `json:"bind"`
-	Port         int    `json:"port"`
-	Token        string `json:"token"`
-	PasswordHash string `json:"password_hash,omitempty"`
-	TLSCert      string `json:"tls_cert,omitempty"`
-	TLSKey       string `json:"tls_key,omitempty"`
+	Bind            string   `json:"bind"`
+	Port            int      `json:"port"`
+	Token           string   `json:"token"`
+	PasswordHash    string   `json:"password_hash,omitempty"`
+	TLSCert         string   `json:"tls_cert,omitempty"`
+	TLSKey          string   `json:"tls_key,omitempty"`
+	TrustedProxies  []string `json:"trusted_proxies,omitempty"`
+	TerminalEnabled bool     `json:"terminal_enabled"`
 }
 
 func (c AdminConfig) Addr() string {
@@ -421,6 +424,14 @@ func Validate(cfg *Config) error {
 	}
 	if (strings.TrimSpace(cfg.Admin.TLSCert) == "") != (strings.TrimSpace(cfg.Admin.TLSKey) == "") {
 		return errors.New("Admin TLS certificate and key must be configured together")
+	}
+	for _, proxy := range cfg.Admin.TrustedProxies {
+		value := strings.TrimSpace(proxy)
+		if net.ParseIP(value) == nil {
+			if _, _, err := net.ParseCIDR(value); err != nil {
+				return fmt.Errorf("invalid trusted proxy %q", proxy)
+			}
+		}
 	}
 	if cfg.Kiosk.ZoomPercent != 0 && (cfg.Kiosk.ZoomPercent < 25 || cfg.Kiosk.ZoomPercent > 500) {
 		return errors.New("kiosk zoom must be between 25 and 500 percent")

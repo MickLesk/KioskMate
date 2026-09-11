@@ -343,7 +343,18 @@ function bindKiosk() {
             cfg.kiosk.scheduler.enabled = false;
           }
           validateScheduler(cfg.kiosk);
-          await postJSON("/api/config", cfg);
+          const saveResult = await postJSON("/api/config", cfg);
+          const impact = saveResult?.summary || {};
+          const impactLabels = [
+            impact.requires_service_restart ? t("serviceRestartRequired") : "",
+            impact.requires_browser_restart ? t("browserRestartRequired") : "",
+            impact.requires_navigation ? t("navigationApplyRequired") : "",
+            impact.requires_scheduler_apply ? t("schedulerApplyRequired") : "",
+          ].filter(Boolean);
+          if (impactLabels.length) recordAction(t("saveImpact"), impactLabels.join(" · "), "warn");
+          if (Array.isArray(saveResult?.workflow_issues) && saveResult.workflow_issues.length) {
+            recordAction(t("workflowIssues"), saveResult.workflow_issues.map(workflowIssueMessage).join(" · "), "warn");
+          }
           if (restart) await postJSON(state.status?.browser?.running ? "/api/browser/restart" : "/api/browser/start");
           await refreshCore();
           clearDirty("kiosk-pages");

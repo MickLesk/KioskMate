@@ -29,7 +29,7 @@ function renderMQTT() {
                 </div>
               </div>
               <div class="card">
-                <div class="head"><div><h3>${esc(t("homeAssistantDiscovery"))}</h3><span class="section-kicker">${esc(t("pageEntities"))}</span></div><div class="actions">${button("publishDiscovery", "mqtt-discovery", "primary")}${button("resetDiscovery", "mqtt-discovery-reset")}</div></div>
+                <div class="head"><div><h3>${esc(t("homeAssistantDiscovery"))}</h3><span class="section-kicker">${esc(t("pageEntities"))}</span></div><div class="actions">${button("previewDiscovery", "mqtt-discovery-preview")}${button("publishDiscovery", "mqtt-discovery", "primary")}${button("resetDiscovery", "mqtt-discovery-reset")}</div></div>
                 <div class="body form-grid">
                   ${field("mqtt-discovery", t("discoveryPrefix"), "text", "", mqtt.discovery || "homeassistant")}
                   ${field("mqtt-base-topic", t("baseTopic"), "text", "", mqtt.base_topic || "kioskmate")}

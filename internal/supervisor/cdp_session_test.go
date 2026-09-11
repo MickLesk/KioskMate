@@ -109,3 +109,12 @@ func TestCDPOnlyQueuesLoadingFinishedForTokenResponse(t *testing.T) {
 		t.Fatal("completed token request remained registered")
 	}
 }
+
+func TestCDPQueuesNavigationLifecycleEvents(t *testing.T) {
+	session := &cdpSession{bodyIDs: make(map[string]struct{})}
+	for _, method := range []string{"Page.loadEventFired", "Page.lifecycleEvent"} {
+		if !session.interestingEvent(cdpMessage{Method: method}) {
+			t.Fatalf("%s event was discarded", method)
+		}
+	}
+}

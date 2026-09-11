@@ -3,6 +3,7 @@ package admin
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -45,6 +46,59 @@ import (
 //go:embed web/index.html web/assets/*
 var content embed.FS
 
+type embeddedAsset struct {
+	data        []byte
+	gzipData    []byte
+	contentType string
+	etag        string
+}
+
+var embeddedAssets = loadEmbeddedAssets()
+
+func loadEmbeddedAssets() map[string]embeddedAsset {
+	entries, err := content.ReadDir("web/assets")
+	if err != nil {
+		panic(fmt.Sprintf("read embedded Admin assets: %v", err))
+	}
+	assets := make(map[string]embeddedAsset, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		data, err := content.ReadFile("web/assets/" + name)
+		if err != nil {
+			panic(fmt.Sprintf("read embedded Admin asset %s: %v", name, err))
+		}
+		var compressed bytes.Buffer
+		writer, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
+		if err != nil {
+			panic(fmt.Sprintf("initialize Admin asset compression: %v", err))
+		}
+		if _, err := writer.Write(data); err != nil {
+			panic(fmt.Sprintf("compress Admin asset %s: %v", name, err))
+		}
+		if err := writer.Close(); err != nil {
+			panic(fmt.Sprintf("finish Admin asset compression %s: %v", name, err))
+		}
+		contentType := "application/octet-stream"
+		switch filepath.Ext(name) {
+		case ".css":
+			contentType = "text/css; charset=utf-8"
+		case ".js":
+			contentType = "application/javascript; charset=utf-8"
+		}
+		hash := sha256.Sum256(data)
+		assets[name] = embeddedAsset{
+			data:        data,
+			gzipData:    compressed.Bytes(),
+			contentType: contentType,
+			etag:        fmt.Sprintf(`W/"%x"`, hash[:12]),
+		}
+	}
+	return assets
+}
+
 const sessionCookieName = "kioskmate_session"
 
 const (
@@ -86,6 +140,10 @@ type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
 	ConnectionStatus() integration.MQTTConnectionStatus
+}
+
+type mqttDiscoveryPlanner interface {
+	DiscoveryPlan() integration.DiscoveryPlan
 }
 
 type Server struct {
@@ -338,10 +396,21 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if s.browser != nil {
 		browser := s.browser.Status()
 		response["browser"] = map[string]any{
-			"state":      browser.State,
-			"running":    browser.Running,
-			"ready":      browser.Ready,
-			"generation": browser.Generation,
+			"state":         browser.State,
+			"running":       browser.Running,
+			"ready":         browser.Ready,
+			"generation":    browser.Generation,
+			"start_count":   browser.StartCount,
+			"restart_count": browser.Restarts,
+			"process_tree":  browser.Stats,
+			"navigation":    browser.Navigation,
+			"duplicates":    len(browser.Duplicates),
+			"recovery": map[string]any{
+				"state":         browser.Recovery.State,
+				"stage":         browser.Recovery.Stage,
+				"attempts":      browser.Recovery.Attempts,
+				"backoff_until": browser.Recovery.BackoffUntil,
+			},
 		}
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -510,22 +579,24 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	path := "web/assets/" + name
-	data, err := content.ReadFile(path)
-	if err != nil {
+	asset, ok := embeddedAssets[name]
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	switch filepath.Ext(name) {
-	case ".css":
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	case ".js":
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", asset.contentType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("ETag", asset.etag)
+	w.Header().Set("Vary", "Accept-Encoding")
+	if r.Header.Get("If-None-Match") == asset.etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
-	w.Header().Set("Cache-Control", "no-store, max-age=0")
-	w.Header().Set("Pragma", "no-cache")
+	data := asset.data
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		data = asset.gzipData
+	}
 	if r.Method == http.MethodHead {
 		return
 	}
@@ -564,7 +635,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if allowed, retry := s.allowAttempt(r); !allowed {
-		s.audit("setup", "rate_limited", "setup rate limit reached", map[string]string{"remote": remoteIP(r)})
+		s.audit("setup", "rate_limited", "setup rate limit reached", map[string]string{"remote": s.remoteIP(r)})
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
@@ -579,7 +650,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.cfg.Snapshot().Admin.Token)) != 1 {
 		s.recordFailedAttempt(r)
-		s.audit("setup", "failed", "invalid setup token", map[string]string{"remote": remoteIP(r)})
+		s.audit("setup", "failed", "invalid setup token", map[string]string{"remote": s.remoteIP(r)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid setup token"})
 		return
 	}
@@ -611,7 +682,7 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	session := s.createSession(w, r)
-	s.audit("setup", "ok", "admin setup completed", map[string]string{"remote": remoteIP(r)})
+	s.audit("setup", "ok", "admin setup completed", map[string]string{"remote": s.remoteIP(r)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
@@ -627,7 +698,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if allowed, retry := s.allowAttempt(r); !allowed {
-		s.audit("login", "rate_limited", "login rate limit reached", map[string]string{"remote": remoteIP(r)})
+		s.audit("login", "rate_limited", "login rate limit reached", map[string]string{"remote": s.remoteIP(r)})
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many attempts", "code": "rate_limited", "retry_after_seconds": int(retry.Seconds())})
 		return
@@ -648,7 +719,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		s.recordFailedAttempt(r)
-		s.audit("login", "failed", "invalid admin credentials", map[string]string{"remote": remoteIP(r)})
+		s.audit("login", "failed", "invalid admin credentials", map[string]string{"remote": s.remoteIP(r)})
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -662,7 +733,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearAttempts(r)
 	session := s.createSession(w, r)
-	s.audit("login", "ok", "admin session created", map[string]string{"remote": remoteIP(r)})
+	s.audit("login", "ok", "admin session created", map[string]string{"remote": s.remoteIP(r)})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"authenticated": true,
@@ -811,6 +882,7 @@ func statusConfig(cfg *config.Config) map[string]any {
 		"scheduler":                cfg.Kiosk.Scheduler,
 		"rotation":                 cfg.Kiosk.Rotation,
 		"time_rules":               cfg.Kiosk.TimeRules,
+		"workflow_issues":          config.WorkflowIssues(cfg.Kiosk),
 		"browser_cmd":              cfg.Kiosk.BrowserCommand,
 		"mqtt":                     cfg.MQTT.Enabled,
 		"mqtt_password_configured": cfg.MQTT.Password != "",
@@ -1193,6 +1265,10 @@ func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if s.cfg == nil || !s.cfg.Snapshot().Admin.TerminalEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "terminal is disabled; enable it explicitly in Admin settings"})
+		return
+	}
 	var body struct {
 		Command string `json:"command"`
 	}
@@ -1266,6 +1342,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, publicConfig(s.cfg))
 	case http.MethodPost:
+		current := s.cfg.Snapshot()
 		data, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -1281,7 +1358,11 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit("config_save", "ok", "configuration saved", nil)
-		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":         true,
+			"summary":         configChangeSummary(current, next),
+			"workflow_issues": config.WorkflowIssues(next.Kiosk),
+		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1318,7 +1399,7 @@ func (s *Server) configImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("dry_run") == "1" {
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next)})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next), "workflow_issues": config.WorkflowIssues(next.Kiosk)})
 		return
 	}
 	if err := s.cfg.Replace(next); err != nil {
@@ -1396,7 +1477,7 @@ func (s *Server) configRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.DryRun {
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next)})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "dry_run": true, "summary": configChangeSummary(s.cfg.Snapshot(), next), "workflow_issues": config.WorkflowIssues(next.Kiosk)})
 		return
 	}
 	if err := s.cfg.Replace(next); err != nil {
@@ -1418,6 +1499,8 @@ type configPreview struct {
 	UpdateChanged          bool `json:"update_changed"`
 	RequiresBrowserRestart bool `json:"requires_browser_restart"`
 	RequiresServiceRestart bool `json:"requires_service_restart"`
+	RequiresNavigation     bool `json:"requires_navigation"`
+	RequiresSchedulerApply bool `json:"requires_scheduler_apply"`
 }
 
 func configChangeSummary(current, next *config.Config) configPreview {
@@ -1428,8 +1511,16 @@ func configChangeSummary(current, next *config.Config) configPreview {
 		next = &config.Config{}
 	}
 	kioskChanged := !reflect.DeepEqual(current.Kiosk, next.Kiosk)
-	browserSettingsChanged := !reflect.DeepEqual(current.Performance, next.Performance) || !reflect.DeepEqual(current.Watchdog, next.Watchdog)
+	browserRuntimeChanged := current.Kiosk.BrowserPreset != next.Kiosk.BrowserPreset ||
+		current.Kiosk.BrowserCommand != next.Kiosk.BrowserCommand ||
+		!reflect.DeepEqual(current.Kiosk.ExtraArgs, next.Kiosk.ExtraArgs) ||
+		current.Kiosk.UserDataDir != next.Kiosk.UserDataDir ||
+		current.Kiosk.IsolateSessions != next.Kiosk.IsolateSessions ||
+		current.Kiosk.Theme != next.Kiosk.Theme || current.Kiosk.ZoomPercent != next.Kiosk.ZoomPercent
+	browserSettingsChanged := browserRuntimeChanged || !reflect.DeepEqual(current.Performance, next.Performance) || !reflect.DeepEqual(current.Watchdog, next.Watchdog)
 	adminChanged := !reflect.DeepEqual(current.Admin, next.Admin)
+	pagesChanged := !reflect.DeepEqual(current.Kiosk.Pages, next.Kiosk.Pages) || !reflect.DeepEqual(current.Kiosk.URLs, next.Kiosk.URLs)
+	schedulerChanged := !reflect.DeepEqual(current.Kiosk.Scheduler, next.Kiosk.Scheduler) || !reflect.DeepEqual(current.Kiosk.Rotation, next.Kiosk.Rotation) || !reflect.DeepEqual(current.Kiosk.TimeRules, next.Kiosk.TimeRules)
 	return configPreview{
 		PagesBefore:            current.Kiosk.PageCount(),
 		PagesAfter:             next.Kiosk.PageCount(),
@@ -1439,8 +1530,10 @@ func configChangeSummary(current, next *config.Config) configPreview {
 		AdminChanged:           adminChanged,
 		TimeChanged:            !reflect.DeepEqual(current.Time, next.Time),
 		UpdateChanged:          !reflect.DeepEqual(current.Update, next.Update),
-		RequiresBrowserRestart: kioskChanged || browserSettingsChanged,
+		RequiresBrowserRestart: browserSettingsChanged,
 		RequiresServiceRestart: adminChanged,
+		RequiresNavigation:     pagesChanged && !browserSettingsChanged,
+		RequiresSchedulerApply: schedulerChanged,
 	}
 }
 
@@ -2218,12 +2311,21 @@ func (s *Server) applyStoredMQTTPassword(body *mqttTestRequest) {
 }
 
 func (s *Server) mqttDiscovery(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	if s.mqtt == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "mqtt service unavailable"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		planner, ok := s.mqtt.(mqttDiscoveryPlanner)
+		if !ok {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "MQTT discovery preview unavailable"})
+			return
+		}
+		writeJSON(w, http.StatusOK, planner.DiscoveryPlan())
 		return
 	}
 	if err := s.mqtt.PublishNow(); err != nil {
@@ -2818,7 +2920,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) Session {
 		CSRF:      randomID(24),
 		Created:   time.Now(),
 		LastSeen:  time.Now(),
-		Remote:    remoteIP(r),
+		Remote:    s.remoteIP(r),
 		UserAgent: r.UserAgent(),
 	}
 	s.mu.Lock()
@@ -2850,7 +2952,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) Session {
 }
 
 func (s *Server) allowAttempt(r *http.Request) (bool, time.Duration) {
-	key := remoteIP(r)
+	key := s.remoteIP(r)
 	now := time.Now()
 	cutoff := now.Add(-loginAttemptWindow)
 	s.mu.Lock()
@@ -2921,7 +3023,7 @@ func (s *Server) validCSRF(r *http.Request) bool {
 
 func (s *Server) recordFailedAttempt(r *http.Request) {
 	s.mu.Lock()
-	key := remoteIP(r)
+	key := s.remoteIP(r)
 	if _, exists := s.attempts[key]; !exists && len(s.attempts) >= maxAttemptClients {
 		var oldestClient string
 		var oldest time.Time
@@ -2942,7 +3044,7 @@ func (s *Server) recordFailedAttempt(r *http.Request) {
 
 func (s *Server) clearAttempts(r *http.Request) {
 	s.mu.Lock()
-	delete(s.attempts, remoteIP(r))
+	delete(s.attempts, s.remoteIP(r))
 	s.mu.Unlock()
 }
 
@@ -3053,6 +3155,49 @@ func remoteIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+func (s *Server) remoteIP(r *http.Request) string {
+	var trusted []string
+	if s != nil && s.cfg != nil {
+		trusted = s.cfg.Snapshot().Admin.TrustedProxies
+	}
+	return clientIP(r, trusted)
+}
+
+func clientIP(r *http.Request, trusted []string) string {
+	peer := remoteIP(r)
+	if !ipIsTrusted(peer, trusted) {
+		return peer
+	}
+	chain := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for index := len(chain) - 1; index >= 0; index-- {
+		candidate := strings.TrimSpace(chain[index])
+		if net.ParseIP(candidate) == nil {
+			continue
+		}
+		if !ipIsTrusted(candidate, trusted) {
+			return candidate
+		}
+	}
+	return peer
+}
+
+func ipIsTrusted(raw string, trusted []string) bool {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil {
+		return false
+	}
+	for _, entry := range trusted {
+		entry = strings.TrimSpace(entry)
+		if candidate := net.ParseIP(entry); candidate != nil && candidate.Equal(ip) {
+			return true
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func intValue(value any) int {

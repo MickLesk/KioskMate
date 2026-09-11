@@ -29,12 +29,21 @@ jobs:
           for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
 
+      - name: Verify responsive Admin UI
+        run: |
+          npm install --no-save --no-package-lock @playwright/test@1.63.0
+          npx playwright install --with-deps chromium
+          npx playwright test --config scripts/playwright.config.mjs
+
       - name: Build deb packages
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           python3 scripts/package-deb.py --version "$VERSION" --arch arm64 --arch amd64
           bash scripts/verify-deb.sh "dist/kioskmate_${VERSION}_arm64.deb"
           bash scripts/verify-deb.sh "dist/kioskmate_${VERSION}_amd64.deb"
+          python3 scripts/package-deb.py --version 0.0.0-smoke --arch amd64
+          bash scripts/test-deb-lifecycle.sh "dist/kioskmate_0.0.0-smoke_amd64.deb" "dist/kioskmate_${VERSION}_amd64.deb"
+          rm -f dist/kioskmate_0.0.0-smoke_amd64.deb dist/kioskmate_0.0.0-smoke_amd64.spdx.json
           (cd dist && sha256sum *.deb > SHA256SUMS)
 
       - name: Prepare release notes
@@ -58,4 +67,4 @@ jobs:
             --title "KioskMate ${GITHUB_REF_NAME#v}" \
             --notes-file /tmp/release-notes.md \
             $PRERELEASE \
-            dist/*.deb dist/SHA256SUMS
+            dist/*.deb dist/*.spdx.json dist/SHA256SUMS

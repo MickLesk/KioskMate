@@ -24,18 +24,27 @@ func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats
 	}
 	var rssKB uint64
 	var ticks uint64
+	roleRSSKB := map[string]uint64{}
+	roleTicks := map[string]uint64{}
+	roleCounts := map[string]int{}
 	for _, pid := range pids {
 		stat, err := readStat(pid)
 		if err != nil {
 			continue
 		}
 		ticks += stat.ticks
+		role := processRole(pid, root)
+		roleTicks[role] += stat.ticks
+		roleCounts[role]++
 		// Prefer PSS so Chromium shared mappings aren't counted once per process.
 		if pss, ok := readPSSKB(pid); ok {
 			rssKB += pss
+			roleRSSKB[role] += pss
 			continue
 		}
-		rssKB += stat.rssPages * uint64(os.Getpagesize()) / 1024
+		resident := stat.rssPages * uint64(os.Getpagesize()) / 1024
+		rssKB += resident
+		roleRSSKB[role] += resident
 	}
 	now := time.Now()
 	stats := ProcessTreeStats{
@@ -44,14 +53,51 @@ func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats
 		Updated:    now,
 		UpdatedAt:  &now,
 		totalTicks: ticks,
+		roleTicks:  roleTicks,
+		Roles:      map[string]ProcessRoleStats{},
+	}
+	for role, count := range roleCounts {
+		stats.Roles[role] = ProcessRoleStats{Count: count, RSSMB: roleRSSKB[role] / 1024}
 	}
 	if !previous.Updated.IsZero() && ticks >= previous.totalTicks {
 		elapsed := now.Sub(previous.Updated).Seconds()
 		if elapsed > 0 {
 			stats.CPUPercent = float64(ticks-previous.totalTicks) / clockTicks / elapsed * 100
+			for role, currentTicks := range roleTicks {
+				roleStats := stats.Roles[role]
+				if previousTicks := previous.roleTicks[role]; currentTicks >= previousTicks {
+					roleStats.CPUPercent = float64(currentTicks-previousTicks) / clockTicks / elapsed * 100
+				}
+				stats.Roles[role] = roleStats
+			}
 		}
 	}
 	return stats, nil
+}
+
+func processRole(pid, root int) string {
+	if pid == root {
+		return "browser"
+	}
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return "other"
+	}
+	command := strings.ReplaceAll(string(data), "\x00", " ")
+	switch {
+	case strings.Contains(command, "--type=renderer"):
+		return "renderer"
+	case strings.Contains(command, "--type=gpu-process"):
+		return "gpu"
+	case strings.Contains(command, "--type=utility"):
+		return "utility"
+	case strings.Contains(command, "--type=zygote"):
+		return "zygote"
+	case strings.Contains(command, "crashpad_handler"):
+		return "crashpad"
+	default:
+		return "other"
+	}
 }
 
 type procStat struct {

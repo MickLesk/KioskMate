@@ -25,14 +25,16 @@ type Service struct {
 }
 
 type Status struct {
-	Support Support           `json:"support"`
-	Session map[string]string `json:"session"`
-	Device  map[string]any    `json:"device"`
-	Network map[string]any    `json:"network"`
-	System  map[string]any    `json:"system"`
-	Runtime map[string]any    `json:"runtime"`
-	Display map[string]any    `json:"display"`
-	Audio   map[string]any    `json:"audio"`
+	CheckedAt time.Time         `json:"checked_at"`
+	Hints     map[string]string `json:"hints,omitempty"`
+	Support   Support           `json:"support"`
+	Session   map[string]string `json:"session"`
+	Device    map[string]any    `json:"device"`
+	Network   map[string]any    `json:"network"`
+	System    map[string]any    `json:"system"`
+	Runtime   map[string]any    `json:"runtime"`
+	Display   map[string]any    `json:"display"`
+	Audio     map[string]any    `json:"audio"`
 }
 
 type Support struct {
@@ -74,7 +76,9 @@ func collectStatus(ctx context.Context) Status {
 	ensureDisplayEnv()
 	support := detectSupport(ctx)
 	return Status{
-		Support: support,
+		CheckedAt: time.Now(),
+		Hints:     supportHints(support),
+		Support:   support,
 		Session: map[string]string{
 			"user":    userName(),
 			"type":    sessionType(ctx),
@@ -121,6 +125,26 @@ func collectStatus(ctx context.Context) Status {
 			"source":     runText(ctx, "pactl", "get-default-source"),
 		},
 	}
+}
+
+func supportHints(support Support) map[string]string {
+	hints := map[string]string{}
+	if !support.DisplayStatus {
+		hints["display"] = "install_display_tool"
+	}
+	if !support.DisplayBrightness {
+		hints["brightness"] = "configure_brightness"
+	}
+	if !support.AudioVolume {
+		hints["audio"] = "install_audio_control"
+	}
+	if !support.MicrophoneVolume {
+		hints["microphone"] = "configure_microphone"
+	}
+	if !support.KeyboardVisibility {
+		hints["keyboard"] = "install_keyboard"
+	}
+	return hints
 }
 
 func (s *Service) SetDisplay(ctx context.Context, power string) error {

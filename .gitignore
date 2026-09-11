@@ -23,6 +23,8 @@ Thumbs.db
 
 # Legacy frontend package managers are intentionally not used by KioskMate.
 node_modules/
+test-results/
+playwright-report/
 __pycache__/
 package-lock.json
 yarn.lock

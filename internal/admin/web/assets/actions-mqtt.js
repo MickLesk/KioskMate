@@ -8,6 +8,7 @@ function bindMQTT() {
         document.querySelectorAll('[data-action="mqtt-save"]').forEach((button) => button.addEventListener("click", saveMQTT));
         document.querySelectorAll('[data-action="mqtt-test"]').forEach((button) => button.addEventListener("click", testMQTT));
         document.querySelectorAll('[data-action="mqtt-discovery"]').forEach((button) => button.addEventListener("click", publishMQTTDiscovery));
+        document.querySelectorAll('[data-action="mqtt-discovery-preview"]').forEach((button) => button.addEventListener("click", previewMQTTDiscovery));
         document.querySelectorAll('[data-action="mqtt-discovery-reset"]').forEach((button) => button.addEventListener("click", resetMQTTDiscovery));
       }
 
@@ -95,10 +96,10 @@ function bindMQTT() {
               appendMQTTEvent(event);
               if (event.result) result = event.result;
               if (event.step === "result" && event.result) result = event.result;
-            }, controller.signal);
-            if (!result) throw new Error("MQTT test did not return a result");
+            }, controller.signal, { timeout: 35_000 });
+            if (!result) throw new Error(t("mqttTestMissingResult"));
           } catch (err) {
-            const message = err.name === "AbortError" ? "Timeout after 35s" : err.message;
+            const message = err.code === "request_timeout" || err.name === "AbortError" ? t("mqttTestTimeout") : err.message;
             appendMQTTEvent({
               step: "client",
               status: "error",
@@ -131,6 +132,22 @@ function bindMQTT() {
             `${t("pageEntities")}: ${result.page_entities ?? "-"}`,
           ].join("\n");
         }, t("publishDiscovery"));
+      }
+
+      async function previewMQTTDiscovery() {
+        const output = document.getElementById("mqtt-result");
+        await runAction("mqtt-discovery-preview", async () => {
+          const plan = await getJSON("/api/mqtt/discovery");
+          if (output) output.textContent = [
+            `${t("discoveryTotal")}: ${plan.total || 0}`,
+            `${t("discoveryAdd")}: ${(plan.add || []).length}`,
+            ...(plan.add || []).map((topic) => `  + ${topic}`),
+            `${t("discoveryKeep")}: ${(plan.keep || []).length}`,
+            `${t("discoveryRemove")}: ${(plan.remove || []).length}`,
+            ...(plan.remove || []).map((topic) => `  - ${topic}`),
+            `${t("discoveryUnsupported")}: ${(plan.unsupported || []).length}`,
+          ].join("\n");
+        }, t("previewDiscovery"));
       }
 
       async function resetMQTTDiscovery() {

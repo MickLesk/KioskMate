@@ -21,11 +21,21 @@ type PreflightReport struct {
 	TargetVersion  string           `json:"target_version,omitempty"`
 	RequiredBytes  int64            `json:"required_bytes,omitempty"`
 	AvailableBytes int64            `json:"available_bytes,omitempty"`
+	PrivilegeMode  string           `json:"privilege_mode,omitempty"`
+	PrivilegeScope []string         `json:"privilege_scope"`
 	Checks         []PreflightCheck `json:"checks"`
 }
 
 func (s *Service) Preflight(ctx context.Context, mode, password string) PreflightReport {
-	report := PreflightReport{OK: true}
+	requestedMode := strings.TrimSpace(mode)
+	if requestedMode == "" {
+		requestedMode = "sudo"
+	}
+	report := PreflightReport{
+		OK:             true,
+		PrivilegeMode:  requestedMode,
+		PrivilegeScope: []string{"apt-get install local verified package", "package maintainer scripts", "systemctl --user daemon-reload and service restart"},
+	}
 	add := func(id string, ok bool, message string) {
 		report.Checks = append(report.Checks, PreflightCheck{ID: id, OK: ok, Message: message})
 		if !ok {
@@ -69,7 +79,10 @@ func (s *Service) Preflight(ctx context.Context, mode, password string) Prefligh
 		}
 		return fmt.Sprintf("%d MiB available, %d MiB required", available/(1<<20), report.RequiredBytes/(1<<20))
 	}())
-	_, privilegeErr := s.preparePrivilege(ctx, mode, password)
+	privilege, privilegeErr := s.preparePrivilege(ctx, mode, password)
+	if privilege.Mode != "" {
+		report.PrivilegeMode = privilege.Mode
+	}
 	add("privilege", privilegeErr == nil, func() string {
 		if privilegeErr != nil {
 			return privilegeErr.Error()

@@ -71,6 +71,8 @@ function bindSettings() {
           cfg.admin = cfg.admin || {};
           cfg.admin.bind = val("admin-bind");
           cfg.admin.port = Number(val("admin-port") || 33333);
+          cfg.admin.trusted_proxies = val("admin-trusted-proxies").split(",").map((value) => value.trim()).filter(Boolean);
+          cfg.admin.terminal_enabled = checked("admin-terminal-enabled");
           await postJSON("/api/config", cfg);
           await refreshCore();
           clearDirty("settings-admin");

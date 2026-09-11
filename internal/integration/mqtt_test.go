@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -33,6 +34,29 @@ func TestMQTTConnectionStatusTracksSuccessAndAuthFailure(t *testing.T) {
 	service.setConnectionResult(errors.New("mqtt connack failed: not authorized (reason=0x87)"))
 	if got := service.ConnectionStatus().State; got != "auth_error" {
 		t.Fatalf("auth status = %q", got)
+	}
+}
+
+func TestParseCommandEnvelope(t *testing.T) {
+	command, correlationID := parseCommandEnvelope(`{"command":" reload ","correlation_id":"request-42"}`, "fallback")
+	if command != "reload" || correlationID != "request-42" {
+		t.Fatalf("envelope = %q, %q", command, correlationID)
+	}
+	command, correlationID = parseCommandEnvelope(`{"command":"next"}`, "fallback")
+	if command != "next" || correlationID != "fallback" {
+		t.Fatalf("fallback envelope = %q, %q", command, correlationID)
+	}
+	command, correlationID = parseCommandEnvelope("plain-command", "fallback")
+	if command != "plain-command" || correlationID != "fallback" {
+		t.Fatalf("plain command = %q, %q", command, correlationID)
+	}
+}
+
+func TestCommandCorrelationIDIsNonEmptyAndUnique(t *testing.T) {
+	first := commandCorrelationID()
+	second := commandCorrelationID()
+	if first == "" || second == "" || first == second {
+		t.Fatalf("correlation ids = %q, %q", first, second)
 	}
 }
 
@@ -224,6 +248,22 @@ func TestMQTTDiscoveryIncludesDisplayAndBrowserSwitches(t *testing.T) {
 
 	if !hasDiscoveryEntry(items, "switch", "browser") || !hasDiscoveryEntry(items, "switch", "display_power") || !hasDiscoveryEntry(items, "light", "display") || !hasDiscoveryEntry(items, "button", "restart") || !hasDiscoveryEntry(items, "binary_sensor", "auth_guard") || !hasDiscoveryEntry(items, "binary_sensor", "browser_devtools") || !hasDiscoveryEntry(items, "binary_sensor", "browser_ready") || !hasDiscoveryEntry(items, "sensor", "browser_state") || !hasDiscoveryEntry(items, "sensor", "browser_control_failures") {
 		t.Fatalf("discovery entries missing browser/display controls: %#v", items)
+	}
+}
+
+func TestDiscoveryPlanSeparatesActiveAndUnsupportedTopics(t *testing.T) {
+	cfg := mqttTestConfig(t)
+	service := NewMQTTService(cfg, &fakeBrowser{}, nil, nil, nil, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	plan := service.DiscoveryPlan()
+	if plan.Total == 0 || len(plan.Add) == 0 {
+		t.Fatalf("empty discovery plan: %#v", plan)
+	}
+	if len(plan.Unsupported) == 0 {
+		t.Fatalf("capability-dependent topics were not separated: %#v", plan)
+	}
+	want := service.discoveryTopic("sensor", "navigation_state")
+	if !slices.Contains(plan.Add, want) {
+		t.Fatalf("navigation state missing from discovery plan: %#v", plan.Add)
 	}
 }
 

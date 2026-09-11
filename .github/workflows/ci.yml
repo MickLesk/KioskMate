@@ -35,3 +35,24 @@ jobs:
           python3 scripts/package-deb.py --version 0.0.0-ci --arch arm64 --arch amd64
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_arm64.deb
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_amd64.deb
+          cp dist/kioskmate_0.0.0-ci_amd64.deb /tmp/kioskmate-old.deb
+          python3 scripts/package-deb.py --version 0.0.1-ci --arch amd64
+          bash scripts/test-deb-lifecycle.sh /tmp/kioskmate-old.deb dist/kioskmate_0.0.1-ci_amd64.deb
+
+  admin-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install Playwright 1.63.0
+        run: |
+          npm install --no-save --no-package-lock @playwright/test@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Run responsive Admin browser tests
+        run: npx playwright test --config scripts/playwright.config.mjs

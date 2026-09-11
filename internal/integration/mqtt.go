@@ -2,6 +2,8 @@ package integration
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -98,6 +100,14 @@ type discoveryItem struct {
 type discoveryRegistry struct {
 	Version int      `json:"version"`
 	Topics  []string `json:"topics"`
+}
+
+type DiscoveryPlan struct {
+	Add         []string `json:"add"`
+	Keep        []string `json:"keep"`
+	Remove      []string `json:"remove"`
+	Unsupported []string `json:"unsupported"`
+	Total       int      `json:"total"`
 }
 
 type pageEntity struct {
@@ -199,6 +209,53 @@ func (s *MQTTService) PublishNow() error {
 		return errors.New("mqtt url is empty")
 	}
 	return s.publishAll()
+}
+
+func (s *MQTTService) DiscoveryPlan() DiscoveryPlan {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	status := hardware.Status{}
+	if s.hardware != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		status = s.hardware.Status(ctx)
+		cancel()
+	}
+	unsupportedObjects := s.unsupportedDiscoveryObjects(status.Support)
+	active := map[string]bool{}
+	unsupported := map[string]bool{}
+	for _, entry := range s.discoveryResetEntries() {
+		topic := s.discoveryTopic(entry[0], entry[1])
+		if unsupportedObjects[entry[1]] {
+			unsupported[topic] = true
+			continue
+		}
+		active[topic] = true
+	}
+	previous := map[string]bool{}
+	for _, topic := range s.loadDiscoveryRegistryLocked() {
+		previous[topic] = true
+	}
+	plan := DiscoveryPlan{Total: len(active)}
+	for topic := range active {
+		if previous[topic] {
+			plan.Keep = append(plan.Keep, topic)
+		} else {
+			plan.Add = append(plan.Add, topic)
+		}
+	}
+	for topic := range previous {
+		if !active[topic] {
+			plan.Remove = append(plan.Remove, topic)
+		}
+	}
+	for topic := range unsupported {
+		plan.Unsupported = append(plan.Unsupported, topic)
+	}
+	sort.Strings(plan.Add)
+	sort.Strings(plan.Keep)
+	sort.Strings(plan.Remove)
+	sort.Strings(plan.Unsupported)
+	return plan
 }
 
 func (s *MQTTService) ResetDiscovery() (int, error) {
@@ -493,6 +550,10 @@ func (s *MQTTService) commands(ctx context.Context) {
 func (s *MQTTService) handleCommand(ctx context.Context, topic string, command string) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
+	correlationID := commandCorrelationID()
+	if strings.HasPrefix(topic, s.root()+"/") {
+		command, correlationID = parseCommandEnvelope(command, correlationID)
+	}
 	actionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if page, matched, topicIsTrigger := s.triggeredPage(topic, command); matched {
@@ -500,8 +561,8 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		if err != nil {
 			s.logger.Warn("mqtt page trigger failed", "topic", topic, "page", page, "error", err)
 		}
-		s.publishCommandResult(topic, command, err)
-		s.recordCommand(topic, err)
+		s.publishCommandResult(topic, command, correlationID, err)
+		s.recordCommand(topic, correlationID, err)
 		return
 	} else if topicIsTrigger {
 		// Topic matches a configured page trigger, but the payload does not
@@ -742,11 +803,11 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	if err != nil {
 		s.logger.Warn("mqtt command failed", "command", command, "error", err)
 	}
-	s.publishCommandResult(topic, command, err)
-	s.recordCommand(topic, err)
+	s.publishCommandResult(topic, command, correlationID, err)
+	s.recordCommand(topic, correlationID, err)
 }
 
-func (s *MQTTService) recordCommand(topic string, err error) {
+func (s *MQTTService) recordCommand(topic, correlationID string, err error) {
 	s.mu.Lock()
 	journal := s.journal
 	s.mu.Unlock()
@@ -759,7 +820,29 @@ func (s *MQTTService) recordCommand(topic string, err error) {
 		status = "error"
 		message = "MQTT command failed"
 	}
-	journal.Record("mqtt", "command", status, message, map[string]string{"topic": compactTopic(topic)})
+	journal.Record("mqtt", "command", status, message, map[string]string{"topic": compactTopic(topic), "correlation_id": correlationID})
+}
+
+func parseCommandEnvelope(payload, fallbackID string) (string, string) {
+	var envelope struct {
+		Command       string `json:"command"`
+		CorrelationID string `json:"correlation_id"`
+	}
+	if json.Unmarshal([]byte(payload), &envelope) == nil && strings.TrimSpace(envelope.Command) != "" {
+		if strings.TrimSpace(envelope.CorrelationID) == "" {
+			envelope.CorrelationID = fallbackID
+		}
+		return strings.TrimSpace(envelope.Command), strings.TrimSpace(envelope.CorrelationID)
+	}
+	return payload, fallbackID
+}
+
+func commandCorrelationID() string {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err == nil {
+		return hex.EncodeToString(value[:])
+	}
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 func compactTopic(topic string) string {
@@ -852,6 +935,9 @@ func (s *MQTTService) publishAll() error {
 		"rss_mb":        status.Stats.RSSMB,
 		"cpu_percent":   status.Stats.CPUPercent,
 		"pids":          status.Stats.PIDs,
+		"process_roles": status.Stats.Roles,
+		"navigation":    status.Navigation,
+		"duplicates":    status.Duplicates,
 		"start_count":   status.StartCount,
 		"restart_count": status.Restarts,
 		"last_exit":     status.Exit,
@@ -916,6 +1002,19 @@ func (s *MQTTService) publishAll() error {
 	_ = s.publishState(client, "browser_last_exit_code", fmt.Sprintf("%d", status.Exit.ExitCode), false)
 	_ = s.publishState(client, "browser_last_runtime_seconds", fmt.Sprintf("%.1f", float64(status.Exit.RuntimeMS)/1000), false)
 	_ = s.publishState(client, "browser_process_count", fmt.Sprintf("%d", len(status.Stats.PIDs)), false)
+	_ = s.publishState(client, "browser_duplicate_roots", fmt.Sprintf("%d", len(status.Duplicates)), false)
+	_ = s.publishState(client, "navigation_state", firstString(status.Navigation.State, "unknown"), false)
+	_ = s.publishState(client, "navigation_document_state", firstString(status.Navigation.DocumentState, "unknown"), false)
+	_ = s.publishState(client, "navigation_responsive", boolState(status.Navigation.Responsive), false)
+	_ = s.publishState(client, "navigation_load_ms", fmt.Sprintf("%d", status.Navigation.LoadDurationMS), false)
+	_ = s.publishState(client, "navigation_first_frame_ms", fmt.Sprintf("%d", status.Navigation.FirstFrameMS), false)
+	_ = s.publishState(client, "navigation_heartbeat_ms", fmt.Sprintf("%d", status.Navigation.HeartbeatLatencyMS), false)
+	for _, role := range []string{"browser", "renderer", "gpu", "utility", "zygote", "crashpad", "other"} {
+		roleStats := status.Stats.Roles[role]
+		_ = s.publishState(client, "process_"+role+"_count", fmt.Sprintf("%d", roleStats.Count), false)
+		_ = s.publishState(client, "process_"+role+"_rss", fmt.Sprintf("%d", roleStats.RSSMB), false)
+		_ = s.publishState(client, "process_"+role+"_cpu", fmt.Sprintf("%.1f", roleStats.CPUPercent), false)
+	}
 	_ = s.publishState(client, "recovery_state", firstString(status.Recovery.State, "idle"), true)
 	_ = s.publishState(client, "recovery_stage", firstString(status.Recovery.Stage, "none"), true)
 	_ = s.publishState(client, "recovery_reason", firstString(status.Recovery.Reason, "none"), true)
@@ -1346,6 +1445,7 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 		s.diagnosticSensor(device, "watchdog_rss_limit", "Watchdog RSS Limit", "mdi:memory", "MB"),
 		s.diagnosticSensor(device, "watchdog_cpu_limit", "Watchdog CPU Limit", "mdi:cpu-64-bit", "%"),
 		s.sensor(device, "last_command", "Last Command", "mdi:console-line", ""),
+		s.diagnosticSensor(device, "last_command_correlation", "Last Command Correlation", "mdi:identifier", ""),
 		s.sensor(device, "last_command_status", "Last Command Status", "mdi:list-status", ""),
 		s.sensor(device, "last_command_error", "Last Command Error", "mdi:alert", ""),
 		s.diagnosticSensor(device, "last_command_json", "Last Command JSON", "mdi:code-json", ""),
@@ -1898,6 +1998,17 @@ func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryIt
 		s.diagnosticSensor(device, "recovery_attempts", "Browser Recovery Attempts", "mdi:counter", ""),
 		s.diagnosticSensor(device, "recovery_backoff_until", "Browser Recovery Backoff Until", "mdi:timer-lock", ""),
 		s.diagnosticSensor(device, "browser_process_count", "Browser Process Count", "mdi:family-tree", ""),
+		s.diagnosticSensor(device, "browser_duplicate_roots", "Duplicate Browser Roots", "mdi:content-duplicate", ""),
+		s.diagnosticSensor(device, "navigation_state", "Navigation State", "mdi:web-clock", ""),
+		s.diagnosticSensor(device, "navigation_document_state", "Document State", "mdi:file-document-refresh", ""),
+		{Topic: s.discoveryTopic("binary_sensor", "navigation_responsive"), Data: map[string]any{
+			"name": "Browser Responsive", "unique_id": s.cfg.Snapshot().MQTT.Node + "_navigation_responsive",
+			"state_topic": s.root() + "/navigation_responsive/state", "payload_on": "ON", "payload_off": "OFF",
+			"device_class": "connectivity", "entity_category": "diagnostic", "device": device,
+		}},
+		s.diagnosticSensor(device, "navigation_load_ms", "Page Load Time", "mdi:timer-outline", "ms"),
+		s.diagnosticSensor(device, "navigation_first_frame_ms", "First Frame Time", "mdi:monitor-eye", "ms"),
+		s.diagnosticSensor(device, "navigation_heartbeat_ms", "Browser Heartbeat Latency", "mdi:heart-pulse", "ms"),
 		s.diagnosticSensor(device, "telemetry_samples", "Telemetry Samples", "mdi:chart-dots-scatter", ""),
 		s.diagnosticSensor(device, "telemetry_cpu_average", "Browser CPU 24h Average", "mdi:cpu-64-bit", "%"),
 		s.diagnosticSensor(device, "telemetry_cpu_maximum", "Browser CPU 24h Maximum", "mdi:cpu-64-bit", "%"),
@@ -1909,6 +2020,14 @@ func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryIt
 		s.diagnosticSensor(device, "auth_guard_first_seen", "HA Authentication First Seen", "mdi:clock-start", ""),
 		s.diagnosticSensor(device, "auth_guard_last_seen", "HA Authentication Last Seen", "mdi:clock-alert", ""),
 		s.diagnosticSensor(device, "auth_guard_kiosk_ip", "Kiosk IP For HA", "mdi:ip-network", ""),
+	}
+	for _, role := range []string{"browser", "renderer", "gpu", "utility"} {
+		label := strings.ToUpper(role[:1]) + role[1:]
+		items = append(items,
+			s.diagnosticSensor(device, "process_"+role+"_count", label+" Process Count", "mdi:counter", ""),
+			s.diagnosticSensor(device, "process_"+role+"_rss", label+" Memory", "mdi:memory", "MB"),
+			s.diagnosticSensor(device, "process_"+role+"_cpu", label+" CPU", "mdi:cpu-64-bit", "%"),
+		)
 	}
 	return items
 }
@@ -2057,6 +2176,7 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "watchdog_rss_limit"},
 		[2]string{"sensor", "watchdog_cpu_limit"},
 		[2]string{"sensor", "last_command"},
+		[2]string{"sensor", "last_command_correlation"},
 		[2]string{"sensor", "last_command_status"},
 		[2]string{"sensor", "last_command_error"},
 		[2]string{"sensor", "last_command_json"},
@@ -2074,6 +2194,13 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "recovery_attempts"},
 		[2]string{"sensor", "recovery_backoff_until"},
 		[2]string{"sensor", "browser_process_count"},
+		[2]string{"sensor", "browser_duplicate_roots"},
+		[2]string{"sensor", "navigation_state"},
+		[2]string{"sensor", "navigation_document_state"},
+		[2]string{"binary_sensor", "navigation_responsive"},
+		[2]string{"sensor", "navigation_load_ms"},
+		[2]string{"sensor", "navigation_first_frame_ms"},
+		[2]string{"sensor", "navigation_heartbeat_ms"},
 		[2]string{"sensor", "telemetry_samples"},
 		[2]string{"sensor", "telemetry_cpu_average"},
 		[2]string{"sensor", "telemetry_cpu_maximum"},
@@ -2086,6 +2213,13 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"sensor", "auth_guard_last_seen"},
 		[2]string{"sensor", "auth_guard_kiosk_ip"},
 	)
+	for _, role := range []string{"browser", "renderer", "gpu", "utility", "zygote", "crashpad", "other"} {
+		entries = append(entries,
+			[2]string{"sensor", "process_" + role + "_count"},
+			[2]string{"sensor", "process_" + role + "_rss"},
+			[2]string{"sensor", "process_" + role + "_cpu"},
+		)
+	}
 	for _, page := range s.pageEntities() {
 		object := "page_" + page.ID
 		entries = append(entries,
@@ -2207,7 +2341,7 @@ func trimFloat(value float64) string {
 	return text
 }
 
-func (s *MQTTService) publishCommandResult(topic string, command string, err error) {
+func (s *MQTTService) publishCommandResult(topic string, command string, correlationID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	client := s.mqtt()
@@ -2218,14 +2352,17 @@ func (s *MQTTService) publishCommandResult(topic string, command string, err err
 		errText = err.Error()
 	}
 	result := map[string]any{
-		"topic":   topic,
-		"command": command,
-		"status":  status,
-		"error":   errText,
-		"time":    time.Now().UTC().Format(time.RFC3339),
+		"correlation_id": correlationID,
+		"topic":          topic,
+		"command":        command,
+		"status":         status,
+		"error":          errText,
+		"time":           time.Now().UTC().Format(time.RFC3339),
 	}
 	payload, _ := json.Marshal(result)
 	_ = client.Publish(s.root()+"/last_command_json/state", payload, false)
+	_ = client.Publish(s.root()+"/command/result", payload, false)
+	_ = s.publishState(client, "last_command_correlation", correlationID, false)
 	_ = s.publishState(client, "last_command_status", status, false)
 	_ = s.publishState(client, "last_command_error", firstString(errText, "none"), false)
 	_ = s.publishState(client, "last_command", strings.TrimSpace(command), false)

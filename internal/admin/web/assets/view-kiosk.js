@@ -8,8 +8,10 @@ function renderKiosk() {
         const selected = selectedKioskPageIndex(pages);
         const current = pages[selected] || {};
 		const override = browser.override || {};
+        const workflowIssues = state.status?.config?.workflow_issues || [];
         return `
           <div class="page-stack kiosk-workspace">
+            ${workflowIssues.map((issue) => stateBanner(issue.severity === "error" ? "bad" : "warn", t("workflowIssue"), workflowIssueMessage(issue))).join("")}
             <section class="kiosk-commandbar">
               <div class="section-summary">
                 <strong>${esc(t("kioskSequence"))}</strong>
@@ -79,6 +81,13 @@ function renderKiosk() {
               <div class="actions">${button("save", "kiosk-save")}${button("saveStartKiosk", "kiosk-save-restart", "primary")}</div>
             </div>
           </div>`;
+      }
+
+      function workflowIssueMessage(issue) {
+        const key = `workflowIssue_${issue?.code || "unknown"}`;
+        const translated = t(key);
+        const message = translated === key ? (issue?.message || issue?.code || t("unknownError")) : translated;
+        return Array.isArray(issue?.pages) && issue.pages.length ? `${message} (${issue.pages.join(", ")})` : message;
       }
 
       function selectedKioskPageIndex(pages) {

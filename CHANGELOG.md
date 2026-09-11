@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Runtime and performance
+- Added display-session readiness checks for real Wayland/X11 sockets, duplicate Chromium root cleanup and role-specific browser PSS/CPU telemetry.
+- Added DevTools heartbeat, document readiness, navigation load and first-frame timing with a richer benchmark export.
+- Extended staged recovery visibility and exposed non-sensitive runtime metrics through the local health endpoint.
+
+### Home Assistant and MQTT
+- Hardened Home Assistant auth classification fixtures for transport timeouts, top-level 401/403 responses, invalid grants and unrelated resource failures.
+- Added MQTT discovery dry-run reporting, command correlation IDs and Home Assistant diagnostics for browser roles and navigation health.
+- Added real MQTT 3.1.1/5.0 broker-dialogue, retained cleanup and certificate-verifying TLS fixtures.
+
+### Admin, security and packaging
+- Added a persistent global action center, structured/cancellable request handling and localized workflow conflict feedback.
+- Added trusted-proxy-aware client addressing, explicit terminal enablement and exact update privilege-scope reporting.
+- Added immutable ETag/gzip embedded assets, separated design tokens and responsive Playwright coverage for desktop and mobile.
+- Added SPDX SBOM artifacts and Debian install/upgrade/removal lifecycle checks while preserving existing user configuration.
+
 ## v0.8.0
 
 ### Runtime reliability and diagnostics

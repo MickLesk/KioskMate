@@ -184,7 +184,17 @@ function renderPages(pages) {
         return `<div class="preflight ${report.ok ? "ok" : "bad"}">
           <strong>${esc(report.ok ? t("updatePreflightPassed") : t("updatePreflightFailed"))}</strong>
           <div>${(report.checks || []).map((check) => `<span class="${check.ok ? "ok" : "bad"}"><b>${check.ok ? "✓" : "×"}</b>${esc(t("preflight_" + check.id))}: ${esc(formatPreflightCheck(check, report))}</span>`).join("")}</div>
+          <details><summary>${esc(t("privilegeScope"))} · ${esc(report.privilege_mode || "-")}</summary><ul>${(report.privilege_scope || []).map((scope) => `<li>${esc(formatPrivilegeScope(scope))}</li>`).join("")}</ul></details>
         </div>`;
+      }
+
+      function formatPrivilegeScope(scope) {
+        const key = {
+          "apt-get install local verified package": "privilegeScopePackage",
+          "package maintainer scripts": "privilegeScopeScripts",
+          "systemctl --user daemon-reload and service restart": "privilegeScopeService",
+        }[scope];
+        return key ? t(key) : scope;
       }
 
       function formatPreflightCheck(check, report) {

@@ -50,3 +50,19 @@ func TestForwardedHTTPSIsTrustedOnlyFromLoopback(t *testing.T) {
 		t.Fatal("loopback reverse proxy should be allowed to report HTTPS")
 	}
 }
+
+func TestClientIPUsesForwardedChainOnlyFromTrustedProxy(t *testing.T) {
+	untrusted := httptest.NewRequest(http.MethodGet, "http://kiosk.local", nil)
+	untrusted.RemoteAddr = "192.0.2.10:1234"
+	untrusted.Header.Set("X-Forwarded-For", "198.51.100.7")
+	if got := clientIP(untrusted, []string{"127.0.0.1"}); got != "192.0.2.10" {
+		t.Fatalf("untrusted forwarded client = %q", got)
+	}
+
+	trusted := httptest.NewRequest(http.MethodGet, "http://kiosk.local", nil)
+	trusted.RemoteAddr = "127.0.0.1:1234"
+	trusted.Header.Set("X-Forwarded-For", "198.51.100.7, 10.0.0.4")
+	if got := clientIP(trusted, []string{"127.0.0.1", "10.0.0.0/8"}); got != "198.51.100.7" {
+		t.Fatalf("trusted forwarded client = %q", got)
+	}
+}

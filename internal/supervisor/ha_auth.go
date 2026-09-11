@@ -217,3 +217,10 @@ func parseAuthFailure(payload string) bool {
 	}
 	return json.Unmarshal([]byte(payload), &frame) == nil && frame.Type == "auth_invalid"
 }
+
+func homeAssistantInvalidGrant(payload string) bool {
+	var failure struct {
+		Error string `json:"error"`
+	}
+	return json.Unmarshal([]byte(payload), &failure) == nil && failure.Error == "invalid_grant"
+}

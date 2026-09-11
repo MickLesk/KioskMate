@@ -40,7 +40,7 @@ func TestConfigImportDryRunDoesNotReplaceActiveConfig(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.DryRun || !result.Summary.KioskChanged || !result.Summary.RequiresBrowserRestart {
+	if !result.DryRun || !result.Summary.KioskChanged || !result.Summary.RequiresNavigation || result.Summary.RequiresBrowserRestart {
 		t.Fatalf("unexpected preview: %#v", result)
 	}
 	if cfg.Snapshot().Kiosk.PageCount() != before.Kiosk.PageCount() {

@@ -12,5 +12,5 @@ func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats
 		return ProcessTreeStats{}, errors.New("invalid pid")
 	}
 	now := time.Now()
-	return ProcessTreeStats{PIDs: []int{root}, Updated: now, UpdatedAt: &now}, nil
+	return ProcessTreeStats{PIDs: []int{root}, Roles: map[string]ProcessRoleStats{"browser": {Count: 1}}, Updated: now, UpdatedAt: &now}, nil
 }

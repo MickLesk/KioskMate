@@ -112,6 +112,7 @@ func (b *Browser) reloadDevTools(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	b.beginNavigation(b.activeURL())
 	return session.command(ctx, "Page.reload", map[string]any{"ignoreCache": false}, nil)
 }
 
@@ -120,6 +121,7 @@ func (b *Browser) navigateDevTools(ctx context.Context, target string) error {
 	if err != nil {
 		return err
 	}
+	b.beginNavigation(target)
 	var result struct {
 		ErrorText string `json:"errorText"`
 	}
@@ -212,6 +214,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 	if err := session.command(ctx, "Page.enable", map[string]any{}, nil); err != nil {
 		return err
 	}
+	if err := session.command(ctx, "Page.setLifecycleEventsEnabled", map[string]any{"enabled": true}, nil); err != nil {
+		return err
+	}
 	if err := session.command(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
 		return err
 	}
@@ -236,6 +241,7 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 		if err := b.authenticationAllowed(); err != nil {
 			return err
 		}
+		b.beginNavigation(target)
 		var result struct {
 			Error string `json:"errorText"`
 		}
@@ -246,19 +252,16 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			return fmt.Errorf("navigate to kiosk page: %s", result.Error)
 		}
 		*navigated = true
-		b.mu.Lock()
-		if b.done == done && !b.authGuard.Tripped {
-			b.readySince = time.Now()
-			b.recovery.State, b.recovery.Stage = "healthy", "running"
-			b.recovery.LastResult = "page control connected"
-			b.lastError = ""
-		}
-		b.mu.Unlock()
 	}
 	sockets := map[string]string{}
 	tokenFailures := map[string]authEvidence{}
-	heartbeat := time.NewTicker(30 * time.Second)
+	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
+	latency, documentState, err := devToolsHeartbeat(ctx, session)
+	b.recordHeartbeat(session, latency, documentState, err)
+	if err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -266,10 +269,25 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 		case <-session.done:
 			return errors.New("Chromium control disconnected")
 		case <-heartbeat.C:
-			if err := session.command(ctx, "Page.getFrameTree", map[string]any{}, nil); err != nil {
+			latency, documentState, err := devToolsHeartbeat(ctx, session)
+			b.recordHeartbeat(session, latency, documentState, err)
+			if err != nil {
 				return err
 			}
 		case event := <-session.events:
+			if event.Method == "Page.loadEventFired" {
+				b.completeNavigation(false)
+				continue
+			}
+			if event.Method == "Page.lifecycleEvent" {
+				var lifecycle struct {
+					Name string `json:"name"`
+				}
+				if json.Unmarshal(event.Params, &lifecycle) == nil && (lifecycle.Name == "firstContentfulPaint" || lifecycle.Name == "firstMeaningfulPaint") {
+					b.completeNavigation(true)
+				}
+				continue
+			}
 			if event.Method == "Runtime.consoleAPICalled" {
 				if report, ok := parseThemeConsoleEvent(event.Params); ok {
 					b.setThemeReport(theme, report)
@@ -335,10 +353,7 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 						}
 						body.Body = string(bytes)
 					}
-					var failure struct {
-						Error string `json:"error"`
-					}
-					if json.Unmarshal([]byte(body.Body), &failure) == nil && failure.Error == "invalid_grant" {
+					if homeAssistantInvalidGrant(body.Body) {
 						evidence.Kind, evidence.Confidence, evidence.Reason, evidence.Action = "invalid_grant", "confirmed", "Home Assistant refresh grant is no longer valid", "sign_in"
 						if b.blockAuthentication(evidence) {
 							return context.Canceled
@@ -348,6 +363,74 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			}
 		}
 	}
+}
+
+func devToolsHeartbeat(ctx context.Context, session cdpCommander) (time.Duration, string, error) {
+	started := time.Now()
+	var result struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	err := session.command(ctx, "Runtime.evaluate", map[string]any{
+		"expression":    "document.readyState + '|' + location.href",
+		"returnByValue": true,
+	}, &result)
+	return time.Since(started), strings.SplitN(result.Result.Value, "|", 2)[0], err
+}
+
+func (b *Browser) beginNavigation(target string) {
+	now := time.Now()
+	b.mu.Lock()
+	b.navigation = NavigationStatus{State: "loading", URL: diagnosticURL(target), Started: &now, Responsive: b.devTools}
+	b.readySince = time.Time{}
+	b.recovery.State, b.recovery.Stage = "starting", "navigation"
+	b.recovery.LastResult = "navigation requested"
+	b.mu.Unlock()
+}
+
+func (b *Browser) completeNavigation(firstFrame bool) {
+	now := time.Now()
+	b.mu.Lock()
+	if b.navigation.Started == nil {
+		b.navigation.Started = &now
+	}
+	if b.navigation.Loaded == nil {
+		b.navigation.Loaded = &now
+		b.navigation.LoadDurationMS = now.Sub(*b.navigation.Started).Milliseconds()
+	}
+	if firstFrame && b.navigation.FirstFrame == nil {
+		b.navigation.FirstFrame = &now
+		b.navigation.FirstFrameMS = now.Sub(*b.navigation.Started).Milliseconds()
+	}
+	b.navigation.State = "ready"
+	b.navigation.Error = ""
+	b.readySince = now
+	b.recovery.State, b.recovery.Stage = "healthy", "running"
+	b.recovery.LastResult = "page loaded and browser control responsive"
+	b.lastError = ""
+	b.mu.Unlock()
+}
+
+func (b *Browser) recordHeartbeat(session *cdpSession, latency time.Duration, documentState string, err error) {
+	now := time.Now()
+	b.mu.Lock()
+	if b.control != session {
+		b.mu.Unlock()
+		return
+	}
+	b.navigation.LastHeartbeat = &now
+	b.navigation.HeartbeatLatencyMS = latency.Milliseconds()
+	b.navigation.DocumentState = strings.TrimSpace(documentState)
+	b.navigation.Responsive = err == nil
+	if err != nil {
+		b.navigation.State = "unresponsive"
+		b.navigation.Error = err.Error()
+	} else if b.navigation.Loaded == nil && b.navigation.Started != nil && time.Since(*b.navigation.Started) > 45*time.Second {
+		b.navigation.State = "stalled"
+		b.navigation.Error = "page did not finish loading within 45 seconds"
+	}
+	b.mu.Unlock()
 }
 
 func homeAssistantAuthFailureFrame(payload string) bool {

@@ -83,6 +83,8 @@ func (s *cdpSession) read(ctx context.Context) {
 
 func (s *cdpSession) interestingEvent(event cdpMessage) bool {
 	switch event.Method {
+	case "Page.loadEventFired", "Page.lifecycleEvent":
+		return true
 	case "Network.webSocketCreated":
 		return true
 	case "Network.loadingFinished":

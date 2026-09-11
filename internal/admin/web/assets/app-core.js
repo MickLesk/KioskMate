@@ -22,6 +22,7 @@
             { id: "system-device", label: "deviceAndTime", hint: "hardwareStatus" },
             { id: "system-maintenance", label: "systemMaintenance", hint: "privilegedActions" },
             { id: "system-logs", label: "logs", hint: "refreshLogs" },
+            { id: "system-terminal", label: "terminal", hint: "terminalHint", requiresTerminal: true },
           ],
         },
         {
@@ -86,7 +87,7 @@
         kioskEditorMode: localStorage.getItem("kioskmate.kioskEditorMode") === "flow" ? "flow" : "storybook",
         kioskSelectedPageIndex: null,
         pageWizard: null,
-        actionLog: [],
+        actionLog: storedList("kioskmate.actionLog", []),
         operations: [],
         events: [],
         logs: [],
@@ -99,6 +100,7 @@
         updateJobs: [],
         loaded: {},
         busy: new Set(),
+        actionControllers: new Map(),
         dirtyViews: new Set(),
         snapshotURL: "",
         snapshotTime: "",
@@ -176,8 +178,10 @@
       }
 
       let modalKeyHandler = null;
+      let modalPreviousFocus = null;
 
       function openModal(html) {
+        modalPreviousFocus = document.activeElement;
         modalRoot.innerHTML = `<div class="modal-backdrop" data-modal-backdrop>${html}</div>`;
         modalRoot.querySelectorAll("[data-modal-close]").forEach((button) => button.addEventListener("click", closeModal));
         modalRoot.querySelector("[data-modal-backdrop]")?.addEventListener("click", (event) => {
@@ -185,6 +189,22 @@
         });
         modalKeyHandler = (event) => {
           if (event.key === "Escape") closeModal();
+          if (event.key !== "Tab") return;
+          const focusable = [...modalRoot.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+            .filter((element) => !element.hidden && element.offsetParent !== null);
+          if (!focusable.length) {
+            event.preventDefault();
+            return;
+          }
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
         };
         document.addEventListener("keydown", modalKeyHandler);
         requestAnimationFrame(() => modalRoot.querySelector("[data-modal-close], button, input, select, textarea")?.focus());
@@ -194,6 +214,8 @@
         if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
         modalKeyHandler = null;
         modalRoot.innerHTML = "";
+        if (modalPreviousFocus instanceof HTMLElement && document.contains(modalPreviousFocus)) modalPreviousFocus.focus();
+        modalPreviousFocus = null;
       }
 
       function openMQTTTestDialog() {
@@ -236,8 +258,8 @@
         if (summary) summary.textContent = event.message || "";
       }
 
-      async function streamJSONLines(path, body, onEvent, signal) {
-		return window.KioskMateAPI.streamJSONLines(path, body, { onEvent, signal, csrf: state.auth?.csrf });
+      async function streamJSONLines(path, body, onEvent, signal, options = {}) {
+		return window.KioskMateAPI.streamJSONLines(path, body, { ...options, onEvent, signal, csrf: state.auth?.csrf });
       }
 
       function formatValue(value, suffix = "") {
@@ -315,29 +337,44 @@
 		try {
 		  return await window.KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
 		} catch (error) {
-		  if (error?.name === "AbortError") throw new Error(t("requestTimeout"));
+		  if (error?.code === "request_timeout") error.message = t("requestTimeout");
+		  if (error?.code === "request_cancelled") error.message = t("requestCancelled");
 		  throw error;
 		}
       }
 
       const getJSON = (path, options = {}) => request(path, options);
-      const postJSON = (path, body = {}) => request(path, { method: "POST", body: JSON.stringify(body) });
-      const deleteJSON = (path) => request(path, { method: "DELETE" });
+      const postJSON = (path, body = {}, options = {}) => request(path, { ...options, method: "POST", body: JSON.stringify(body) });
+      const deleteJSON = (path, options = {}) => request(path, { ...options, method: "DELETE" });
 
       async function runAction(name, fn, success = t("actionDone")) {
+		state.actionControllers.get(name)?.abort();
+		const controller = new AbortController();
+		state.actionControllers.set(name, controller);
         setBusy(name, true);
         recordAction(t("actionStarted"), name, "warn");
         try {
-          const result = await fn();
+		  const scopedAPI = {
+			get: (path, options = {}) => getJSON(path, { ...options, signal: controller.signal }),
+			post: (path, body = {}, options = {}) => postJSON(path, body, { ...options, signal: controller.signal }),
+			delete: (path, options = {}) => deleteJSON(path, { ...options, signal: controller.signal }),
+			stream: (path, body, onEvent, options = {}) => streamJSONLines(path, body, onEvent, { ...options, signal: controller.signal }),
+		  };
+		  const result = await fn(controller.signal, scopedAPI);
           toast(success, "", "ok");
           recordAction(success, name, "ok");
           return result;
         } catch (err) {
+		  if (err?.code === "request_cancelled") {
+			recordAction(t("requestCancelled"), name, "warn");
+			return undefined;
+		  }
           toast(t("failed"), err.message, "error");
           if (err.data?.browser_log || err.data?.core_log) showActionFailureDetails(err);
           recordAction(t("failed"), `${name}: ${err.message}`, "error");
           return undefined;
         } finally {
+		  if (state.actionControllers.get(name) === controller) state.actionControllers.delete(name);
           setBusy(name, false);
         }
       }
@@ -400,7 +437,25 @@
 
       function recordAction(title, detail = "", type = "ok") {
         state.actionLog.unshift({ title, detail, type, at: new Date().toISOString() });
-        state.actionLog = state.actionLog.slice(0, 8);
+        state.actionLog = state.actionLog.slice(0, 30);
+        localStorage.setItem("kioskmate.actionLog", JSON.stringify(state.actionLog));
+      }
+
+      function openActionCenter() {
+        const actions = state.actionLog.length
+          ? state.actionLog.map((item) => `<article class="action-center-item ${esc(item.type || "")}"><span class="state-indicator" aria-hidden="true"></span><div><strong>${esc(item.title)}</strong><small>${esc(item.detail || "")}</small></div><time>${esc(formatDate(item.at))}</time></article>`).join("")
+          : `<div class="empty">${esc(t("noRecentActions"))}</div>`;
+        openModal(`<div class="modal action-center" role="dialog" aria-modal="true" aria-labelledby="action-center-title">
+          <div class="modal-head"><div><h3 id="action-center-title">${esc(t("actionCenter"))}</h3><div class="hint">${esc(t("actionCenterHint"))}</div></div><button data-modal-close aria-label="${esc(t("close"))}">&times;</button></div>
+          <div class="modal-body action-center-list">${actions}</div>
+          <div class="modal-foot"><button data-action="action-center-clear">${esc(t("clearActionHistory"))}</button><button data-modal-close>${esc(t("close"))}</button></div>
+        </div>`);
+        document.querySelector('[data-action="action-center-clear"]')?.addEventListener("click", () => {
+          state.actionLog = [];
+          localStorage.removeItem("kioskmate.actionLog");
+          closeModal();
+          toast(t("actionHistoryCleared"));
+        });
       }
 
       function showActionFailureDetails(err) {
@@ -684,6 +739,7 @@
                   <button class="chip ${mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : ""}" data-view="mqtt" title="${esc(mqtt.last_error || t("openMQTTStatusHint"))}">MQTT: ${esc(formatMQTTState(mqtt.state))}</button>
                   <button class="chip ${timeInfo.synchronized ? "ok" : "warn"}" data-view="system-device" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></button>
                   <span class="chip">${esc(state.auth?.version || "dev")}</span>
+                  <button class="icon-command action-center-button" title="${esc(t("actionCenter"))}" aria-label="${esc(t("actionCenter"))}" data-action="action-center">${state.actionLog.length ? `<span>${Math.min(99, state.actionLog.length)}</span>` : "&#8943;"}</button>
                   <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">↻</button>
                 </div>
               </header>
@@ -709,7 +765,7 @@
 
       function renderNav() {
         return NAV.map((item) => {
-          const children = item.children || [];
+          const children = (item.children || []).filter((child) => !child.requiresTerminal || state.config?.admin?.terminal_enabled);
           const active = isNavActive(item);
           const expanded = children.length && (state.navExpanded.has(item.id) || active);
           const childHtml = children.length
@@ -774,6 +830,7 @@
       }
 
       function bindShell() {
+        document.querySelector('[data-action="action-center"]')?.addEventListener("click", openActionCenter);
         document.querySelector('[data-action="nav-mobile-toggle"]')?.addEventListener("click", () => {
           state.mobileNavOpen = !state.mobileNavOpen;
           renderApp();

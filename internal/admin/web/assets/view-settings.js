@@ -16,6 +16,9 @@ function renderSettingsAdmin() {
                 <div class="body form-grid">
                   ${field("admin-bind", t("bindAddress"), "text", "", cfg.admin?.bind || "0.0.0.0")}
                   ${field("admin-port", t("port"), "number", "", cfg.admin?.port || 33333)}
+                  ${field("admin-trusted-proxies", t("trustedProxies"), "text", "", (cfg.admin?.trusted_proxies || []).join(", "), t("trustedProxiesPlaceholder"))}
+                  ${switchHtml("admin-terminal-enabled", t("enableTerminal"), !!cfg.admin?.terminal_enabled)}
+                  <div class="notice warn span-2"><strong>${esc(t("adminLANBoundary"))}</strong><span>${esc(t("adminLANBoundaryHint"))}</span></div>
                 </div>
               </div>
               <div class="card">

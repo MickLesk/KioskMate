@@ -12,6 +12,7 @@ CONTENTS="$TMP/contents"
 dpkg-deb --contents "$DEB" > "$CONTENTS"
 grep -q 'usr/bin/kioskmate$' "$CONTENTS"
 grep -q 'usr/lib/systemd/user/kioskmate.service$' "$CONTENTS"
+grep -q 'usr/share/doc/kioskmate/sbom.spdx.json$' "$CONTENTS"
 
 test "$(dpkg-deb -f "$DEB" Package)" = "kioskmate"
 VERSION="$(dpkg-deb -f "$DEB" Version)"
@@ -34,6 +35,16 @@ mkdir -p "$ROOTFS"
 dpkg-deb --extract "$DEB" "$ROOTFS"
 test -x "$ROOTFS/usr/bin/kioskmate"
 test -r "$ROOTFS/usr/lib/systemd/user/kioskmate.service"
+test -r "$ROOTFS/usr/share/doc/kioskmate/sbom.spdx.json"
+python3 - "$ROOTFS/usr/share/doc/kioskmate/sbom.spdx.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    sbom = json.load(handle)
+assert sbom["spdxVersion"] == "SPDX-2.3"
+assert any(package["name"] == "KioskMate" for package in sbom["packages"])
+PY
 if [ "$ARCH" = "$(dpkg --print-architecture)" ]; then
   test "$("$ROOTFS/usr/bin/kioskmate" --version)" = "$VERSION"
 fi

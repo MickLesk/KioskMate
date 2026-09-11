@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -172,5 +173,48 @@ func TestLoginResponseBootstrapsAuthenticatedUIWithoutRuntimeStatus(t *testing.T
 	protected(validRec, validReq)
 	if validRec.Code != http.StatusNoContent {
 		t.Fatalf("mutation with CSRF = %d, want 204", validRec.Code)
+	}
+}
+
+func TestAuthenticatedSessionSurvivesServerRestart(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := HashPassword("persistent-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Mutate(func(next *config.Config) error {
+		next.Admin.PasswordHash = hash
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := NewServer(cfg, &fakeActionBrowser{}, nil, nil, nil, nil, "test", slog.Default())
+	login := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"password":"persistent-password"}`))
+	response := httptest.NewRecorder()
+	first.authLogin(response, login)
+	if response.Code != http.StatusOK || len(response.Result().Cookies()) == 0 {
+		t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
+	}
+	cookie := response.Result().Cookies()[0]
+	if _, err := os.Stat(first.sessionsFilePath()); err != nil {
+		t.Fatalf("persistent session file missing: %v", err)
+	}
+
+	second := NewServer(cfg, &fakeActionBrowser{}, nil, nil, nil, nil, "test", slog.Default())
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	statusRequest.AddCookie(cookie)
+	statusResponse := httptest.NewRecorder()
+	second.authStatus(statusResponse, statusRequest)
+	var status struct {
+		Authenticated bool `json:"authenticated"`
+	}
+	if err := json.Unmarshal(statusResponse.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Authenticated {
+		t.Fatal("persisted Admin session was not restored after server restart")
 	}
 }

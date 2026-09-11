@@ -11,6 +11,8 @@ function renderDashboard() {
 		const telemetry = browser.telemetry || {};
 		const override = browser.override || {};
 		const lastExit = browser.last_exit_details || {};
+        const navigation = browser.navigation || {};
+        const processRoles = stats.roles || {};
         const pages = normalizePages(cfg.kiosk?.pages, cfg.kiosk?.urls);
         const activeIndex = Number(browser.active || 0);
         const activePage = pages[activeIndex] || {};
@@ -39,7 +41,7 @@ function renderDashboard() {
             <section class="status-strip" aria-label="${esc(t("status"))}">
               ${statusTile(t("displayStatus"), runningLabel, runningTone, browser.pid ? `PID ${browser.pid}` : (browserKnown ? t("noProcess") : t("loading")))}
               ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
-			  ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", `${formatValue(stats.rss_mb, " MB RAM")} · ${(stats.pids || []).length} ${t("processes")}`)}
+			  ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", `${formatValue(stats.rss_mb, " MB PSS")} · ${(stats.pids || []).length} ${t("processes")}`)}
               ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-"))}
             </section>
             <div class="dashboard-layout">
@@ -82,6 +84,12 @@ function renderDashboard() {
                   <div class="body health-list">
                     ${watchdogReason ? `<div class="notice warn">${esc(watchdogReason)}</div>` : ""}
                     ${healthRow(t("browserControl"), browser.devtools ? t("connected") : t("notConnected"), browser.devtools ? "ok" : "warn")}
+                    ${healthRow(t("displaySession"), browser.display_session?.ready ? `${browser.display_session.type || "-"} · ${browser.display_session.endpoint || "-"}` : browser.display_session?.error || t("notAvailable"), browser.display_session?.ready ? "ok" : "bad")}
+                    ${healthRow(t("navigationState"), `${navigation.state || "-"} · ${navigation.document_state || "-"}`, navigation.responsive ? "ok" : "warn")}
+                    ${healthRow(t("navigationTiming"), `${formatValue(navigation.load_duration_ms, " ms")} · ${formatValue(navigation.first_frame_ms, " ms")} · ${formatValue(navigation.heartbeat_latency_ms, " ms")}`, "")}
+                    ${healthRow(t("rendererProcesses"), `${formatValue(processRoles.renderer?.cpu_percent, "% CPU")} · ${formatValue(processRoles.renderer?.rss_mb, " MB PSS")} · ${processRoles.renderer?.count || 0}`, "")}
+                    ${healthRow(t("gpuProcess"), `${formatValue(processRoles.gpu?.cpu_percent, "% CPU")} · ${formatValue(processRoles.gpu?.rss_mb, " MB PSS")}`, "")}
+                    ${browser.duplicate_browser_roots?.length ? healthRow(t("duplicateBrowserRoots"), browser.duplicate_browser_roots.join(", "), "bad") : ""}
                     ${browser.control?.failures ? healthRow(t("browserControlFailures"), `${browser.control.failures}: ${browser.control.last_error || "-"}`, "warn") : ""}
 					${healthRow(t("browserGeneration"), String(browser.generation || 0), "")}
 					${lastExit.reason ? healthRow(t("lastExitReason"), String(lastExit.reason).replaceAll("_", " "), lastExit.expected ? "" : "bad") : ""}
