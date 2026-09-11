@@ -32,6 +32,9 @@ test("login and dashboard remain usable", async ({ page }) => {
 	await page.locator("#dashboard-snapshot-interval").selectOption("15");
 	await expect(page.locator("#dashboard-snapshot-interval")).toHaveValue("15");
 	await expect.poll(() => page.evaluate(() => localStorage.getItem("kioskmate.snapshotRefreshSeconds"))).toBe("15");
+	await expect(page.locator("#dashboard-snapshot-adaptive")).toBeChecked();
+	await page.locator("#dashboard-snapshot-adaptive").uncheck();
+	await expect.poll(() => page.evaluate(() => localStorage.getItem("kioskmate.snapshotAdaptive"))).toBe("0");
   await expectNoDocumentOverflow(page);
 });
 

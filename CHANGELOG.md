@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Adaptive Admin performance
+- Added an opt-out adaptive load budget for automatic Dashboard captures that backs off under high Chromium CPU, PSS memory or screenshot latency without changing the kiosk display.
+- Exposed DevTools screenshot capture duration in the Admin live view and persisted the selected refresh and load-protection preferences locally.
+
 ## v0.9.0-alpha3
 
 ### Admin live view

@@ -48,14 +48,39 @@ function bindView() {
 		  scheduleDashboardSnapshot(true);
 		  renderApp();
 		});
+		document.getElementById("dashboard-snapshot-adaptive")?.addEventListener("change", (event) => {
+		  state.snapshotAdaptive = event.target.checked;
+		  localStorage.setItem("kioskmate.snapshotAdaptive", state.snapshotAdaptive ? "1" : "0");
+		  renderApp();
+		});
 		scheduleDashboardSnapshot(!state.snapshotURL);
+	  }
+
+	  function dashboardSnapshotPolicy() {
+		const base = Number(state.snapshotRefreshSeconds || 0);
+		if (base <= 0 || !state.snapshotAdaptive) return { seconds: base, reason: "" };
+		const stats = state.status?.browser?.stats || {};
+		const cpu = Number(stats.cpu_percent || 0);
+		const rss = Number(stats.rss_mb || 0);
+		const captureMS = Number(state.snapshotCaptureMS || 0);
+		let factor = 1;
+		let reason = "";
+		if (cpu >= 250 || rss >= 1100 || captureMS >= 2000) {
+		  factor = 4;
+		  reason = "critical";
+		} else if (cpu >= 150 || rss >= 700 || captureMS >= 1000) {
+		  factor = 2;
+		  reason = "elevated";
+		}
+		const minimum = reason === "critical" ? 60 : reason === "elevated" ? 30 : base;
+		return { seconds: Math.min(300, Math.max(minimum, base * factor)), reason };
 	  }
 
 	  function scheduleDashboardSnapshot(immediate = false) {
 		if (dashboardSnapshotTimer) clearTimeout(dashboardSnapshotTimer);
 		dashboardSnapshotTimer = null;
 		const browser = state.status?.browser || {};
-		const seconds = Number(state.snapshotRefreshSeconds || 0);
+		const seconds = dashboardSnapshotPolicy().seconds;
 		if (state.view !== "dashboard" || seconds <= 0 || !browser.running || !browser.devtools) return;
 		const delay = immediate ? 350 : seconds * 1000;
 		dashboardSnapshotTimer = setTimeout(async () => {
@@ -195,6 +220,7 @@ function bindView() {
           if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
           state.snapshotURL = URL.createObjectURL(blob);
           state.snapshotTime = response.headers.get("X-KioskMate-Snapshot-Time") || new Date().toISOString();
+		  state.snapshotCaptureMS = Number(response.headers.get("X-KioskMate-Snapshot-Duration-Ms") || 0);
 		  state.snapshotError = "";
           renderApp();
 		};

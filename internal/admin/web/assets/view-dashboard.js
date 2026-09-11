@@ -30,6 +30,7 @@ function renderDashboard() {
         const schedulerReasonKey = String(browser.scheduler?.reason || "").toLowerCase();
         const hasTimeRules = (cfg.kiosk?.time_rules || []).length > 0;
         const schedulerNeedsAttention = schedulerReasonKey === "no active time rule" || (schedulerReasonKey === "disabled" && hasTimeRules);
+		const snapshotPolicy = dashboardSnapshotPolicy();
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
@@ -125,7 +126,7 @@ function renderDashboard() {
                   ${state.snapshotURL ? `<img id="snapshot-image" class="snapshot-image" src="${esc(state.snapshotURL)}" alt="${esc(t("liveView"))}" />` : `<div id="snapshot-empty" class="empty">${esc(browser.running ? t("snapshotOnDemand") : t("liveViewStopped"))}</div>`}
                 </div>
                 <div class="body">
-				  <div class="preview-meta"><span class="${state.snapshotError ? "status-text bad" : ""}">${esc(state.snapshotError || (state.snapshotTime ? `${t("lastSnapshot")}: ${formatDate(state.snapshotTime)}` : t("snapshotWaiting")))}</span><button data-view="kiosk-pages">${esc(t("managePages"))}</button></div>
+				  <div class="preview-meta"><div><span class="${state.snapshotError ? "status-text bad" : ""}">${esc(state.snapshotError || (state.snapshotTime ? `${t("lastSnapshot")}: ${formatDate(state.snapshotTime)}` : t("snapshotWaiting")))}</span><small>${esc(state.snapshotCaptureMS ? `${t("captureDuration")}: ${state.snapshotCaptureMS} ms` : "")}</small></div><label class="inline-choice" title="${esc(t("adaptivePreviewHint"))}"><input id="dashboard-snapshot-adaptive" type="checkbox" ${state.snapshotAdaptive ? "checked" : ""} /> ${esc(snapshotPolicy.reason ? t(`adaptivePreview_${snapshotPolicy.reason}`).replace("{seconds}", String(snapshotPolicy.seconds)) : t("adaptivePreview"))}</label><button data-view="kiosk-pages">${esc(t("managePages"))}</button></div>
                 </div>
               </div>
             </div>

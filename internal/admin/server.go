@@ -2762,6 +2762,7 @@ func (s *Server) browserSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	captureStarted := time.Now()
 	pngData, err := s.browser.CaptureScreenshot(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -2770,6 +2771,7 @@ func (s *Server) browserSnapshot(w http.ResponseWriter, r *http.Request) {
 	s.snapshot.png = append(s.snapshot.png[:0], pngData...)
 	s.snapshot.url = target
 	s.snapshot.time = time.Now()
+	w.Header().Set("X-KioskMate-Snapshot-Duration-Ms", strconv.FormatInt(time.Since(captureStarted).Milliseconds(), 10))
 	writeSnapshot(w, s.snapshot.png, s.snapshot.time)
 }
 

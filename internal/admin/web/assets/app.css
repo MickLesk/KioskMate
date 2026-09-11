@@ -1091,6 +1091,16 @@ p {
   font-size: 12px;
 }
 
+.preview-meta > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preview-meta small {
+  color: var(--muted);
+}
+
 .notice {
   border: 1px solid var(--line);
   border-radius: 7px;

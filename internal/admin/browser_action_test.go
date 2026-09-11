@@ -148,6 +148,33 @@ func TestBrowserPageCheckDoesNotTripAuthGuard(t *testing.T) {
 	}
 }
 
+func TestBrowserSnapshotReportsCaptureDuration(t *testing.T) {
+	cfg := &config.Config{
+		Path: filepath.Join(t.TempDir(), "config.json"),
+		Kiosk: config.KioskConfig{Pages: []config.KioskPage{{
+			PageID: "home", Name: "Home", URL: "http://ha.local:8123/dashboard", SourceType: "home_assistant",
+		}}},
+	}
+	browser := &fakeActionBrowser{status: supervisor.Status{
+		Running: true, DevTools: true, URL: "http://ha.local:8123/dashboard",
+	}}
+	server := NewServer(cfg, browser, nil, nil, nil, hardware.New(), "test", slog.Default())
+	req := httptest.NewRequest(http.MethodGet, "/api/browser/snapshot?refresh=1", nil)
+	rec := httptest.NewRecorder()
+
+	server.browserSnapshot(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("X-KioskMate-Snapshot-Duration-Ms") == "" {
+		t.Fatal("snapshot duration header is missing")
+	}
+	if rec.Header().Get("X-KioskMate-Snapshot-Time") == "" {
+		t.Fatal("snapshot time header is missing")
+	}
+}
+
 func TestPublicConfigRedactsSecrets(t *testing.T) {
 	cfg := &config.Config{
 		Admin: config.AdminConfig{Token: "admin-token", PasswordHash: "hash"},

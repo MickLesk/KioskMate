@@ -54,6 +54,7 @@
       const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
 	  const storedSnapshotRefresh = localStorage.getItem("kioskmate.snapshotRefreshSeconds");
+	  const storedSnapshotAdaptive = localStorage.getItem("kioskmate.snapshotAdaptive");
       function storedList(key, fallback = []) {
         try {
           const value = JSON.parse(localStorage.getItem(key) || "null");
@@ -108,6 +109,8 @@
         snapshotTime: "",
 		snapshotError: "",
 		snapshotRefreshSeconds: storedSnapshotRefresh !== null && [0, 5, 15, 30, 60, 300].includes(Number(storedSnapshotRefresh)) ? Number(storedSnapshotRefresh) : 60,
+		snapshotAdaptive: storedSnapshotAdaptive !== "0",
+		snapshotCaptureMS: 0,
         navExpanded: new Set(storedList("kioskmate.navExpanded", [])),
         mobileNavOpen: false,
       };
