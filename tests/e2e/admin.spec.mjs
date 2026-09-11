@@ -28,6 +28,10 @@ test("login and dashboard remain usable", async ({ page }) => {
   await expect(page.locator("[data-action=\"browser-reload\"]").first()).toBeVisible();
   await expect(page.locator("[data-action=\"action-center\"]")).toBeVisible();
 	await expect(page.locator('button[data-view="kiosk-display"]', { hasText: /stability|Stabilität/i })).toBeVisible();
+	await expect(page.locator("#snapshot-image")).toBeVisible();
+	await page.locator("#dashboard-snapshot-interval").selectOption("15");
+	await expect(page.locator("#dashboard-snapshot-interval")).toHaveValue("15");
+	await expect.poll(() => page.evaluate(() => localStorage.getItem("kioskmate.snapshotRefreshSeconds"))).toBe("15");
   await expectNoDocumentOverflow(page);
 });
 

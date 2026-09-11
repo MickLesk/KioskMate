@@ -110,6 +110,7 @@ func main() {
 	browser := &fixtureBrowser{status: supervisor.Status{
 		State: "running", Running: true, Ready: true, Command: "chromium", Active: 0,
 		PageName: "Home", URL: "https://demo.home-assistant.io",
+		DevTools:   true,
 		Display:    supervisor.DisplaySessionStatus{Ready: true, Type: "fixture"},
 		Navigation: supervisor.NavigationStatus{State: "ready", Responsive: true, DocumentState: "complete"},
 	}}

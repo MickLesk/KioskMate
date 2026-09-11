@@ -53,6 +53,7 @@
       const toasts = document.getElementById("toasts");
       const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
+	  const storedSnapshotRefresh = localStorage.getItem("kioskmate.snapshotRefreshSeconds");
       function storedList(key, fallback = []) {
         try {
           const value = JSON.parse(localStorage.getItem(key) || "null");
@@ -105,6 +106,8 @@
         dirtyViews: new Set(),
         snapshotURL: "",
         snapshotTime: "",
+		snapshotError: "",
+		snapshotRefreshSeconds: storedSnapshotRefresh !== null && [0, 5, 15, 30, 60, 300].includes(Number(storedSnapshotRefresh)) ? Number(storedSnapshotRefresh) : 60,
         navExpanded: new Set(storedList("kioskmate.navExpanded", [])),
         mobileNavOpen: false,
       };

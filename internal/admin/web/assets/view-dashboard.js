@@ -114,7 +114,10 @@ function renderDashboard() {
                   <h3>${esc(t("liveView"))}</h3>
                   <div class="actions">
                     <span class="chip">${esc(browser.page_name || activePage.name || "-")}</span>
-                    ${button("refreshSnapshot", "dashboard-snapshot-refresh")}
+					<label class="snapshot-refresh-control" title="${esc(t("autoRefreshHint"))}"><span>${esc(t("autoRefresh"))}</span><select id="dashboard-snapshot-interval">
+					  ${[[0, t("off")], [5, t("liveFiveSeconds")], [15, t("every15Seconds")], [30, t("every30Seconds")], [60, t("everyMinute")], [300, t("everyFiveMinutes")]].map(([value, label]) => `<option value="${value}" ${Number(state.snapshotRefreshSeconds) === value ? "selected" : ""}>${esc(label)}</option>`).join("")}
+					</select></label>
+					${button("refreshNow", "dashboard-snapshot-refresh")}
                     ${button("openPreview", "dashboard-preview-open")}
                   </div>
                 </div>
@@ -122,7 +125,7 @@ function renderDashboard() {
                   ${state.snapshotURL ? `<img id="snapshot-image" class="snapshot-image" src="${esc(state.snapshotURL)}" alt="${esc(t("liveView"))}" />` : `<div id="snapshot-empty" class="empty">${esc(browser.running ? t("snapshotOnDemand") : t("liveViewStopped"))}</div>`}
                 </div>
                 <div class="body">
-                  <div class="preview-meta"><span>${esc(state.snapshotTime ? formatDate(state.snapshotTime) : t("snapshotOnDemand"))}</span><button data-view="kiosk-pages">${esc(t("managePages"))}</button></div>
+				  <div class="preview-meta"><span class="${state.snapshotError ? "status-text bad" : ""}">${esc(state.snapshotError || (state.snapshotTime ? `${t("lastSnapshot")}: ${formatDate(state.snapshotTime)}` : t("snapshotWaiting")))}</span><button data-view="kiosk-pages">${esc(t("managePages"))}</button></div>
                 </div>
               </div>
             </div>

@@ -1,6 +1,13 @@
 "use strict";
 
+let dashboardSnapshotTimer = null;
+let dashboardSnapshotLoading = false;
+
 function bindView() {
+		if (state.view !== "dashboard" && dashboardSnapshotTimer) {
+		  clearTimeout(dashboardSnapshotTimer);
+		  dashboardSnapshotTimer = null;
+		}
         if (state.view === "dashboard") bindDashboard();
         if (state.view === "kiosk" || state.view === "kiosk-pages") { bindKiosk(); bindScheduler(); }
         if (state.view === "kiosk-schedule") bindScheduler();
@@ -19,11 +26,12 @@ function bindView() {
         bindBrowserButtons();
         bindHardware();
 		loadDashboardSoakReport();
+		bindDashboardSnapshotRefresh();
         document.querySelector('[data-action="dashboard-page-check"]')?.addEventListener("click", checkDashboardPage);
         document.querySelector('[data-action="dashboard-render-check"]')?.addEventListener("click", renderCheckDashboardPage);
         document.querySelector('[data-action="dashboard-preview-open"]')?.addEventListener("click", openDashboardPreview);
         document.querySelector('[data-action="dashboard-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
-        document.querySelector('[data-action="dashboard-snapshot-refresh"]')?.addEventListener("click", refreshDashboardSnapshot);
+        document.querySelector('[data-action="dashboard-snapshot-refresh"]')?.addEventListener("click", () => refreshDashboardSnapshot(false));
         document.querySelector('[data-action="browser-doctor"]')?.addEventListener("click", loadBrowserDoctor);
         document.querySelector('[data-action="browser-recover"]')?.addEventListener("click", recoverBrowser);
 		document.querySelector('[data-action="browser-auto-recover"]')?.addEventListener("click", recoverBrowserQuick);
@@ -32,6 +40,33 @@ function bindView() {
           renderApp();
         });
       }
+
+	  function bindDashboardSnapshotRefresh() {
+		document.getElementById("dashboard-snapshot-interval")?.addEventListener("change", (event) => {
+		  state.snapshotRefreshSeconds = Number(event.target.value || 0);
+		  localStorage.setItem("kioskmate.snapshotRefreshSeconds", String(state.snapshotRefreshSeconds));
+		  scheduleDashboardSnapshot(true);
+		  renderApp();
+		});
+		scheduleDashboardSnapshot(!state.snapshotURL);
+	  }
+
+	  function scheduleDashboardSnapshot(immediate = false) {
+		if (dashboardSnapshotTimer) clearTimeout(dashboardSnapshotTimer);
+		dashboardSnapshotTimer = null;
+		const browser = state.status?.browser || {};
+		const seconds = Number(state.snapshotRefreshSeconds || 0);
+		if (state.view !== "dashboard" || seconds <= 0 || !browser.running || !browser.devtools) return;
+		const delay = immediate ? 350 : seconds * 1000;
+		dashboardSnapshotTimer = setTimeout(async () => {
+		  dashboardSnapshotTimer = null;
+		  if (document.hidden || state.view !== "dashboard") {
+			scheduleDashboardSnapshot(false);
+			return;
+		  }
+		  await refreshDashboardSnapshot(true);
+		}, delay);
+	  }
 
 	  function loadDashboardSoakReport() {
 		const lastLoad = Number(state.loaded.dashboardSoakAt || 0);
@@ -74,6 +109,7 @@ function bindView() {
         if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
         state.snapshotURL = "";
         state.snapshotTime = "";
+		state.snapshotError = "";
       }
 
       function formatThemeStatus(status) {
@@ -145,8 +181,10 @@ function bindView() {
         if (out) out.textContent = url;
       }
 
-      async function refreshDashboardSnapshot() {
-        await runAction("dashboard-snapshot-refresh", async () => {
+      async function refreshDashboardSnapshot(automatic = false) {
+		if (dashboardSnapshotLoading) return;
+		dashboardSnapshotLoading = true;
+		const capture = async () => {
           const response = await fetch("/api/browser/snapshot?refresh=1", { credentials: "same-origin" });
           if (!response.ok) {
             let detail = response.statusText;
@@ -157,8 +195,22 @@ function bindView() {
           if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
           state.snapshotURL = URL.createObjectURL(blob);
           state.snapshotTime = response.headers.get("X-KioskMate-Snapshot-Time") || new Date().toISOString();
+		  state.snapshotError = "";
           renderApp();
-        }, t("refreshSnapshot"));
+		};
+		try {
+		  if (automatic) {
+			await capture();
+		  } else {
+			await runAction("dashboard-snapshot-refresh", capture, t("snapshotRefreshed"));
+		  }
+		} catch (error) {
+		  state.snapshotError = error.message || t("snapshotFailed");
+		  if (state.view === "dashboard") renderApp();
+		} finally {
+		  dashboardSnapshotLoading = false;
+		  if (state.view === "dashboard" && !dashboardSnapshotTimer) scheduleDashboardSnapshot(false);
+		}
       }
 
       async function loadBrowserDoctor() {

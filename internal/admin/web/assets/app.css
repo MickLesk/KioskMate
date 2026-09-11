@@ -1066,6 +1066,22 @@ p {
   background: var(--field);
 }
 
+.snapshot-refresh-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.snapshot-refresh-control select {
+  width: auto;
+  min-width: 112px;
+  min-height: 34px;
+  padding: 5px 28px 5px 9px;
+}
+
 .preview-meta {
   display: flex;
   align-items: center;
@@ -2449,6 +2465,10 @@ tr:last-child td {
   .live-preview {
     grid-template-rows: auto minmax(360px, 62vh) auto;
   }
+
+	.live-preview > .head .actions {
+	  flex-wrap: wrap;
+	}
 
   .rule-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
