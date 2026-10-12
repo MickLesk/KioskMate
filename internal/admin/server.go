@@ -82,6 +82,10 @@ type operationBrowser interface {
 	Operations() []supervisor.Operation
 }
 
+type gpuBrowser interface {
+	GPUInfo(context.Context) (supervisor.GPUInfo, error)
+}
+
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
@@ -1894,10 +1898,24 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	if status.Running {
 		add("browser_running", "ok", "Browser is running.", status.PID)
+		if gpu, ok := s.browser.(gpuBrowser); ok {
+			if info, err := gpu.GPUInfo(ctx); err != nil {
+				add("gpu", "warn", "GPU report is unavailable.", err.Error())
+			} else if info.SoftwareRaster {
+				add("gpu", "warn", "Chromium rasterizes in software. This costs a lot of CPU on small boards; try GPU mode \"hardware\" and compare with scripts/benchmark.sh.", info)
+			} else {
+				add("gpu", "ok", "Chromium uses GPU rasterization.", info)
+			}
+		}
 	} else if status.LastError != "" {
 		add("browser_running", "error", "Browser is stopped with a last error.", status.LastError)
 	} else {
 		add("browser_running", "warn", "Browser is currently stopped.", "")
+	}
+	for _, arg := range s.cfg.Snapshot().Kiosk.ExtraArgs {
+		if strings.TrimSpace(arg) == "--disable-dev-shm-usage" {
+			add("extra_args", "warn", "--disable-dev-shm-usage moves Chromium shared memory to /tmp (SD card on Raspberry Pi OS). Remove it from extra arguments unless KioskMate runs in a container.", arg)
+		}
 	}
 	if status.URL == "" {
 		add("active_page", "warn", "No active kiosk URL is available.", "")

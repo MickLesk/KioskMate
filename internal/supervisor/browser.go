@@ -1332,10 +1332,57 @@ func browserArgs(cfg *config.Config, preset string, url string, extra []string, 
 		return append(extra, url)
 	case "chromium-lite":
 		args := append(chromiumArgs(cfg, page), chromiumLiteArgs()...)
-		return append(args, append(extra, url)...)
+		return mergeFeatureFlags(append(args, append(extra, url)...))
 	default:
-		return append(chromiumArgs(cfg, page), append(extra, url)...)
+		return mergeFeatureFlags(append(chromiumArgs(cfg, page), append(extra, url)...))
 	}
+}
+
+// mergeFeatureFlags combines repeated --enable-features/--disable-features
+// switches into one each. Chromium only honours the last occurrence of a
+// switch, so a theme feature or a user extra argument would otherwise
+// silently drop every feature listed earlier.
+func mergeFeatureFlags(args []string) []string {
+	const enable, disable = "--enable-features=", "--disable-features="
+	var enabled, disabled []string
+	seen := map[string]bool{}
+	add := func(list *[]string, kind string, value string) {
+		for _, feature := range strings.Split(value, ",") {
+			feature = strings.TrimSpace(feature)
+			if feature == "" || seen[kind+feature] {
+				continue
+			}
+			seen[kind+feature] = true
+			*list = append(*list, feature)
+		}
+	}
+	out := make([]string, 0, len(args))
+	enableAt, disableAt := -1, -1
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, enable):
+			add(&enabled, "+", strings.TrimPrefix(arg, enable))
+			if enableAt < 0 {
+				enableAt = len(out)
+				out = append(out, "")
+			}
+		case strings.HasPrefix(arg, disable):
+			add(&disabled, "-", strings.TrimPrefix(arg, disable))
+			if disableAt < 0 {
+				disableAt = len(out)
+				out = append(out, "")
+			}
+		default:
+			out = append(out, arg)
+		}
+	}
+	if enableAt >= 0 {
+		out[enableAt] = enable + strings.Join(enabled, ",")
+	}
+	if disableAt >= 0 {
+		out[disableAt] = disable + strings.Join(disabled, ",")
+	}
+	return out
 }
 
 func chromiumArgs(cfg *config.Config, page int) []string {
@@ -1354,6 +1401,8 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,InfiniteSessionRestore",
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
+		// Native Wayland when a compositor is present instead of XWayland.
+		"--ozone-platform-hint=auto",
 	}
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
@@ -1368,8 +1417,13 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 	if cfg.Kiosk.ZoomPercent > 0 && cfg.Kiosk.ZoomPercent != 100 {
 		args = append(args, fmt.Sprintf("--force-device-scale-factor=%.2f", float64(cfg.Kiosk.ZoomPercent)/100.0))
 	}
-	if cfg.Performance.GPUMode == "software" {
+	switch cfg.Performance.GPUMode {
+	case "software":
 		args = append(args, "--disable-gpu", "--disable-gpu-compositing")
+	case "hardware":
+		// Raspberry Pi V3D/VideoCore drivers are often on Chromium's GPU
+		// blocklist, which silently falls back to CPU rasterization.
+		args = append(args, "--ignore-gpu-blocklist", "--enable-gpu-rasterization")
 	}
 	return args
 }
@@ -1507,18 +1561,19 @@ func (b *Browser) loadAuthGuard() {
 	}
 }
 
+// Profile flags avoid Docker-only workarounds: --disable-dev-shm-usage moves
+// shared memory to /tmp, which is on the SD card on Raspberry Pi OS, and
+// --num-raster-threads=1 starves rasterization on four-core boards. Background
+// throttling stays enabled so hidden preloaded tabs cost almost nothing.
 func performanceArgs(profile string) []string {
 	switch strings.TrimSpace(strings.ToLower(profile)) {
 	case "minimal", "conservative":
 		return []string{
-			"--disable-dev-shm-usage",
 			"--disable-extensions",
 			"--disable-sync",
 			"--disable-print-preview",
 			"--disable-speech-api",
 			"--disable-notifications",
-			"--disable-background-timer-throttling",
-			"--disable-renderer-backgrounding",
 			"--renderer-process-limit=1",
 			"--process-per-site",
 		}
@@ -1537,7 +1592,6 @@ func performanceArgs(profile string) []string {
 
 func raspberryLowPowerArgs() []string {
 	return []string{
-		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--disable-sync",
 		"--disable-print-preview",
@@ -1545,15 +1599,11 @@ func raspberryLowPowerArgs() []string {
 		"--disable-notifications",
 		"--renderer-process-limit=1",
 		"--process-per-site",
-		"--num-raster-threads=1",
 	}
 }
 
 func chromiumLiteArgs() []string {
-	return append(raspberryLowPowerArgs(),
-		"--disable-background-timer-throttling",
-		"--disable-renderer-backgrounding",
-	)
+	return raspberryLowPowerArgs()
 }
 
 func browserUserDataDir(cfg *config.Config, page int) string {

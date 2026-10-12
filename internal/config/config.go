@@ -963,7 +963,6 @@ func ApplyRaspberrySafeMode(cfg *Config) {
 	cfg.Watchdog.MaxRSSMB = 1200
 	cfg.Watchdog.MaxCPUPercent = 300
 	cfg.Kiosk.ExtraArgs = appendUnique(cfg.Kiosk.ExtraArgs,
-		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--disable-sync",
 		"--metrics-recording-only",

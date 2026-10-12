@@ -364,7 +364,7 @@ func TestBrowserPresetArgs(t *testing.T) {
 	cfg.Kiosk.ExtraArgs = []string{"--flag"}
 
 	chromium := browserArgs(cfg, "chromium-lite", "http://ha.local", cfg.Kiosk.ExtraArgs, 0)
-	if !contains(chromium, "--renderer-process-limit=1") || !contains(chromium, "--num-raster-threads=1") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
+	if !contains(chromium, "--renderer-process-limit=1") || contains(chromium, "--num-raster-threads=1") || !contains(chromium, "--flag") || chromium[len(chromium)-1] != "http://ha.local" {
 		t.Fatalf("chromium-lite args = %#v", chromium)
 	}
 	if !containsPrefix(chromium, "--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests") {
@@ -419,12 +419,12 @@ func TestPerformanceProfileArgs(t *testing.T) {
 
 	cfg.Performance.Profile = "raspberry"
 	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
-	for _, want := range []string{"--renderer-process-limit=1", "--num-raster-threads=1", "--disable-dev-shm-usage"} {
+	for _, want := range []string{"--renderer-process-limit=1", "--ozone-platform-hint=auto"} {
 		if !contains(args, want) {
 			t.Fatalf("raspberry profile missing %s in %#v", want, args)
 		}
 	}
-	for _, risky := range []string{"--enable-low-end-device-mode", "--disable-gpu-rasterization", "--disable-zero-copy"} {
+	for _, risky := range []string{"--enable-low-end-device-mode", "--disable-gpu-rasterization", "--disable-zero-copy", "--disable-dev-shm-usage", "--num-raster-threads=1", "--disable-background-timer-throttling"} {
 		if contains(args, risky) {
 			t.Fatalf("raspberry profile should not include risky startup flag %s in %#v", risky, args)
 		}
@@ -440,6 +440,32 @@ func TestKioskForceDarkThemeForcesChromiumDarkMode(t *testing.T) {
 	if !contains(args, "--force-dark-mode") || !contains(args, "--enable-features=WebContentsForceDark") {
 		t.Fatalf("force-dark theme args = %#v", args)
 	}
+
+	merged := browserArgs(cfg, "chromium", "http://ha.local/main", []string{"--enable-features=VaapiVideoDecoder", "--disable-features=Foo"}, 0)
+	enables, disables := 0, 0
+	for _, arg := range merged {
+		if strings.HasPrefix(arg, "--enable-features=") {
+			enables++
+			if arg != "--enable-features=WebContentsForceDark,VaapiVideoDecoder" {
+				t.Fatalf("merged enable-features = %q", arg)
+			}
+		}
+		if strings.HasPrefix(arg, "--disable-features=") {
+			disables++
+			if !strings.HasSuffix(arg, ",Foo") {
+				t.Fatalf("merged disable-features = %q", arg)
+			}
+		}
+	}
+	if enables != 1 || disables != 1 {
+		t.Fatalf("feature switches not merged: %#v", merged)
+	}
+
+	cfg.Performance.GPUMode = "hardware"
+	if args := browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0); !contains(args, "--ignore-gpu-blocklist") {
+		t.Fatalf("hardware GPU mode args = %#v", args)
+	}
+	cfg.Performance.GPUMode = "auto"
 
 	cfg.Kiosk.Theme = "dark"
 	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
