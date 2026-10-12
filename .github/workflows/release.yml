@@ -21,6 +21,11 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go.sum
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Verify release
         run: |
           test -z "$(gofmt -l .)"
