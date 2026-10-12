@@ -19,6 +19,7 @@
 - Added live updates over Server-Sent Events and DOM morphing so open forms keep focus and input.
 - Startup loads only what every view needs; journal, jobs, time zones and update history load with their view.
 - Served assets with ETag revalidation and gzip.
+- Split the stylesheet into tokens, layout, components and views and removed unused rules.
 
 ## v0.8.0
 
