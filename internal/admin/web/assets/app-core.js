@@ -1,8 +1,15 @@
-"use strict";
+import { bindView } from "./actions-core.js";
+import { KioskMateAPI } from "./api.js";
+import { I18N, loadLanguage } from "./i18n.js";
+import { button, stateBanner } from "./renderers.js";
+import { KioskMateUI } from "./ui-components.js";
+import { renderDashboard } from "./view-dashboard.js";
+import { renderKiosk } from "./view-kiosk.js";
+import { renderMQTT } from "./view-mqtt.js";
+import { renderSettingsAdmin, renderSettingsBrowser, renderSettingsConfig, renderSettingsMaintenance } from "./view-settings.js";
+import { renderHardware, renderLogs, renderSystemActions, renderTerminal } from "./view-system.js";
 
-      const I18N = window.KIOSKMATE_I18N || {};
-
-      const NAV = [
+const NAV = [
         { id: "dashboard", label: "dashboard", hint: "overview" },
         {
           id: "kiosk",
@@ -50,7 +57,7 @@
 
       const root = document.getElementById("root");
       const toasts = document.getElementById("toasts");
-      const modalRoot = document.getElementById("modal-root");
+      export const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
       function storedList(key, fallback = []) {
         try {
@@ -61,7 +68,7 @@
         }
       }
 
-      const state = {
+      export const state = {
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: storedTheme === "light" ? "light" : "dark",
         themeExplicit: localStorage.getItem("kioskmate.theme.explicit") === "1",
@@ -127,23 +134,23 @@
 
       document.documentElement.dataset.theme = state.theme;
 
-      function t(key) {
-        return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key;
+      export function t(key) {
+        return (I18N[state.lang] && I18N[state.lang][key]) || key;
       }
 
-      function esc(value) {
+      export function esc(value) {
         return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
       }
 
-	  const field = window.KioskMateUI.field;
-	  const selectHtml = window.KioskMateUI.selectHtml;
-	  const switchHtml = window.KioskMateUI.switchHtml;
+	  export const field = KioskMateUI.field;
+	  export const selectHtml = KioskMateUI.selectHtml;
+	  export const switchHtml = KioskMateUI.switchHtml;
 
-      function val(id) {
+      export function val(id) {
         return document.getElementById(id)?.value ?? "";
       }
 
-      function checked(id) {
+      export function checked(id) {
         return !!document.getElementById(id)?.checked;
       }
 
@@ -165,7 +172,7 @@
         if (!on) updateDirtyUI();
       }
 
-      function toast(title, message = "", type = "ok") {
+      export function toast(title, message = "", type = "ok") {
         const item = document.createElement("div");
         item.className = "toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "");
         item.setAttribute("role", type === "error" ? "alert" : "status");
@@ -177,7 +184,7 @@
 
       let modalKeyHandler = null;
 
-      function openModal(html) {
+      export function openModal(html) {
         modalRoot.innerHTML = `<div class="modal-backdrop" data-modal-backdrop>${html}</div>`;
         modalRoot.querySelectorAll("[data-modal-close]").forEach((button) => button.addEventListener("click", closeModal));
         modalRoot.querySelector("[data-modal-backdrop]")?.addEventListener("click", (event) => {
@@ -190,13 +197,13 @@
         requestAnimationFrame(() => modalRoot.querySelector("[data-modal-close], button, input, select, textarea")?.focus());
       }
 
-      function closeModal() {
+      export function closeModal() {
         if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
         modalKeyHandler = null;
         modalRoot.innerHTML = "";
       }
 
-      function openMQTTTestDialog() {
+      export function openMQTTTestDialog() {
         openModal(`
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mqtt-live-title">
             <div class="modal-head">
@@ -216,7 +223,7 @@
           </div>`);
       }
 
-      function appendMQTTEvent(event) {
+      export function appendMQTTEvent(event) {
         const log = document.getElementById("mqtt-live-log");
         const summary = document.getElementById("mqtt-live-summary");
         if (!log) return;
@@ -236,11 +243,11 @@
         if (summary) summary.textContent = event.message || "";
       }
 
-      async function streamJSONLines(path, body, onEvent, signal) {
-		return window.KioskMateAPI.streamJSONLines(path, body, { onEvent, signal, csrf: state.auth?.csrf });
+      export async function streamJSONLines(path, body, onEvent, signal) {
+		return KioskMateAPI.streamJSONLines(path, body, { onEvent, signal, csrf: state.auth?.csrf });
       }
 
-      function formatValue(value, suffix = "") {
+      export function formatValue(value, suffix = "") {
         if (value === null || value === undefined || value === "") return "-";
         if (typeof value === "number") {
           const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
@@ -252,13 +259,13 @@
         return String(value);
       }
 
-      function formatDate(value) {
+      export function formatDate(value) {
         if (!value) return t("never");
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
       }
 
-      function formatMQTTState(value) {
+      export function formatMQTTState(value) {
         const key = {
           connected: "connected",
           connecting: "connecting",
@@ -270,7 +277,7 @@
         return t(key || "notConnected");
       }
 
-      function formatClock(value) {
+      export function formatClock(value) {
         const date = value ? new Date(value) : new Date();
         return Number.isNaN(date.getTime()) ? "--:--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       }
@@ -286,45 +293,45 @@
         }, 1000);
       }
 
-      function secondsToDuration(value, fallback = 0) {
+      export function secondsToDuration(value, fallback = 0) {
         const n = Number(value);
         if (!Number.isFinite(n) || n <= 0) return fallback;
         return Math.round(n / 1_000_000_000);
       }
 
-      function formatDuration(seconds) {
+      export function formatDuration(seconds) {
         const total = Number(seconds || 0);
         if (total >= 3600 && total % 3600 === 0) return `${total / 3600} h`;
         if (total >= 60 && total % 60 === 0) return `${total / 60} min`;
         return `${total} s`;
       }
 
-      function durationToNs(seconds) {
+      export function durationToNs(seconds) {
         return Math.max(0, Number(seconds || 0)) * 1_000_000_000;
       }
 
-      function sleep(ms) {
+      export function sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
       }
 
-      function cloneConfig() {
+      export function cloneConfig() {
         return JSON.parse(JSON.stringify(state.config || {}));
       }
 
-      async function request(path, options = {}) {
+      export async function request(path, options = {}) {
 		try {
-		  return await window.KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
+		  return await KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
 		} catch (error) {
 		  if (error?.name === "AbortError") throw new Error(t("requestTimeout"));
 		  throw error;
 		}
       }
 
-      const getJSON = (path, options = {}) => request(path, options);
-      const postJSON = (path, body = {}) => request(path, { method: "POST", body: JSON.stringify(body) });
-      const deleteJSON = (path) => request(path, { method: "DELETE" });
+      export const getJSON = (path, options = {}) => request(path, options);
+      export const postJSON = (path, body = {}) => request(path, { method: "POST", body: JSON.stringify(body) });
+      export const deleteJSON = (path) => request(path, { method: "DELETE" });
 
-      async function runAction(name, fn, success = t("actionDone")) {
+      export async function runAction(name, fn, success = t("actionDone")) {
         setBusy(name, true);
         recordAction(t("actionStarted"), name, "warn");
         try {
@@ -342,17 +349,17 @@
         }
       }
 
-      function markDirty(view = state.view) {
+      export function markDirty(view = state.view) {
         state.dirtyViews.add(view);
         updateDirtyUI();
       }
 
-      function clearDirty(view = state.view) {
+      export function clearDirty(view = state.view) {
         state.dirtyViews.delete(view);
         updateDirtyUI();
       }
 
-      function isDirty(view = state.view) {
+      export function isDirty(view = state.view) {
         return state.dirtyViews.has(view);
       }
 
@@ -398,7 +405,7 @@
         event.returnValue = "";
       });
 
-      function recordAction(title, detail = "", type = "ok") {
+      export function recordAction(title, detail = "", type = "ok") {
         state.actionLog.unshift({ title, detail, type, at: new Date().toISOString() });
         state.actionLog = state.actionLog.slice(0, 8);
       }
@@ -425,7 +432,7 @@
           </div>`);
       }
 
-      async function boot() {
+      export async function boot() {
         try {
           state.auth = await getJSON("/api/auth/status");
           if (!state.auth.authenticated) {
@@ -444,7 +451,7 @@
         }
       }
 
-	  async function refreshCore(fast = false) {
+	  export async function refreshCore(fast = false) {
 		if (fast) {
 		  const cfg = await getJSON("/api/config");
 		  applyCoreState({ cfg });
@@ -467,7 +474,7 @@
 		if (failed.length === requests.length) throw failed[0].reason;
       }
 
-	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
+	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -642,7 +649,7 @@
 		authCountdownTimer = setInterval(update, 1000);
 	  }
 
-      function renderApp() {
+      export function renderApp() {
 		if (authCountdownTimer) clearInterval(authCountdownTimer);
 		authCountdownTimer = null;
         const browser = state.status?.browser || {};
@@ -699,7 +706,7 @@
         startHeaderClock();
       }
 
-	  function renderAppIfIdle() {
+	  export function renderAppIfIdle() {
 		const active = document.activeElement;
 		const editing = active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
 		if (state.dirtyViews.size || editing) return false;
@@ -813,13 +820,18 @@
         });
       }
 
-      function setLanguage(lang) {
+      async function setLanguage(lang) {
         if (!confirmDiscard()) {
           const select = document.getElementById("lang");
           if (select) select.value = state.lang;
           return;
         }
-        state.lang = lang === "de" ? "de" : "en";
+        try {
+          state.lang = await loadLanguage(lang === "de" ? "de" : "en");
+        } catch (error) {
+          toast(t("actionFailed"), error.message, "error");
+          return;
+        }
         localStorage.setItem("kioskmate.lang", state.lang);
         document.documentElement.lang = state.lang;
         state.auth?.authenticated ? renderApp() : renderLogin();

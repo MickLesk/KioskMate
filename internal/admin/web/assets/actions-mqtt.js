@@ -1,6 +1,7 @@
-"use strict";
+import { appendMQTTEvent, applyCoreState, checked, clearDirty, cloneConfig, durationToNs, getJSON, openMQTTTestDialog, postJSON, refreshCore, renderApp, renderAppIfIdle, runAction, sleep, state, streamJSONLines, t, val } from "./app-core.js";
+import { button, commandTopic, validateMQTT } from "./renderers.js";
 
-function bindMQTT() {
+export function bindMQTT() {
         ["mqtt-node", "mqtt-base-topic", "mqtt-discovery"].forEach((id) => document.getElementById(id)?.addEventListener("input", () => {
           const topic = document.getElementById("mqtt-topic");
           if (topic) topic.textContent = commandTopic();

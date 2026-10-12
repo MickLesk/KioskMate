@@ -1,6 +1,9 @@
-"use strict";
+import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
+import { checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { button, collectPages, collectRotation, collectRules, normalizePages, validatePages, validateScheduler, validationError } from "./renderers.js";
+import { absolutePageIndexFromEnabled, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
 
-function bindKiosk() {
+export function bindKiosk() {
         bindBrowserButtons();
         document.querySelectorAll("[data-kiosk-mode]").forEach((button) => button.addEventListener("click", () => {
           state.kioskEditorMode = button.dataset.kioskMode === "flow" ? "flow" : "storybook";
@@ -290,7 +293,7 @@ function bindKiosk() {
         if (counter) counter.textContent = `${t("visiblePages")}: ${visible}`;
       }
 
-      async function applySafeMode() {
+      export async function applySafeMode() {
         await runAction("safe-mode", async () => {
           const result = await postJSON("/api/browser/safe-mode", { restart: true });
           state.config = result.config || state.config;
@@ -299,7 +302,7 @@ function bindKiosk() {
         }, t("saved"));
       }
 
-      async function loadBrowserDiagnostics() {
+      export async function loadBrowserDiagnostics() {
         await runAction("browser-diagnostics", async () => {
           state.diagnostics = await getJSON("/api/browser/diagnostics");
           if (state.view === "dashboard") {
@@ -595,7 +598,7 @@ function bindKiosk() {
         kiosk.time_rules = (kiosk.time_rules || []).map((rule) => ({ ...rule, page: remap(rule.page) }));
       }
 
-      function bindScheduler() {
+      export function bindScheduler() {
         document.querySelector('[data-action="scheduler-save"]')?.addEventListener("click", saveScheduler);
         document.querySelector('[data-action="rotation-build"]')?.addEventListener("click", buildRotationFromPages);
         document.querySelector('[data-action="rotation-clear"]')?.addEventListener("click", () => clearKioskList("rotation"));

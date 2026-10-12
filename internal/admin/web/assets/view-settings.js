@@ -1,6 +1,7 @@
-"use strict";
+import { checked, esc, field, formatDate, formatValue, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
+import { browserPresetOptions, button, kvTable, objectEntries, renderBackups, renderSessions, renderTelemetryChart, renderUpdateHistory, renderUpdateJobsHTML, renderUpdatePreflight, statusTile, textarea } from "./renderers.js";
 
-function renderSettingsAdmin() {
+export function renderSettingsAdmin() {
         const cfg = state.config || {};
         const endpoint = `${cfg.admin?.bind || "0.0.0.0"}:${cfg.admin?.port || 33333}`;
         return `
@@ -42,7 +43,7 @@ function renderSettingsAdmin() {
           </div>`;
       }
 
-      function renderSettingsBrowser() {
+      export function renderSettingsBrowser() {
         const cfg = state.config || {};
         const kiosk = cfg.kiosk || {};
         const perf = cfg.performance || {};
@@ -105,7 +106,7 @@ function renderSettingsAdmin() {
           </div>`;
       }
 
-      function renderSettingsConfig() {
+      export function renderSettingsConfig() {
         const cfg = state.config || {};
         return `
           <div class="page-stack">
@@ -126,7 +127,7 @@ function renderSettingsAdmin() {
           </div>`;
       }
 
-      function renderSettingsMaintenance() {
+      export function renderSettingsMaintenance() {
         const update = state.update || {};
         const privilege = state.privilege || {};
         const passwordless = !!state.hardware?.support?.sudo_rights;

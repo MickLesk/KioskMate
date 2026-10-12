@@ -1,6 +1,8 @@
-"use strict";
+import { checkRepair, runRepair } from "./actions-settings.js";
+import { clearDirty, deleteJSON, getJSON, postJSON, refreshCore, renderApp, runAction, state, t, toast, val } from "./app-core.js";
+import { lines, renderJobsHTML } from "./renderers.js";
 
-function bindHardware() {
+export function bindHardware() {
         document.querySelector('[data-action="display-apply"]')?.addEventListener("click", async () => {
           await runAction("display-apply", async () => {
             if (state.hardware?.support?.display_status) await postJSON("/api/hardware/display", { value: val("display-power") });
@@ -20,7 +22,7 @@ function bindHardware() {
         });
       }
 
-      function bindSystem() {
+      export function bindSystem() {
         const map = {
           "sys-apt-update": "apt-update",
           "sys-apt-upgrade": "apt-upgrade",
@@ -53,7 +55,7 @@ function bindHardware() {
         document.querySelector('[data-action="time-save"]')?.addEventListener("click", saveTimeSettings);
       }
 
-      function bindSystemMaintenance() {
+      export function bindSystemMaintenance() {
         bindSystem();
         document.querySelector('[data-action="repair-check"]')?.addEventListener("click", checkRepair);
         document.querySelector('[data-action="repair-run"]')?.addEventListener("click", runRepair);
@@ -123,7 +125,7 @@ function bindHardware() {
         }
       }
 
-      function bindTerminal() {
+      export function bindTerminal() {
         document.querySelector('[data-action="terminal-run"]')?.addEventListener("click", async () => {
           await runAction("terminal-run", async () => {
             const result = await postJSON("/api/terminal/run", { command: val("terminal-command") });
@@ -133,7 +135,7 @@ function bindHardware() {
         });
       }
 
-      function bindLogs() {
+      export function bindLogs() {
         document.querySelector('[data-action="logs-refresh"]')?.addEventListener("click", refreshLogs);
         document.querySelector('[data-action="logs-download"]')?.addEventListener("click", () => {
           const source = encodeURIComponent(state.logSource || "combined");
@@ -182,7 +184,7 @@ function bindHardware() {
         });
       }
 
-      function filteredLogs() {
+      export function filteredLogs() {
         const query = state.logFilter.trim().toLowerCase();
         if (!query) return state.logs || [];
         return (state.logs || []).filter((line) => String(line).toLowerCase().includes(query));

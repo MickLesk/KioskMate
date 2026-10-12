@@ -1,6 +1,7 @@
-"use strict";
+import { request, streamJSONLines } from "./app-core.js";
+import { lines } from "./renderers.js";
 
-window.KioskMateAPI = (() => {
+export const KioskMateAPI = (() => {
   function headers(csrf, extra = {}) {
     return {
       "Content-Type": "application/json",

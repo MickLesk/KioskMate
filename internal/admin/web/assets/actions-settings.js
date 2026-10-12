@@ -1,6 +1,8 @@
-"use strict";
+import { applySafeMode, loadBrowserDiagnostics } from "./actions-kiosk.js";
+import { boot, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, getJSON, openModal, postJSON, refreshCore, renderApp, renderAppIfIdle, request, runAction, sleep, state, t, toast, val } from "./app-core.js";
+import { button, lines, metric, renderUpdatePreflight } from "./renderers.js";
 
-function bindSettings() {
+export function bindSettings() {
         document.querySelector('[data-action="admin-save"]')?.addEventListener("click", saveAdminSettings);
         document.querySelector('[data-action="password-save"]')?.addEventListener("click", savePassword);
         document.querySelector('[data-action="browser-settings-save"]')?.addEventListener("click", () => saveBrowserSettings(false));
@@ -195,14 +197,14 @@ function bindSettings() {
 		});
 	  }
 
-      async function checkRepair() {
+      export async function checkRepair() {
         await runAction("repair-check", async () => {
           state.repair = await getJSON("/api/repair");
           renderApp();
         }, t("diagnostics"));
       }
 
-      async function runRepair() {
+      export async function runRepair() {
         await runAction("repair-run", async () => {
           state.repair = await postJSON("/api/repair", {});
           await refreshCore();

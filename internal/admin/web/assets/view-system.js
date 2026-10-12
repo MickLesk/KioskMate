@@ -1,6 +1,8 @@
-"use strict";
+import { filteredLogs } from "./actions-system.js";
+import { esc, field, formatClock, formatValue, selectHtml, state, t } from "./app-core.js";
+import { button, kvTable, objectEntries, renderJobsHTML, renderRepair, stateBanner, statusTile, unsupportedControl } from "./renderers.js";
 
-function renderHardware() {
+export function renderHardware() {
         const hw = state.hardware || {};
         const timeCfg = state.config?.time || {};
         const support = hw.support || {};
@@ -48,7 +50,7 @@ function renderHardware() {
         return `${privilege.mode || "sudo"} · ${minutes} ${t("minutesLeft")}`;
       }
 
-      function renderSystemActions() {
+      export function renderSystemActions() {
         const privilege = state.privilege || {};
         const repairIssues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
         const activeJobs = state.jobs.filter((job) => !job.finished).length;
@@ -96,7 +98,7 @@ function renderHardware() {
           </div>`;
       }
 
-      function renderTerminal() {
+      export function renderTerminal() {
         return `
           <div class="page-stack">
             <div class="card">
@@ -112,7 +114,7 @@ function renderHardware() {
           </div>`;
       }
 
-      function renderLogs() {
+      export function renderLogs() {
         const sources = [
           ["combined", t("logCombined")],
           ["core", t("logCore")],

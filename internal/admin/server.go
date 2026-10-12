@@ -528,6 +528,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	case ".js":
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	case ".json":
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}

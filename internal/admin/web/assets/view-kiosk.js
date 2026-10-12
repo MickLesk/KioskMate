@@ -1,6 +1,8 @@
-"use strict";
+import { formatSchedulerReason } from "./actions-core.js";
+import { esc, field, formatDate, formatDuration, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
+import { button, normalizePages, renderRotation, renderRules, stateBanner, statusTile } from "./renderers.js";
 
-function renderKiosk() {
+export function renderKiosk() {
         const kiosk = state.config?.kiosk || {};
         const browser = state.status?.browser || {};
         const pages = normalizePages(kiosk.pages, kiosk.urls);
@@ -81,7 +83,7 @@ function renderKiosk() {
           </div>`;
       }
 
-      function selectedKioskPageIndex(pages) {
+      export function selectedKioskPageIndex(pages) {
         // state.status.browser.active is in enabled-page index space (matches backend
         // SetActive/PageCount), so it must be converted to an absolute index before it
         // can be used to index into the full (including disabled) pages array.
@@ -93,7 +95,7 @@ function renderKiosk() {
       // Converts an absolute index into `pages` (which includes disabled/url-less
       // pages) into the enabled-page index space expected by /api/browser/page and
       // /api/browser/override. Returns -1 if the page at absoluteIndex is not enabled.
-      function enabledPageIndexFromAbsolute(pages, absoluteIndex) {
+      export function enabledPageIndexFromAbsolute(pages, absoluteIndex) {
         let enabledIndex = 0;
         for (let i = 0; i < pages.length; i++) {
           const isEnabled = !pages[i].disabled && pages[i].url;
@@ -106,7 +108,7 @@ function renderKiosk() {
       // Converts an enabled-page index (as reported by the backend, e.g. browser.active)
       // back into the absolute index used by the UI's pages array. Returns -1 if no such
       // enabled page exists.
-      function absolutePageIndexFromEnabled(pages, enabledIndex) {
+      export function absolutePageIndexFromEnabled(pages, enabledIndex) {
         let counted = 0;
         for (let i = 0; i < pages.length; i++) {
           if (!pages[i].disabled && pages[i].url) {
@@ -117,7 +119,7 @@ function renderKiosk() {
         return -1;
       }
 
-      function pageTimingLabel(page) {
+      export function pageTimingLabel(page) {
         if (page.display_mode === "schedule") return `${page.schedule?.start || "--:--"} - ${page.schedule?.end || "--:--"}`;
         if (page.display_mode === "mqtt") return t("mqttTrigger");
         return formatDuration(Number(page.duration_seconds || 3600));

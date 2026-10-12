@@ -1,6 +1,7 @@
-"use strict";
+import { esc, field, selectHtml, switchHtml } from "./app-core.js";
+import { button } from "./renderers.js";
 
-window.KioskMateUI = (() => {
+export const KioskMateUI = (() => {
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[c]);
