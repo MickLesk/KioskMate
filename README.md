@@ -13,7 +13,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
 - Optional tab mode (`kiosk.page_switch: "tabs"`) that keeps recent pages open and switches without reloading.
 - Workflows: rules that react to an MQTT message, a time of day or a webhook and show a page for a while, switch the display, set brightness, reload, show a banner or run a script.
-- Scheduled maintenance reloads (every N minutes or at a fixed time).
+- Scheduled maintenance reloads (every N minutes, at a fixed time or after N rotation rounds) and preloaded pages in tab mode.
 - Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
@@ -208,9 +208,11 @@ Workflows are rules on top of the page sequence. Create them under **Kiosk -> Pa
 }
 ```
 
-- Triggers: `mqtt` (exact topic, optional payload), `time` (`at` as HH:MM, optional `days`) and `webhook` (per-rule `token`, at least 16 characters).
+- Triggers: `mqtt` (exact topic, optional payload; Home Assistant entity states and presence sensors arrive this way), `time` (`at` as HH:MM, optional `days`), `webhook` (per-rule `token`, at least 16 characters), `touch` (any touch, click, key or wheel input on the kiosk page) and `idle` (no input for `idle_seconds`; fires once, the next input re-arms it).
 - Conditions (optional, all must hold): `days`, a `start`/`end` window and `active_page_id`.
-- Actions run in order: `show_page` (then back to the sequence; 0 seconds means one hour), `resume_playlist`, `display` (`ON`/`OFF`), `brightness` (1-100), `reload`, `overlay` and `script` (JavaScript in the current page).
+- Actions run in order: `show_page` (for `duration_seconds`, 0 means one hour, or with `until_resume` until a `resume_playlist` action), `resume_playlist`, `display` (`ON`/`OFF`, with `duration_seconds` it switches back afterwards), `brightness` (1-100), `reload`, `overlay`, `script` (JavaScript in the current page), `click` and `scroll` (CSS selector, also inside Home Assistant's shadow DOM; scroll also takes pixels) and `sound` (audio URL, or empty for a chime).
+- Priority is fixed: a manual override from the Admin UI or Home Assistant beats workflows, workflows beat time rules, time rules beat the rotation. A workflow never replaces or ends a manual override.
+- Saving reports likely mistakes as warnings: overlapping time rules, workflows with the same trigger, and workflows sharing a page's MQTT topic.
 - A webhook rule is fired with `curl -X POST "http://<kiosk-ip>:33333/api/rules/<id>/trigger?token=<token>"` or the `X-KioskMate-Token` header. It needs no Admin login, so treat the URL like a password; wrong tokens count against the login throttle.
 - **Test** in the Admin UI runs the saved actions immediately; the last 50 runs are listed under **Recent runs** and in the event journal.
 

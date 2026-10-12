@@ -9,14 +9,15 @@
 - Merged Chromium `--enable-features` flags, enabled GPU rasterization in hardware GPU mode, stopped adding `--disable-dev-shm-usage` and reported the GPU feature status in the Doctor.
 
 ### Kiosk
-- Added workflows: rules triggered by MQTT, a time of day or a webhook that show a page, switch the display, set brightness, reload, show a banner or run a script, with conditions, cooldown, a test button and run history.
-- Added an optional tab mode that keeps recent pages open and switches without reloading.
-- Added scheduled maintenance reloads every N minutes or at a fixed time.
+- Added workflows: rules triggered by MQTT, a time of day, a webhook, touch input or inactivity that show a page, switch the display, set brightness, reload, show a banner, click, scroll, play a sound or run a script, with conditions, cooldown, fixed priority below manual overrides, conflict warnings, a test button and run history.
+- Added an optional tab mode that keeps recent pages open and switches without reloading, with per-page preloading.
+- Added scheduled maintenance reloads every N minutes, at a fixed time or after N rotation rounds.
 - Added an optional desktop-free mode with the Cage compositor.
 
 ### Admin UI
 - Converted the Admin UI to ES modules with per-language translation files loaded on demand.
 - Added live updates over Server-Sent Events and DOM morphing so open forms keep focus and input.
+- Startup loads only what every view needs; journal, jobs, time zones and update history load with their view.
 - Served assets with ETag revalidation and gzip.
 
 ## v0.8.0
