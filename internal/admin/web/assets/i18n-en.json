@@ -688,5 +688,21 @@
   "timing": "Timing",
   "workflowReview": "Page '{name}' runs for {timing}, then continues to '{next}'.",
   "confirmRemovePage": "Remove this page from the kiosk sequence?",
-  "disablePage": "Disable this page"
+  "disablePage": "Disable this page",
+  "pageSwitching": "Page switching and maintenance",
+  "pageSwitchingKicker": "Load and memory",
+  "pageSwitchMode": "Page switching",
+  "pageSwitchNavigate": "Navigate (lowest memory)",
+  "pageSwitchTabs": "Keep pages open as tabs (instant switch)",
+  "maxOpenTabs": "Maximum open tabs",
+  "pageSwitchHint": "Tabs keep recently shown pages loaded, so switching back needs no reload and no new Home Assistant login. Hidden tabs are throttled; each open tab costs memory.",
+  "pageSwitchIsolatedHint": "Separate browser profiles per page are enabled: every page switch restarts the browser, and tab mode is not used.",
+  "reloadEveryMinutes": "Reload page every (minutes, 0 = off)",
+  "reloadAtTime": "Daily reload at",
+  "scheduledReloadHint": "A scheduled reload clears memory that long-running dashboards accumulate. It keeps the session and is much cheaper than a watchdog browser restart.",
+  "authMonitor": "Home Assistant login monitoring",
+  "authMonitorWindow": "After page loads (recommended)",
+  "authMonitorAlways": "Always",
+  "authMonitorHint": "Login failures happen while a page loads. Monitoring only then saves CPU on the kiosk; a lost session reloads the login page, which re-arms monitoring.",
+  "rediscoverHardware": "Detect hardware again"
 }

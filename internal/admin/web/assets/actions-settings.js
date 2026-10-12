@@ -98,6 +98,13 @@ export function bindSettings() {
           cfg.performance.profile = val("perf-profile");
           cfg.performance.gpu_mode = val("perf-gpu");
           cfg.performance.reduce_motion = checked("perf-reduce");
+          cfg.performance.auth_monitor = val("perf-auth-monitor") === "always" ? "always" : "";
+          cfg.kiosk.page_switch = val("kiosk-page-switch") === "tabs" ? "tabs" : "";
+          cfg.kiosk.max_tabs = Math.min(8, Math.max(1, Number(val("kiosk-max-tabs") || 3)));
+          cfg.kiosk.maintenance = {
+            reload_every_minutes: Number(val("kiosk-reload-every") || 0),
+            reload_at: val("kiosk-reload-at"),
+          };
           cfg.watchdog.enabled = checked("watchdog-enabled");
           cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
           cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 300);

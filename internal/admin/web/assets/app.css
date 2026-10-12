@@ -125,10 +125,6 @@ button.danger-ghost {
   color: var(--red);
 }
 
-button.ghost {
-  background: transparent;
-}
-
 .icon-command {
   width: 36px;
   padding: 0;
@@ -588,10 +584,6 @@ p {
   gap: 14px;
 }
 
-.grid.three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .card,
 .data-section {
   border: 1px solid var(--line);
@@ -599,10 +591,6 @@ p {
   background: var(--panel);
   box-shadow: var(--shadow);
   overflow: hidden;
-}
-
-.card.flat {
-  box-shadow: none;
 }
 
 .card .head,
@@ -1174,17 +1162,6 @@ p {
   gap: 12px;
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.toolbar input {
-  max-width: 420px;
-}
-
 .page-list {
   display: grid;
   border-top: 1px solid var(--line);
@@ -1469,10 +1446,6 @@ p {
 .action-list > div > span {
   color: var(--soft);
   font-weight: 680;
-}
-
-.danger-zone {
-  color: var(--red);
 }
 
 .danger-disclosure {
@@ -2416,7 +2389,6 @@ tr:last-child td {
   }
 }
 
-.subsection-head,
 .job-head {
   display: flex;
   align-items: center;
@@ -2463,14 +2435,6 @@ tr:last-child td {
 .job-head span:not(.chip) {
   color: var(--muted);
   font-size: 12px;
-}
-
-.compact-disclosure {
-  margin-top: 14px;
-}
-
-.workflow-settings {
-  max-width: 720px;
 }
 
 @media (max-width: 920px) {
@@ -2525,7 +2489,6 @@ tr:last-child td {
 
   .settings-columns,
   .grid.two,
-  .grid.three,
   .form-grid.four-fields {
     grid-template-columns: 1fr;
   }
@@ -2674,7 +2637,6 @@ tr:last-child td {
   .active-page-summary,
   .page-item-footer,
   .preview-meta,
-  .toolbar,
   .action-list > div {
     align-items: stretch;
     flex-direction: column;

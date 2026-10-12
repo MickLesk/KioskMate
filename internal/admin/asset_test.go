@@ -23,8 +23,25 @@ func TestAssetServesEmbeddedJavaScript(t *testing.T) {
 	if rec.Body.Len() == 0 {
 		t.Fatal("expected embedded asset body")
 	}
-	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
-		t.Fatalf("cache-control = %q", got)
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" || rec.Header().Get("ETag") == "" {
+		t.Fatalf("cache-control = %q, etag = %q", got, rec.Header().Get("ETag"))
+	}
+
+	again := httptest.NewRequest(http.MethodGet, "/assets/app-core.js", nil)
+	again.Header.Set("If-None-Match", rec.Header().Get("ETag"))
+	again.Header.Set("Accept-Encoding", "gzip")
+	revalidated := httptest.NewRecorder()
+	server.asset(revalidated, again)
+	if revalidated.Code != http.StatusNotModified {
+		t.Fatalf("revalidation status = %d", revalidated.Code)
+	}
+
+	zipped := httptest.NewRequest(http.MethodGet, "/assets/app-core.js", nil)
+	zipped.Header.Set("Accept-Encoding", "gzip, br")
+	compressed := httptest.NewRecorder()
+	server.asset(compressed, zipped)
+	if compressed.Header().Get("Content-Encoding") != "gzip" || compressed.Body.Len() >= rec.Body.Len() {
+		t.Fatalf("gzip encoding = %q, size %d vs %d", compressed.Header().Get("Content-Encoding"), compressed.Body.Len(), rec.Body.Len())
 	}
 }
 

@@ -3,6 +3,12 @@ import { clearDirty, deleteJSON, getJSON, postJSON, refreshCore, renderApp, runA
 import { lines, renderJobsHTML } from "./renderers.js";
 
 export function bindHardware() {
+        document.querySelector('[data-action="hardware-rediscover"]')?.addEventListener("click", async () => {
+          await runAction("hardware-rediscover", async () => {
+            state.hardware = await getJSON("/api/hardware?rediscover=1", { timeout: 30000 });
+            renderApp();
+          });
+        });
         document.querySelector('[data-action="display-apply"]')?.addEventListener("click", async () => {
           await runAction("display-apply", async () => {
             if (state.hardware?.support?.display_status) await postJSON("/api/hardware/display", { value: val("display-power") });

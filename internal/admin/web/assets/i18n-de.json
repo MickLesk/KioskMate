@@ -688,5 +688,21 @@
   "timing": "Zeitsteuerung",
   "workflowReview": "Seite '{name}' läuft für {timing} und wechselt danach zu '{next}'.",
   "confirmRemovePage": "Diese Seite aus der Kiosk-Sequenz entfernen?",
-  "disablePage": "Diese Seite deaktivieren"
+  "disablePage": "Diese Seite deaktivieren",
+  "pageSwitching": "Seitenwechsel und Wartung",
+  "pageSwitchingKicker": "Last und Speicher",
+  "pageSwitchMode": "Seitenwechsel",
+  "pageSwitchNavigate": "Navigieren (wenigster Speicher)",
+  "pageSwitchTabs": "Seiten als Tabs offen halten (sofortiger Wechsel)",
+  "maxOpenTabs": "Maximal offene Tabs",
+  "pageSwitchHint": "Tabs halten zuletzt gezeigte Seiten geladen. Ein Wechsel zurück braucht kein Neuladen und keinen neuen Home-Assistant-Login. Versteckte Tabs werden gedrosselt; jeder offene Tab kostet Speicher.",
+  "pageSwitchIsolatedHint": "Getrennte Browser-Profile pro Seite sind aktiv: Jeder Seitenwechsel startet den Browser neu, der Tab-Modus wird nicht verwendet.",
+  "reloadEveryMinutes": "Seite neu laden alle (Minuten, 0 = aus)",
+  "reloadAtTime": "Täglich neu laden um",
+  "scheduledReloadHint": "Ein geplantes Neuladen gibt Speicher frei, den lange laufende Dashboards ansammeln. Die Sitzung bleibt erhalten, und es ist viel günstiger als ein Browser-Neustart durch den Watchdog.",
+  "authMonitor": "Home-Assistant-Login-Überwachung",
+  "authMonitorWindow": "Nach dem Laden einer Seite (empfohlen)",
+  "authMonitorAlways": "Immer",
+  "authMonitorHint": "Login-Fehler passieren beim Laden einer Seite. Nur dann zu überwachen spart CPU auf dem Kiosk; eine verlorene Sitzung lädt die Login-Seite, wodurch die Überwachung wieder startet.",
+  "rediscoverHardware": "Hardware neu erkennen"
 }

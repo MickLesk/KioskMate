@@ -3,6 +3,7 @@ package admin
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -534,12 +535,46 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	w.Header().Set("Cache-Control", "no-store, max-age=0")
-	w.Header().Set("Pragma", "no-cache")
+	// Embedded assets only change with the binary: revalidate by version so a
+	// reload costs a 304 instead of re-sending every module.
+	etag := `"` + url.QueryEscape(s.version) + "-" + name + `"`
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Accept-Encoding")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if compressed := gzipAsset(path, data); compressed != nil {
+			w.Header().Set("Content-Encoding", "gzip")
+			data = compressed
+		}
+	}
 	if r.Method == http.MethodHead {
 		return
 	}
 	_, _ = w.Write(data)
+}
+
+var gzipAssets sync.Map
+
+// gzipAsset compresses an embedded asset once per process and caches it.
+func gzipAsset(path string, data []byte) []byte {
+	if cached, ok := gzipAssets.Load(path); ok {
+		return cached.([]byte)
+	}
+	var buf bytes.Buffer
+	writer, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil
+	}
+	if _, err := writer.Write(data); err != nil || writer.Close() != nil {
+		return nil
+	}
+	compressed := buf.Bytes()
+	gzipAssets.Store(path, compressed)
+	return compressed
 }
 
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {

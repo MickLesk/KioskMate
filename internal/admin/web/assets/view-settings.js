@@ -72,6 +72,19 @@ export function renderSettingsAdmin() {
                 </div>
               </div>
             </div>
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("pageSwitching"))}</h3><span class="section-kicker">${esc(t("pageSwitchingKicker"))}</span></div></div>
+              <div class="body form-grid">
+                ${selectHtml("kiosk-page-switch", t("pageSwitchMode"), kiosk.page_switch || "navigate", [["navigate", t("pageSwitchNavigate")], ["tabs", t("pageSwitchTabs")]])}
+                ${field("kiosk-max-tabs", t("maxOpenTabs"), "number", "", kiosk.max_tabs || 3)}
+                <p class="hint span-2">${esc(t(kiosk.isolate_page_sessions ? "pageSwitchIsolatedHint" : "pageSwitchHint"))}</p>
+                ${field("kiosk-reload-every", t("reloadEveryMinutes"), "number", "", kiosk.maintenance?.reload_every_minutes || "", "0")}
+                ${field("kiosk-reload-at", t("reloadAtTime"), "time", "", kiosk.maintenance?.reload_at || "")}
+                <p class="hint span-2">${esc(t("scheduledReloadHint"))}</p>
+                ${selectHtml("perf-auth-monitor", t("authMonitor"), perf.auth_monitor || "window", [["window", t("authMonitorWindow")], ["always", t("authMonitorAlways")]])}
+                <p class="hint span-2">${esc(t("authMonitorHint"))}</p>
+              </div>
+            </div>
 			<div class="card">
 			  <div class="head"><div><h3>${esc(t("runtimeTelemetry"))}</h3><span class="section-kicker">${esc(t("last24Hours"))}</span></div><button data-action="telemetry-reset">${esc(t("resetTelemetry"))}</button></div>
 			  <div class="body telemetry-panel">
