@@ -1145,4 +1145,3 @@ func randomToken() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
-
