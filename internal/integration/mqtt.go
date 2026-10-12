@@ -815,7 +815,7 @@ func (s *MQTTService) publishAll() error {
 	hwCtx, hwCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	hw := s.hardware.Status(hwCtx)
 	hwCancel()
-	timeStatus := systemtime.Read(context.Background(), cfg.Time.NTPServer)
+	timeStatus := systemtime.ReadCached(context.Background(), cfg.Time.NTPServer, 5*time.Minute)
 	status := s.browser.Status()
 	pages := s.pageEntities()
 	s.refreshOnePageHealth(pages)

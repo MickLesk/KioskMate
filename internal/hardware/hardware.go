@@ -22,7 +22,16 @@ type Service struct {
 	mu       sync.Mutex
 	cached   Status
 	cachedAt time.Time
+	fastAt   time.Time
 }
+
+// Status is split into a slow part (display, audio, disk, network, session),
+// which shells out to external tools and is refreshed every slowStatusTTL or
+// after an own control command, and a fast part read from /proc and /sys.
+const (
+	slowStatusTTL = 2 * time.Minute
+	fastStatusTTL = 5 * time.Second
+)
 
 type Status struct {
 	Support Support           `json:"support"`
@@ -55,19 +64,58 @@ func New() *Service {
 func (s *Service) Status(ctx context.Context) Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.cachedAt.IsZero() && time.Since(s.cachedAt) < 5*time.Second {
-		return s.cached
+	now := time.Now()
+	if s.cachedAt.IsZero() || now.Sub(s.cachedAt) >= slowStatusTTL {
+		s.cached = collectStatus(ctx)
+		s.cachedAt = now
+		s.fastAt = now
+	} else if now.Sub(s.fastAt) >= fastStatusTTL {
+		s.cached.System = refreshFastSystem(s.cached.System)
+		s.cached.Runtime = runtimeStatus()
+		s.fastAt = now
 	}
-	status := collectStatus(ctx)
-	s.cached = status
-	s.cachedAt = time.Now()
-	return status
+	return s.cached
 }
 
+// InvalidateCache forces the next Status call to re-read display, audio and
+// system values, e.g. after a control command changed them.
 func (s *Service) InvalidateCache() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cachedAt = time.Time{}
+}
+
+// Rediscover drops all memoized capability probes (sudo rights, ddcutil
+// features, display tool, session type) and the status cache.
+func (s *Service) Rediscover() {
+	resetProbes()
+	s.InvalidateCache()
+}
+
+// refreshFastSystem returns a copy of system with the cheap /proc and /sys
+// values updated. A copy is required because earlier Status results may still
+// be read by other goroutines.
+func refreshFastSystem(system map[string]any) map[string]any {
+	next := make(map[string]any, len(system)+4)
+	for key, value := range system {
+		next[key] = value
+	}
+	next["uptime_minutes"] = uptimeMinutes()
+	next["memory_usage_percent"] = memoryUsagePercent()
+	next["processor_usage_percent"] = processorUsagePercent()
+	next["processor_temperature_c"] = processorTemperature()
+	next["battery_level"] = batteryLevel()
+	next["illuminance_level"] = illuminanceLevel()
+	return next
+}
+
+func runtimeStatus() map[string]any {
+	return map[string]any{
+		"go":         runtime.Version(),
+		"goos":       runtime.GOOS,
+		"goarch":     runtime.GOARCH,
+		"goroutines": runtime.NumGoroutine(),
+	}
 }
 
 func collectStatus(ctx context.Context) Status {
@@ -102,12 +150,7 @@ func collectStatus(ctx context.Context) Status {
 			"illuminance_level":       illuminanceLevel(),
 			"package_upgrades":        packageUpgradeCount(ctx),
 		},
-		Runtime: map[string]any{
-			"go":         runtime.Version(),
-			"goos":       runtime.GOOS,
-			"goarch":     runtime.GOARCH,
-			"goroutines": runtime.NumGoroutine(),
-		},
+		Runtime: runtimeStatus(),
 		Display: map[string]any{
 			"power":      displayStatus(ctx),
 			"brightness": displayBrightness(ctx),
@@ -176,7 +219,7 @@ func (s *Service) SetBrightness(ctx context.Context, percent int) error {
 	if percent < 1 || percent > 100 {
 		return errors.New("brightness must be between 1 and 100")
 	}
-	if commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: 10") {
+	if ddcSupports(ctx, "10") {
 		err := wrapDdcutilSudoError(run(ctx, "sudo", "ddcutil", "setvcp", "0x10", strconv.Itoa(percent)))
 		if err == nil {
 			s.InvalidateCache()
@@ -245,7 +288,7 @@ func detectSupport(ctx context.Context) Support {
 	return Support{
 		SudoRights:           sudoRights(ctx),
 		DisplayStatus:        displayCommand(ctx) != "",
-		DisplayBrightness:    (backlightPath() != "" && sudoRights(ctx)) || (commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: 10")),
+		DisplayBrightness:    (backlightPath() != "" && sudoRights(ctx)) || (ddcSupports(ctx, "10")),
 		AudioVolume:          commandExists("pactl") && runText(ctx, "pactl", "get-default-sink") != "",
 		MicrophoneVolume:     commandExists("pactl") && runText(ctx, "pactl", "get-default-source") != "",
 		KeyboardVisibility:   processRuns(ctx, "squeekboard") && commandExists("dbus-send"),
@@ -258,9 +301,13 @@ func detectSupport(ctx context.Context) Support {
 
 func displayCommand(ctx context.Context) string {
 	ensureDisplayEnv()
+	return memoProbe("display-command", displayCmdTTL, func() string { return detectDisplayCommand(ctx) })
+}
+
+func detectDisplayCommand(ctx context.Context) string {
 	session := sessionType(ctx)
 	desktop := sessionDesktop()
-	if commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: D6") {
+	if ddcSupports(ctx, "D6") {
 		return "ddcutil"
 	}
 	if session == "wayland" || os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland" {
@@ -319,7 +366,7 @@ func displayStatus(ctx context.Context) any {
 }
 
 func displayBrightness(ctx context.Context) any {
-	if commandExists("ddcutil") && sudoRights(ctx) {
+	if ddcSupports(ctx, "10") {
 		out := runText(ctx, "sudo", "ddcutil", "getvcp", "0x10", "--brief")
 		match := regexp.MustCompile(`VCP 10 C (\d+) (\d+)`).FindStringSubmatch(out)
 		if len(match) == 3 {
@@ -472,6 +519,10 @@ func primaryAddress() string {
 }
 
 func sessionType(ctx context.Context) string {
+	return memoProbe("session-type", sessionTTL, func() string { return detectSessionType(ctx) })
+}
+
+func detectSessionType(ctx context.Context) string {
 	if !commandExists("loginctl") {
 		return os.Getenv("XDG_SESSION_TYPE")
 	}
@@ -635,10 +686,6 @@ func meminfo(key string) uint64 {
 		}
 	}
 	return 0
-}
-
-func sudoRights(ctx context.Context) bool {
-	return run(ctx, "sudo", "-n", "true") == nil
 }
 
 // wrapDdcutilSudoError replaces cryptic sudo/ddcutil failures (missing

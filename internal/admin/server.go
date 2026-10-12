@@ -416,6 +416,9 @@ func (s *Server) hardwareStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	if r.URL.Query().Get("rediscover") == "1" {
+		s.hardware.Rediscover()
+	}
 	writeJSON(w, http.StatusOK, s.hardware.Status(ctx))
 }
 

@@ -8,8 +8,29 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	cacheMu  sync.Mutex
+	cached   Status
+	cachedAt time.Time
+)
+
+// ReadCached returns the last Read result when it is younger than maxAge.
+// Periodic publishers use it so `timedatectl` is not spawned every cycle.
+func ReadCached(ctx context.Context, configuredServer string, maxAge time.Duration) Status {
+	cacheMu.Lock()
+	if !cachedAt.IsZero() && time.Since(cachedAt) < maxAge && cached.Server == configuredServer {
+		status := cached
+		cacheMu.Unlock()
+		status.CurrentTime = time.Now()
+		return status
+	}
+	cacheMu.Unlock()
+	return Read(ctx, configuredServer)
+}
 
 type Status struct {
 	CurrentTime  time.Time `json:"current_time"`
@@ -24,6 +45,14 @@ type Status struct {
 }
 
 func Read(ctx context.Context, configuredServer string) Status {
+	status := read(ctx, configuredServer)
+	cacheMu.Lock()
+	cached, cachedAt = status, time.Now()
+	cacheMu.Unlock()
+	return status
+}
+
+func read(ctx context.Context, configuredServer string) Status {
 	status := Status{CurrentTime: time.Now(), Server: configuredServer}
 	if runtime.GOOS != "linux" {
 		status.Timezone = status.CurrentTime.Location().String()
