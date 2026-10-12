@@ -59,6 +59,25 @@ func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
 	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, `<script type="module" src="/assets/main.js?v=0.7.1">`) {
 		t.Fatalf("index does not load the versioned module entry point: %s", body)
 	}
+	// The stylesheets are cascade layers and must load in this order.
+	last := -1
+	for _, name := range []string{"tokens.css", "layout.css", "components.css", "views.css"} {
+		link := `<link rel="stylesheet" href="/assets/` + name + `?v=0.7.1" />`
+		at := strings.Index(body, link)
+		if at < 0 {
+			t.Fatalf("index is missing the versioned stylesheet %s", name)
+		}
+		if at < last {
+			t.Fatalf("stylesheet %s is loaded out of order", name)
+		}
+		last = at
+		if _, err := content.ReadFile("web/assets/" + name); err != nil {
+			t.Fatalf("stylesheet %s is not embedded: %v", name, err)
+		}
+	}
+	if strings.Contains(body, "app.css") {
+		t.Fatal("index still references the removed app.css")
+	}
 	if !strings.Contains(body, "Loading control panel") {
 		t.Fatal("index is missing visible bootstrap state")
 	}
