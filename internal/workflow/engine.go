@@ -65,7 +65,7 @@ type Engine struct {
 	history      []Run
 	started      time.Time
 	displayTimer *time.Timer
-	running   sync.Mutex
+	running      sync.Mutex
 }
 
 func New(cfg *config.Config, browser Browser, hardware Hardware, logger *slog.Logger, journal *events.Journal) *Engine {
