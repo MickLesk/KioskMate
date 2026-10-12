@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,5 +69,15 @@ func TestNextSchedulerWakeUsesEarlierSwitch(t *testing.T) {
 	}
 	if wake := nextSchedulerWake(now, 15*time.Second, nil); wake != 15*time.Second {
 		t.Fatalf("wake without switch = %s", wake)
+	}
+}
+
+func TestOverlayScriptEscapesText(t *testing.T) {
+	script := overlayScript(`</script><img src=x onerror=alert(1)> "quoted"`, 3*time.Second)
+	if strings.Contains(script, "<img") || strings.Contains(script, "</script>") || !strings.Contains(script, `\"quoted\"`) {
+		t.Fatalf("overlay text not JSON-encoded:\n%s", script)
+	}
+	if !strings.Contains(script, "setTimeout(() => box.remove(), 3000)") {
+		t.Fatal("overlay duration missing")
 	}
 }

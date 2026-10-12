@@ -25,6 +25,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/logutil"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/updater"
+	"github.com/MickLesk/KioskMate/internal/workflow"
 )
 
 var version = "dev"
@@ -87,6 +88,9 @@ func main() {
 	browser.SetDisplayPower(hardwareService)
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"), eventJournal)
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"), eventJournal)
+	workflowEngine := workflow.New(cfg, browser, hardwareService, logger.With("component", "workflow"), eventJournal)
+	mqttService.SetWorkflow(workflowEngine)
+	server.SetWorkflow(workflowEngine)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -106,6 +110,7 @@ func main() {
 	}()
 	go browser.RunScheduler(ctx)
 	go mqttService.Run(ctx)
+	go workflowEngine.Run(ctx)
 	go updateService.Run(ctx)
 
 	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())

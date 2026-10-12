@@ -100,6 +100,7 @@ type Server struct {
 	updater  *updater.Service
 	actions  *actions.Service
 	hardware *hardware.Service
+	workflow WorkflowEngine
 	logger   *slog.Logger
 	version  string
 	journal  *events.Journal
@@ -249,6 +250,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
 	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
 	mux.HandleFunc("/api/stream", s.auth(s.stream))
+	mux.HandleFunc("/api/rules/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/trigger") {
+			s.ruleWebhook(w, r)
+			return
+		}
+		s.auth(s.ruleAction)(w, r)
+	})
 	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
 	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
 	mux.HandleFunc("/api/terminal/run", s.auth(s.terminalRun))

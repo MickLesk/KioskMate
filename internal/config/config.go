@@ -66,6 +66,8 @@ type KioskConfig struct {
 	// open as tabs and switch between them without reloading.
 	PageSwitch string `json:"page_switch,omitempty"`
 	MaxTabs    int    `json:"max_tabs,omitempty"`
+	// Rules are event-driven workflow steps on top of the playlist.
+	Rules []WorkflowRule `json:"rules,omitempty"`
 }
 
 // KioskMaintenance schedules soft page reloads. Dashboards that run for days
@@ -339,6 +341,7 @@ func (cfg *Config) Snapshot() *Config {
 	for i := range clone.Kiosk.TimeRules {
 		clone.Kiosk.TimeRules[i].Days = slices.Clone(cfg.Kiosk.TimeRules[i].Days)
 	}
+	clone.Kiosk.Rules = cloneRules(cfg.Kiosk.Rules)
 	return &clone
 }
 
@@ -450,6 +453,9 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Kiosk.MaxTabs < 0 || cfg.Kiosk.MaxTabs > 8 {
 		return errors.New("maximum open tabs must be between 1 and 8")
+	}
+	if err := validateRules(cfg.Kiosk); err != nil {
+		return err
 	}
 	if every := cfg.Kiosk.Maintenance.ReloadEveryMinutes; every != 0 && (every < 10 || every > 7*24*60) {
 		return errors.New("scheduled reload interval must be 0 or between 10 minutes and 7 days")
