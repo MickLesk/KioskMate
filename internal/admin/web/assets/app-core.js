@@ -1,4 +1,5 @@
 import { bindView } from "./actions-core.js";
+import { bindScope, morph } from "./dom.js";
 import { KioskMateAPI } from "./api.js";
 import { I18N, loadLanguage } from "./i18n.js";
 import { button, stateBanner } from "./renderers.js";
@@ -443,6 +444,7 @@ const NAV = [
 		  else await refreshCore(true);
           renderApp();
           startUpdateStatusPolling();
+          startLiveUpdates();
 		  refreshCore(false).then(() => {
 			if (state.auth?.authenticated) renderAppIfIdle();
 		  }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
@@ -502,7 +504,8 @@ const NAV = [
 		</section></main>`;
 		document.querySelector('[data-action="fatal-retry"]')?.addEventListener("click", () => boot());
 		document.querySelector('[data-action="fatal-login"]')?.addEventListener("click", async () => {
-		  try { await postJSON("/api/auth/logout"); } catch (_) {}
+		  try { stopLiveUpdates();
+          await postJSON("/api/auth/logout"); } catch (_) {}
 		  state.auth = { authenticated: false, setupRequired: false };
 		  renderLogin();
 		});
@@ -553,6 +556,7 @@ const NAV = [
       }
 
       function renderLogin() {
+		stopLiveUpdates();
 		if (authCountdownTimer) clearInterval(authCountdownTimer);
 		authCountdownTimer = null;
         const setup = !!state.auth?.setupRequired;
@@ -596,6 +600,7 @@ const NAV = [
 			renderApp();
 			toast(t("signedIn"), "", "ok");
 			startUpdateStatusPolling();
+          startLiveUpdates();
 			refreshCore(false).then(() => { if (state.auth?.authenticated) renderAppIfIdle(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
 		  } catch (error) {
 			const currentError = document.getElementById("auth-error");
@@ -649,13 +654,19 @@ const NAV = [
 		authCountdownTimer = setInterval(update, 1000);
 	  }
 
-      export function renderApp() {
+      // renderApp morphs the page to the current state. A background render
+      // (live updates) keeps the value of the focused field and, while the
+      // user is editing or a view has unsaved changes, leaves the content
+      // area untouched and only refreshes the shell (status chips, nav).
+      export function renderApp({ background = false } = {}) {
 		if (authCountdownTimer) clearInterval(authCountdownTimer);
 		authCountdownTimer = null;
         const browser = state.status?.browser || {};
         const mqtt = state.status?.mqtt || {};
         const timeInfo = state.time || {};
-        root.innerHTML = `
+        const keepContent = background && (state.dirtyViews.size > 0 || isEditing());
+        if (!root.querySelector(":scope > .layout")) root.innerHTML = "";
+        const html = `
           <div class="layout">
             <aside class="sidebar ${state.mobileNavOpen ? "mobile-open" : ""}">
               <div class="brand">
@@ -700,19 +711,80 @@ const NAV = [
               </section>
             </main>
           </div>`;
-        bindShell();
-        bindView();
-        bindDirtyTracking();
+        morph(root, html, {
+          preserveFocused: background,
+          skip: keepContent ? (element) => element.classList.contains("content") : undefined,
+        });
+        bindScope(() => {
+          bindShell();
+          bindView();
+          bindDirtyTracking();
+        });
         startHeaderClock();
       }
 
+      function isEditing() {
+        const active = document.activeElement;
+        return !!active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
+      }
+
+	  // Background refreshes (loaded data, live updates) never discard input.
 	  export function renderAppIfIdle() {
-		const active = document.activeElement;
-		const editing = active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
-		if (state.dirtyViews.size || editing) return false;
-		renderApp();
+		renderApp({ background: true });
 		return true;
 	  }
+
+      let liveSource = null;
+      let liveRenderTimer = null;
+
+      // Live updates over Server-Sent Events while the Admin tab is visible.
+      // The server samples nothing for the stream when no tab is connected.
+      export function startLiveUpdates() {
+        stopLiveUpdates();
+        if (typeof EventSource === "undefined" || document.hidden || !state.auth?.authenticated) return;
+        liveSource = new EventSource("/api/stream");
+        liveSource.addEventListener("status", (event) => {
+          try {
+            applyCoreState({ status: JSON.parse(event.data) });
+          } catch {
+            return;
+          }
+          scheduleLiveRender();
+        });
+        liveSource.addEventListener("events", (event) => {
+          try {
+            const fresh = JSON.parse(event.data) || [];
+            const known = new Set((state.events || []).map((item) => item.id));
+            state.events = [...(state.events || []), ...fresh.filter((item) => !known.has(item.id))].slice(-200);
+          } catch {
+            return;
+          }
+          scheduleLiveRender();
+        });
+        liveSource.addEventListener("auth", () => {
+          stopLiveUpdates();
+          state.auth = null;
+          boot();
+        });
+      }
+
+      export function stopLiveUpdates() {
+        if (liveSource) liveSource.close();
+        liveSource = null;
+      }
+
+      function scheduleLiveRender() {
+        if (liveRenderTimer || !state.auth?.authenticated) return;
+        liveRenderTimer = setTimeout(() => {
+          liveRenderTimer = null;
+          if (state.auth?.authenticated) renderApp({ background: true });
+        }, 100);
+      }
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stopLiveUpdates();
+        else if (state.auth?.authenticated) startLiveUpdates();
+      });
 
       function renderNav() {
         return NAV.map((item) => {
@@ -811,6 +883,7 @@ const NAV = [
         document.getElementById("theme")?.addEventListener("change", (event) => setTheme(event.target.value));
         document.querySelector('[data-action="logout"]')?.addEventListener("click", async () => {
           if (!confirmDiscard()) return;
+          stopLiveUpdates();
           await postJSON("/api/auth/logout");
           state.auth = null;
           await boot();

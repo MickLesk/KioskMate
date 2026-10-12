@@ -247,6 +247,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
 	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
+	mux.HandleFunc("/api/stream", s.auth(s.stream))
 	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
 	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
 	mux.HandleFunc("/api/terminal/run", s.auth(s.terminalRun))
