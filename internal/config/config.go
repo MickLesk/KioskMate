@@ -62,6 +62,10 @@ type KioskConfig struct {
 	Rotation        []RotationItem   `json:"rotation"`
 	TimeRules       []TimeRule       `json:"time_rules"`
 	Maintenance     KioskMaintenance `json:"maintenance,omitempty"`
+	// PageSwitch is "navigate" (default) or "tabs": keep up to MaxTabs pages
+	// open as tabs and switch between them without reloading.
+	PageSwitch string `json:"page_switch,omitempty"`
+	MaxTabs    int    `json:"max_tabs,omitempty"`
 }
 
 // KioskMaintenance schedules soft page reloads. Dashboards that run for days
@@ -440,6 +444,12 @@ func Validate(cfg *Config) error {
 	}
 	if tick := cfg.Kiosk.Scheduler.TickInterval; tick < 0 || tick > 24*time.Hour {
 		return errors.New("scheduler tick interval must be between 0 and 24 hours")
+	}
+	if mode := cfg.Kiosk.PageSwitch; mode != "" && mode != "navigate" && mode != "tabs" {
+		return errors.New("page switch mode must be navigate or tabs")
+	}
+	if cfg.Kiosk.MaxTabs < 0 || cfg.Kiosk.MaxTabs > 8 {
+		return errors.New("maximum open tabs must be between 1 and 8")
 	}
 	if every := cfg.Kiosk.Maintenance.ReloadEveryMinutes; every != 0 && (every < 10 || every > 7*24*60) {
 		return errors.New("scheduled reload interval must be 0 or between 10 minutes and 7 days")

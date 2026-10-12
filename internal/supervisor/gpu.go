@@ -3,16 +3,9 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 // GPUInfo is the subset of Chromium's chrome://gpu report that tells whether
@@ -46,26 +39,10 @@ func (b *Browser) GPUInfo(ctx context.Context) (GPUInfo, error) {
 func readGPUInfo(ctx context.Context, profile string) (GPUInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	data, err := os.ReadFile(filepath.Join(profile, "DevToolsActivePort"))
+	session, err := dialBrowserTarget(ctx, profile)
 	if err != nil {
 		return GPUInfo{}, err
 	}
-	lines := strings.Fields(string(data))
-	if len(lines) < 2 {
-		return GPUInfo{}, errors.New("DevToolsActivePort has no browser target")
-	}
-	port, err := strconv.Atoi(lines[0])
-	if err != nil || port < 1 || port > 65535 || !strings.HasPrefix(lines[1], "/devtools/browser/") {
-		return GPUInfo{}, errors.New("DevToolsActivePort is invalid")
-	}
-	conn, _, err := websocket.Dial(ctx, fmt.Sprintf("ws://127.0.0.1:%d%s", port, lines[1]), &websocket.DialOptions{
-		HTTPClient: &http.Client{Timeout: 5 * time.Second},
-	})
-	if err != nil {
-		return GPUInfo{}, fmt.Errorf("connect to Chromium browser target: %w", err)
-	}
-	conn.SetReadLimit(8 << 20)
-	session := newCDPSession(conn)
 	defer session.close()
 	var result systemInfoResult
 	if err := session.command(ctx, "SystemInfo.getInfo", map[string]any{}, &result); err != nil {

@@ -64,6 +64,12 @@ type Browser struct {
 	rotationIndex    int
 	rotationUntil    time.Time
 	lastMaintenance  time.Time
+	activeTarget     string
+	tabs             map[int]string
+	tabUse           []int
+	retarget         bool
+	pendingBlank     map[string]bool
+	tabURL           map[int]string
 	devTools         bool
 	requiresControl  bool
 	readySince       time.Time
@@ -111,6 +117,7 @@ type Status struct {
 	Recovery   RecoveryStatus          `json:"recovery"`
 	Telemetry  TelemetrySummary        `json:"telemetry"`
 	Override   ManualOverride          `json:"override"`
+	OpenTabs   int                     `json:"open_tabs"`
 }
 
 type ExitStatus struct {
@@ -308,6 +315,7 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	b.cmd = cmd
 	b.done = make(chan struct{})
 	done := b.done
+	b.resetTabsLocked()
 	b.started = time.Now()
 	b.generation++
 	b.startCount++
@@ -475,6 +483,13 @@ func (b *Browser) setActive(ctx context.Context, index int) error {
 	var err error
 	if !running {
 		err = b.start(ctx)
+	} else if !isolate && cfg.Kiosk.PageSwitch == "tabs" && previous != index {
+		if tabErr := b.switchTab(ctx, cfg, index); tabErr != nil {
+			b.logger.Warn("tab switch failed, navigating instead", "error", tabErr)
+			if navErr := b.navigateDevTools(ctx, target); navErr != nil {
+				err = b.restart(ctx, "page_navigation_recovery")
+			}
+		}
 	} else if !isolate || previous == index {
 		if navErr := b.navigateDevTools(ctx, target); navErr == nil {
 			err = nil
@@ -541,8 +556,9 @@ func (b *Browser) CaptureScreenshot(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("browser is not running")
 	}
 	profile := browserUserDataDir(cfg, b.active)
+	preferred := b.activeTarget
 	b.mu.Unlock()
-	return captureDevToolsScreenshot(ctx, profile)
+	return captureDevToolsScreenshot(ctx, profile, preferred)
 }
 
 func (b *Browser) TripAuthGuard(reason string) {
@@ -564,6 +580,7 @@ func (b *Browser) Status() Status {
 	defer b.mu.Unlock()
 	command, args, err := b.command()
 	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation, Exit: b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts)}
+	status.OpenTabs = len(b.tabs)
 	status.Control = ControlStatus{Required: b.requiresControl, Connected: b.devTools, Failures: b.controlFailures, LastError: b.controlError}
 	if !b.controlConnected.IsZero() {
 		connected := b.controlConnected

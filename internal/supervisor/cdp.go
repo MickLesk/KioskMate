@@ -50,10 +50,10 @@ type themeReport struct {
 	AppliedDark    *bool  `json:"applied_dark,omitempty"`
 }
 
-func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
+func dialDevTools(ctx context.Context, profile string, preferred string) (*cdpSession, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	target, err := waitForDevToolsTarget(ctx, profile)
+	target, err := waitForDevToolsTarget(ctx, profile, preferred)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +69,8 @@ func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
 	return session, nil
 }
 
-func captureDevToolsScreenshot(ctx context.Context, profile string) ([]byte, error) {
-	session, err := dialDevTools(ctx, profile)
+func captureDevToolsScreenshot(ctx context.Context, profile string, preferred string) ([]byte, error) {
+	session, err := dialDevTools(ctx, profile, preferred)
 	if err != nil {
 		return nil, err
 	}
@@ -144,10 +144,23 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 	}()
 	navigated := false
 	for attempt := 0; ctx.Err() == nil; attempt++ {
-		session, err := dialDevTools(ctx, profile)
+		b.mu.Lock()
+		preferred := b.activeTarget
+		b.mu.Unlock()
+		session, err := dialDevTools(ctx, profile, preferred)
 		if err == nil {
+			if b.bindControlTarget(session.target.ID) {
+				// A freshly created tab starts blank; navigate it once
+				// monitoring is attached, like the initial launch.
+				navigated = false
+			}
 			err = b.runDevTools(ctx, session, theme, done, &navigated)
 			session.close()
+		}
+		if b.consumeRetarget() && ctx.Err() == nil {
+			// Planned switch to another tab, not a control failure.
+			attempt = -1
+			continue
 		}
 		b.mu.Lock()
 		shouldRecover := false
@@ -572,11 +585,11 @@ func authRelevantResourceType(kind string) bool {
 	}
 }
 
-func waitForDevToolsTarget(ctx context.Context, profile string) (devToolsTarget, error) {
+func waitForDevToolsTarget(ctx context.Context, profile string, preferred string) (devToolsTarget, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		target, err := readDevToolsTarget(ctx, profile)
+		target, err := readDevToolsTarget(ctx, profile, preferred)
 		if err == nil {
 			return target, nil
 		}
@@ -588,7 +601,7 @@ func waitForDevToolsTarget(ctx context.Context, profile string) (devToolsTarget,
 	}
 }
 
-func readDevToolsTarget(ctx context.Context, profile string) (devToolsTarget, error) {
+func readDevToolsTarget(ctx context.Context, profile string, preferred string) (devToolsTarget, error) {
 	data, err := os.ReadFile(filepath.Join(profile, "DevToolsActivePort"))
 	if err != nil {
 		return devToolsTarget{}, err
@@ -617,6 +630,19 @@ func readDevToolsTarget(ctx context.Context, profile string) (devToolsTarget, er
 	var targets []devToolsTarget
 	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
 		return devToolsTarget{}, err
+	}
+	return pickDevToolsTarget(targets, preferred)
+}
+
+// pickDevToolsTarget returns the preferred page target (the active kiosk tab)
+// when it exists, otherwise the first page target.
+func pickDevToolsTarget(targets []devToolsTarget, preferred string) (devToolsTarget, error) {
+	if preferred != "" {
+		for _, target := range targets {
+			if target.ID == preferred && target.Type == "page" && target.WebSocketDebuggerURL != "" {
+				return target, nil
+			}
+		}
 	}
 	for _, target := range targets {
 		if target.Type == "page" && target.WebSocketDebuggerURL != "" {
