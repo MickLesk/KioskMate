@@ -25,13 +25,16 @@ type WorkflowRule struct {
 //   - "mqtt": Topic, optional Payload (empty matches any payload)
 //   - "time": At (HH:MM) on Days (empty = every day)
 //   - "webhook": POST /api/rules/<id>/trigger?token=<Token>
+//   - "touch": any touch, click, key or wheel input on the kiosk page
+//   - "idle": no input for IdleSeconds (fires once, re-armed by input)
 type RuleTrigger struct {
-	Type    string   `json:"type"`
-	Topic   string   `json:"topic,omitempty"`
-	Payload string   `json:"payload,omitempty"`
-	At      string   `json:"at,omitempty"`
-	Days    []string `json:"days,omitempty"`
-	Token   string   `json:"token,omitempty"`
+	Type        string   `json:"type"`
+	Topic       string   `json:"topic,omitempty"`
+	Payload     string   `json:"payload,omitempty"`
+	At          string   `json:"at,omitempty"`
+	Days        []string `json:"days,omitempty"`
+	Token       string   `json:"token,omitempty"`
+	IdleSeconds int      `json:"idle_seconds,omitempty"`
 }
 
 // RuleConditions must all hold when the trigger fires.
@@ -43,22 +46,28 @@ type RuleConditions struct {
 }
 
 // RuleAction types:
-//   - "show_page": PageID, DurationSeconds (0 = 1 hour), then back to the playlist
-//   - "resume_playlist": end a page shown by a rule or manual override
-//   - "display": Value ON or OFF
+//   - "show_page": PageID, DurationSeconds (0 = 1 hour) or UntilResume, then
+//     back to the playlist
+//   - "resume_playlist": end a page shown by a rule
+//   - "display": Value ON or OFF; with DurationSeconds the opposite state
+//     follows after that time ("motion: display on for 2 minutes")
 //   - "brightness": Value 1-100
 //   - "reload": reload the current page
 //   - "overlay": Value text shown as a banner for DurationSeconds (default 10)
 //   - "script": Value JavaScript evaluated in the current page
+//   - "click": Value CSS selector of the element to click
+//   - "scroll": Value pixels (e.g. 400 or -400) or a CSS selector to scroll to
+//   - "sound": Value audio URL, or empty for a short chime
 type RuleAction struct {
 	Type            string `json:"type"`
 	PageID          string `json:"page_id,omitempty"`
 	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	UntilResume     bool   `json:"until_resume,omitempty"`
 	Value           string `json:"value,omitempty"`
 }
 
-var ruleTriggerTypes = []string{"mqtt", "time", "webhook"}
-var ruleActionTypes = []string{"show_page", "resume_playlist", "display", "brightness", "reload", "overlay", "script"}
+var ruleTriggerTypes = []string{"mqtt", "time", "webhook", "touch", "idle"}
+var ruleActionTypes = []string{"show_page", "resume_playlist", "display", "brightness", "reload", "overlay", "script", "click", "scroll", "sound"}
 
 // EnabledPageIndex maps a stable page ID to the index the browser uses (the
 // position among enabled pages), or -1.
@@ -118,6 +127,11 @@ func validateRules(kiosk KioskConfig) error {
 		case "webhook":
 			if len(strings.TrimSpace(rule.Trigger.Token)) < 16 {
 				return fail("webhook trigger needs a token of at least 16 characters")
+			}
+		case "touch":
+		case "idle":
+			if rule.Trigger.IdleSeconds < 10 || rule.Trigger.IdleSeconds > 86400 {
+				return fail("idle trigger needs between 10 and 86400 seconds")
 			}
 		default:
 			return fail("trigger must be one of %s", strings.Join(ruleTriggerTypes, ", "))
@@ -183,6 +197,18 @@ func validateRuleAction(action RuleAction, pageIDs map[string]bool) error {
 	case "script":
 		if strings.TrimSpace(action.Value) == "" || len(action.Value) > 8000 {
 			return errors.New("script action needs JavaScript up to 8000 characters")
+		}
+	case "click":
+		if strings.TrimSpace(action.Value) == "" || len(action.Value) > 500 {
+			return errors.New("click action needs a CSS selector")
+		}
+	case "scroll":
+		if strings.TrimSpace(action.Value) == "" || len(action.Value) > 500 {
+			return errors.New("scroll action needs pixels or a CSS selector")
+		}
+	case "sound":
+		if value := strings.TrimSpace(action.Value); value != "" && !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") {
+			return errors.New("sound action needs an http(s) URL or nothing for the default chime")
 		}
 	case "resume_playlist", "reload":
 	default:

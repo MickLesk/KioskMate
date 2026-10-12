@@ -29,6 +29,9 @@ func TestValidateRules(t *testing.T) {
 		"start and end":     func(k *KioskConfig) { k.Rules[0].Conditions.Start = "08:00" },
 		"between 1 and 100": func(k *KioskConfig) { k.Rules[0].Actions[0] = RuleAction{Type: "brightness", Value: "0"} },
 		"at least one":      func(k *KioskConfig) { k.Rules[0].Actions = nil },
+		"idle trigger":      func(k *KioskConfig) { k.Rules[0].Trigger = RuleTrigger{Type: "idle", IdleSeconds: 5} },
+		"http(s) URL":       func(k *KioskConfig) { k.Rules[0].Actions[0] = RuleAction{Type: "sound", Value: "file:///etc/passwd"} },
+		"CSS selector":      func(k *KioskConfig) { k.Rules[0].Actions[0] = RuleAction{Type: "click"} },
 	}
 	for want, mutate := range cases {
 		kiosk := base()

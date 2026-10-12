@@ -89,6 +89,9 @@ func (s *Service) InvalidateCache() {
 // features, display tool, session type) and the status cache.
 func (s *Service) Rediscover() {
 	resetProbes()
+	diskUsageMu.Lock()
+	diskUsageAt = time.Time{}
+	diskUsageMu.Unlock()
 	s.InvalidateCache()
 }
 
@@ -449,7 +452,27 @@ func packageUpgradeCount(ctx context.Context) any {
 	return count
 }
 
+// Disk usage changes slowly; df runs at most every diskUsageTTL.
+const diskUsageTTL = 10 * time.Minute
+
+var (
+	diskUsageMu     sync.Mutex
+	diskUsageCached any
+	diskUsageAt     time.Time
+)
+
 func diskUsage(ctx context.Context) any {
+	diskUsageMu.Lock()
+	defer diskUsageMu.Unlock()
+	if !diskUsageAt.IsZero() && time.Since(diskUsageAt) < diskUsageTTL {
+		return diskUsageCached
+	}
+	diskUsageCached = readDiskUsage(ctx)
+	diskUsageAt = time.Now()
+	return diskUsageCached
+}
+
+func readDiskUsage(ctx context.Context) any {
 	out := runText(ctx, "df", "-B1", "/")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {

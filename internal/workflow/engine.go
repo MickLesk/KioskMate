@@ -27,6 +27,10 @@ type Browser interface {
 	ShowOverlay(ctx context.Context, text string, duration time.Duration) error
 	ActivePage() int
 	NoteDisplayPower(power string)
+	// OverrideSource reports an active page override and who set it.
+	OverrideSource() (bool, string)
+	// LastActivity is the last user input on the kiosk page, or zero.
+	LastActivity() time.Time
 }
 
 // Hardware controls the physical display.
@@ -54,10 +58,13 @@ type Engine struct {
 	journal  *events.Journal
 	now      func() time.Time
 
-	mu        sync.Mutex
-	lastFired map[string]time.Time
-	timeFired map[string]string
-	history   []Run
+	mu           sync.Mutex
+	lastFired    map[string]time.Time
+	timeFired    map[string]string
+	idleFired    map[string]bool
+	history      []Run
+	started      time.Time
+	displayTimer *time.Timer
 	running   sync.Mutex
 }
 
@@ -67,16 +74,18 @@ func New(cfg *config.Config, browser Browser, hardware Hardware, logger *slog.Lo
 	}
 	return &Engine{
 		cfg: cfg, browser: browser, hardware: hardware, logger: logger, journal: journal, now: time.Now,
-		lastFired: map[string]time.Time{}, timeFired: map[string]string{},
+		lastFired: map[string]time.Time{}, timeFired: map[string]string{}, idleFired: map[string]bool{},
+		started: time.Now(),
 	}
 }
 
-// Run evaluates time triggers every 20 seconds until ctx ends.
+// Run evaluates time and idle triggers every 5 seconds until ctx ends.
 func (e *Engine) Run(ctx context.Context) {
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		e.checkTime(ctx)
+		e.checkIdle(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -102,6 +111,45 @@ func (e *Engine) checkTime(ctx context.Context) {
 		e.mu.Unlock()
 		if !already {
 			e.fire(ctx, cfg, rule, "time")
+		}
+	}
+}
+
+// checkIdle fires idle rules once the kiosk page has seen no input for the
+// rule's idle time. A rule fires once per idle period; input re-arms it.
+func (e *Engine) checkIdle(ctx context.Context) {
+	cfg := e.cfg.Snapshot()
+	last := e.browser.LastActivity()
+	e.mu.Lock()
+	if last.IsZero() || last.Before(e.started) {
+		last = e.started
+	}
+	e.mu.Unlock()
+	idle := e.now().Sub(last)
+	for _, rule := range cfg.Kiosk.Rules {
+		if rule.Disabled || rule.Trigger.Type != "idle" || idle < time.Duration(rule.Trigger.IdleSeconds)*time.Second {
+			continue
+		}
+		e.mu.Lock()
+		already := e.idleFired[rule.ID]
+		e.idleFired[rule.ID] = true
+		e.mu.Unlock()
+		if !already {
+			e.fire(ctx, cfg, rule, "idle")
+		}
+	}
+}
+
+// HandleActivity is called on user input on the kiosk page: it fires touch
+// rules and re-arms idle rules.
+func (e *Engine) HandleActivity(ctx context.Context) {
+	e.mu.Lock()
+	clear(e.idleFired)
+	e.mu.Unlock()
+	cfg := e.cfg.Snapshot()
+	for _, rule := range cfg.Kiosk.Rules {
+		if !rule.Disabled && rule.Trigger.Type == "touch" {
+			e.fire(ctx, cfg, rule, "touch")
 		}
 	}
 }
@@ -227,6 +275,10 @@ func (e *Engine) execute(ctx context.Context, cfg *config.Config, rule config.Wo
 		actionCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := e.action(actionCtx, cfg, action)
 		cancel()
+		if errors.Is(err, errManualOverride) {
+			run.Skipped = "manual_override"
+			continue
+		}
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%d %s: %v", index+1, action.Type, err))
 		}
@@ -253,9 +305,28 @@ func (e *Engine) action(ctx context.Context, cfg *config.Config, action config.R
 		if index < 0 {
 			return errors.New("page is disabled or missing")
 		}
-		return e.browser.SetOverride(ctx, index, duration, "workflow")
+		if e.manualOverride() {
+			return errManualOverride
+		}
+		if action.UntilResume {
+			duration = 24 * time.Hour
+		}
+		return e.browser.SetOverride(ctx, index, duration, workflowSource)
 	case "resume_playlist":
+		active, source := e.browser.OverrideSource()
+		if !active {
+			return nil
+		}
+		if source != workflowSource {
+			return errManualOverride
+		}
 		return e.browser.ClearOverride()
+	case "click":
+		return e.browser.Evaluate(ctx, clickScript(action.Value))
+	case "scroll":
+		return e.browser.Evaluate(ctx, scrollScript(action.Value))
+	case "sound":
+		return e.browser.Evaluate(ctx, soundScript(action.Value))
 	case "reload":
 		return e.browser.Reload(ctx)
 	case "overlay":
@@ -267,10 +338,10 @@ func (e *Engine) action(ctx context.Context, cfg *config.Config, action config.R
 			return errors.New("display control unavailable")
 		}
 		power := strings.ToUpper(strings.TrimSpace(action.Value))
-		if err := e.hardware.SetDisplay(ctx, power); err != nil {
+		if err := e.setDisplay(ctx, power); err != nil {
 			return err
 		}
-		e.browser.NoteDisplayPower(power)
+		e.scheduleDisplayRevert(power, duration)
 		return nil
 	case "brightness":
 		if e.hardware == nil {
@@ -284,6 +355,52 @@ func (e *Engine) action(ctx context.Context, cfg *config.Config, action config.R
 	default:
 		return fmt.Errorf("unsupported action %q", action.Type)
 	}
+}
+
+// workflowSource marks page overrides set by rules. Priority is fixed:
+// a manual override (Admin UI, Home Assistant) beats rules, rules beat the
+// schedule and the rotation.
+const workflowSource = "workflow"
+
+var errManualOverride = errors.New("manual override active")
+
+func (e *Engine) manualOverride() bool {
+	active, source := e.browser.OverrideSource()
+	return active && source != workflowSource
+}
+
+func (e *Engine) setDisplay(ctx context.Context, power string) error {
+	if err := e.hardware.SetDisplay(ctx, power); err != nil {
+		return err
+	}
+	e.browser.NoteDisplayPower(power)
+	return nil
+}
+
+// scheduleDisplayRevert switches the display back after duration, e.g.
+// "on motion: display on for 2 minutes". A newer display action replaces a
+// pending revert.
+func (e *Engine) scheduleDisplayRevert(power string, duration time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.displayTimer != nil {
+		e.displayTimer.Stop()
+		e.displayTimer = nil
+	}
+	if duration <= 0 {
+		return
+	}
+	revert := "OFF"
+	if power == "OFF" {
+		revert = "ON"
+	}
+	e.displayTimer = time.AfterFunc(duration, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := e.setDisplay(ctx, revert); err != nil {
+			e.logger.Warn("workflow display revert failed", "power", revert, "error", err)
+		}
+	})
 }
 
 func (e *Engine) record(run Run) {

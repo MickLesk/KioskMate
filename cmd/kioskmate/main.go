@@ -110,6 +110,7 @@ func main() {
 	}()
 	go browser.RunScheduler(ctx)
 	go mqttService.Run(ctx)
+	browser.SetActivityHandler(func() { workflowEngine.HandleActivity(ctx) })
 	go workflowEngine.Run(ctx)
 	go updateService.Run(ctx)
 

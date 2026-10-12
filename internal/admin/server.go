@@ -1334,7 +1334,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit("config_save", "ok", "configuration saved", nil)
-		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "conflicts": next.Kiosk.Conflicts()})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

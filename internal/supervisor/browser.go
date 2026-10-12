@@ -63,7 +63,10 @@ type Browser struct {
 	scheduler        SchedulerStatus
 	rotationIndex    int
 	rotationUntil    time.Time
+	rotationCycles   int
 	lastMaintenance  time.Time
+	lastActivity     time.Time
+	activityHandler  func()
 	activeTarget     string
 	tabs             map[int]string
 	tabUse           []int
@@ -743,6 +746,9 @@ func (b *Browser) maintenanceReloadDue(now time.Time, maintenance config.KioskMa
 	if every := maintenance.ReloadEveryMinutes; every > 0 && now.Sub(last) >= time.Duration(every)*time.Minute {
 		due = true
 	}
+	if cycles := maintenance.ReloadAfterCycles; cycles > 0 && b.rotationCycles >= cycles {
+		due = true
+	}
 	if at, ok := parseClock(maintenance.ReloadAt); ok {
 		target := time.Date(now.Year(), now.Month(), now.Day(), at/60, at%60, 0, 0, now.Location())
 		if !now.Before(target) && last.Before(target) {
@@ -751,6 +757,7 @@ func (b *Browser) maintenanceReloadDue(now time.Time, maintenance config.KioskMa
 	}
 	if due {
 		b.lastMaintenance = now
+		b.rotationCycles = 0
 	}
 	return due
 }
@@ -1254,6 +1261,9 @@ func (b *Browser) rotationTarget(now time.Time, cfg config.KioskConfig, status S
 		b.rotationIndex = 0
 	} else if !now.Before(b.rotationUntil) {
 		b.rotationIndex = (b.rotationIndex + 1) % len(cfg.Rotation)
+		if b.rotationIndex == 0 {
+			b.rotationCycles++
+		}
 	}
 	if b.rotationUntil.IsZero() || !now.Before(b.rotationUntil) {
 		item := cfg.Rotation[b.rotationIndex]
@@ -1474,7 +1484,7 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
 		// Native Wayland when a compositor is present instead of XWayland.
-		"--ozone-platform-hint=auto",
+		ozonePlatformFlag(os.Getenv("WAYLAND_DISPLAY")),
 	}
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
@@ -1676,6 +1686,16 @@ func raspberryLowPowerArgs() []string {
 
 func chromiumLiteArgs() []string {
 	return raspberryLowPowerArgs()
+}
+
+// ozonePlatformFlag selects native Wayland explicitly inside a Wayland
+// session (labwc, Cage, Wayfire) so Chromium never falls back to XWayland and
+// an extra copy of every frame; elsewhere Chromium picks the platform itself.
+func ozonePlatformFlag(waylandDisplay string) string {
+	if strings.TrimSpace(waylandDisplay) != "" {
+		return "--ozone-platform=wayland"
+	}
+	return "--ozone-platform-hint=auto"
 }
 
 func browserUserDataDir(cfg *config.Config, page int) string {

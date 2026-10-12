@@ -76,6 +76,8 @@ type KioskConfig struct {
 type KioskMaintenance struct {
 	ReloadEveryMinutes int    `json:"reload_every_minutes,omitempty"`
 	ReloadAt           string `json:"reload_at,omitempty"`
+	// ReloadAfterCycles reloads after the rotation ran this many full rounds.
+	ReloadAfterCycles int `json:"reload_after_cycles,omitempty"`
 }
 
 type KioskPage struct {
@@ -89,6 +91,9 @@ type KioskPage struct {
 	Trigger         KioskPageTrigger    `json:"trigger,omitempty"`
 	DisplayOptions  KioskDisplayOptions `json:"display_options,omitempty"`
 	Disabled        bool                `json:"disabled"`
+	// Preload opens the page as a background tab when the browser starts and
+	// keeps it open (tab mode only).
+	Preload bool `json:"preload,omitempty"`
 }
 
 type KioskPageSchedule struct {
@@ -224,6 +229,17 @@ func (k KioskConfig) PageName(index int) string {
 
 func (k KioskConfig) PageCount() int {
 	return len(k.PageURLs())
+}
+
+// PreloadIndexes returns the enabled-page indexes marked for preloading.
+func (k KioskConfig) PreloadIndexes() []int {
+	var out []int
+	for index, page := range k.enabledPages() {
+		if page.Preload {
+			out = append(out, index)
+		}
+	}
+	return out
 }
 
 func (k KioskConfig) enabledPages() []KioskPage {
@@ -462,6 +478,9 @@ func Validate(cfg *Config) error {
 	}
 	if at := strings.TrimSpace(cfg.Kiosk.Maintenance.ReloadAt); at != "" && !validClock(at) {
 		return errors.New("scheduled reload time must use HH:MM")
+	}
+	if cycles := cfg.Kiosk.Maintenance.ReloadAfterCycles; cycles < 0 || cycles > 10000 {
+		return errors.New("reload after rotation rounds must be between 0 and 10000")
 	}
 	for index, page := range cfg.Kiosk.Pages {
 		if strings.TrimSpace(page.URL) == "" {

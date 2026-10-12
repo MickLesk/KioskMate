@@ -111,7 +111,7 @@ func cdpEventWanted(method string, size int) bool {
 	case "Network.webSocketFrameReceived":
 		return size <= maxAuthFrameEvent
 	case "Network.webSocketCreated", "Network.loadingFinished", "Network.responseReceived",
-		"Runtime.consoleAPICalled", "Page.frameNavigated":
+		"Runtime.consoleAPICalled", "Page.frameNavigated", "Runtime.bindingCalled":
 		return true
 	default:
 		return false
@@ -142,6 +142,8 @@ func (s *cdpSession) interestingEvent(event cdpMessage) bool {
 	case "Runtime.consoleAPICalled":
 		_, ok := parseThemeConsoleEvent(event.Params)
 		return ok
+	case "Runtime.bindingCalled":
+		return activityBindingCall(event.Params)
 	case "Network.webSocketFrameReceived":
 		var frame struct {
 			Response struct {

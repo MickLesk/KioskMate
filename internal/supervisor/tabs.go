@@ -143,16 +143,7 @@ func (b *Browser) switchTab(ctx context.Context, cfg *config.Config, index int) 
 	}
 	b.tabURL[index] = want
 	b.touchTabLocked(index)
-	var evict []string
-	for len(b.tabUse) > maxTabs(cfg) {
-		oldest := b.tabUse[0]
-		b.tabUse = b.tabUse[1:]
-		if target := b.tabs[oldest]; target != "" && target != id {
-			evict = append(evict, target)
-		}
-		delete(b.tabs, oldest)
-		delete(b.tabURL, oldest)
-	}
+	evict := b.evictTabsLocked(cfg, index)
 	b.activeTarget = id
 	b.retarget = true
 	control := b.control
@@ -166,6 +157,87 @@ func (b *Browser) switchTab(ctx context.Context, cfg *config.Config, index int) 
 		control.close()
 	}
 	return nil
+}
+
+// evictTabsLocked closes least recently used tabs above kiosk.max_tabs.
+// Preloaded pages and the page being shown are never evicted. Callers hold
+// b.mu.
+func (b *Browser) evictTabsLocked(cfg *config.Config, keep int) []string {
+	preloaded := map[int]bool{}
+	for _, index := range cfg.Kiosk.PreloadIndexes() {
+		preloaded[index] = true
+	}
+	var evict []string
+	for len(b.tabUse) > maxTabs(cfg) {
+		victim := -1
+		for position, index := range b.tabUse {
+			if index != keep && !preloaded[index] {
+				victim = position
+				break
+			}
+		}
+		if victim < 0 {
+			break
+		}
+		oldest := b.tabUse[victim]
+		b.tabUse = append(b.tabUse[:victim], b.tabUse[victim+1:]...)
+		if target := b.tabs[oldest]; target != "" && target != b.tabs[keep] {
+			evict = append(evict, target)
+		}
+		delete(b.tabs, oldest)
+		delete(b.tabURL, oldest)
+	}
+	return evict
+}
+
+// preloadTabs opens the pages marked "preload" as background tabs once the
+// first page is shown, so switching to them later is instant.
+func (b *Browser) preloadTabs(ctx context.Context, cfg *config.Config) {
+	if cfg.Kiosk.PageSwitch != "tabs" || cfg.Kiosk.IsolateSessions {
+		return
+	}
+	indexes := cfg.Kiosk.PreloadIndexes()
+	if len(indexes) == 0 || b.authenticationAllowed() != nil {
+		return
+	}
+	b.mu.Lock()
+	profile := browserUserDataDir(cfg, b.active)
+	b.mu.Unlock()
+	browser, err := dialBrowserTarget(ctx, profile)
+	if err != nil {
+		b.logger.Debug("tab preload skipped", "error", err)
+		return
+	}
+	defer browser.close()
+	for _, index := range indexes {
+		b.mu.Lock()
+		_, open := b.tabs[index]
+		b.mu.Unlock()
+		if open {
+			continue
+		}
+		url := activeURL(cfg, index)
+		var result struct {
+			TargetID string `json:"targetId"`
+		}
+		if err := browser.command(ctx, "Target.createTarget", map[string]any{"url": url, "background": true}, &result); err != nil || result.TargetID == "" {
+			b.logger.Warn("tab preload failed", "page", index, "error", err)
+			continue
+		}
+		b.mu.Lock()
+		if b.tabs == nil {
+			b.tabs = map[int]string{}
+		}
+		if b.tabURL == nil {
+			b.tabURL = map[int]string{}
+		}
+		b.tabs[index] = result.TargetID
+		b.tabURL[index] = url
+		// Preloaded tabs count as least recently used so a page actually
+		// shown moves ahead of them.
+		b.tabUse = append([]int{index}, b.tabUse...)
+		b.mu.Unlock()
+	}
 }
 
 // dialBrowserTarget connects to Chromium's browser-level DevTools endpoint,

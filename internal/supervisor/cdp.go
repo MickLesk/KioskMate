@@ -252,6 +252,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
 		b.setThemeError(theme, err)
 	}
+	if err := installActivityListener(ctx, session); err != nil {
+		b.logger.Debug("kiosk input listener unavailable", "error", err)
+	}
 	b.mu.Lock()
 	if b.done != done {
 		b.mu.Unlock()
@@ -280,6 +283,7 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			return fmt.Errorf("navigate to kiosk page: %s", result.Error)
 		}
 		*navigated = true
+		go b.preloadTabs(ctx, cfg)
 		b.mu.Lock()
 		if b.done == done && !b.authGuard.Tripped {
 			b.readySince = time.Now()
@@ -331,6 +335,10 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 					}
 				}
 				monitorTimer.Reset(networkMonitorWindow)
+				continue
+			}
+			if event.Method == "Runtime.bindingCalled" {
+				b.noteActivity()
 				continue
 			}
 			if event.Method == "Runtime.consoleAPICalled" {

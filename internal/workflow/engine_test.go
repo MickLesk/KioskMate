@@ -13,10 +13,24 @@ import (
 )
 
 type fakeBrowser struct {
-	mu     sync.Mutex
-	calls  []string
-	active int
+	mu             sync.Mutex
+	calls          []string
+	active         int
+	overrideSource string
+	lastActivity   time.Time
 }
+
+func (f *fakeBrowser) snapshot() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.Join(f.calls, "|")
+}
+
+func (f *fakeBrowser) OverrideSource() (bool, string) {
+	return f.overrideSource != "", f.overrideSource
+}
+
+func (f *fakeBrowser) LastActivity() time.Time { return f.lastActivity }
 
 func (f *fakeBrowser) log(format string, args ...any) {
 	f.mu.Lock()
@@ -171,5 +185,87 @@ func TestFailedActionIsReportedButLaterActionsRun(t *testing.T) {
 	}
 	if browser.calls[len(browser.calls)-1] != "reload" {
 		t.Fatalf("later action skipped: %v", browser.calls)
+	}
+}
+
+func TestManualOverrideWinsOverRules(t *testing.T) {
+	rule := config.WorkflowRule{ID: "r", Name: "R", Trigger: config.RuleTrigger{Type: "webhook", Token: "0123456789abcdef"}, Actions: []config.RuleAction{{Type: "show_page", PageID: "camera", UntilResume: true}, {Type: "resume_playlist"}, {Type: "reload"}}}
+	browser := &fakeBrowser{overrideSource: "admin"}
+	engine := New(testConfig(rule), browser, fakeHardware{browser}, nil, nil)
+	if err := engine.Test(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	if got := browser.snapshot(); got != "reload" {
+		t.Fatalf("calls = %s, want only reload", got)
+	}
+	if engine.History()[0].Skipped != "manual_override" {
+		t.Fatalf("history = %#v", engine.History())
+	}
+	browser.calls, browser.overrideSource = nil, "workflow"
+	if err := engine.Test(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	if got := browser.snapshot(); got != "override 1 24h0m0s workflow|resume|reload" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestIdleAndTouchTriggers(t *testing.T) {
+	idle := config.WorkflowRule{ID: "idle", Name: "Idle", Trigger: config.RuleTrigger{Type: "idle", IdleSeconds: 60}, Actions: []config.RuleAction{{Type: "display", Value: "OFF"}}}
+	touch := config.WorkflowRule{ID: "touch", Name: "Touch", Trigger: config.RuleTrigger{Type: "touch"}, Actions: []config.RuleAction{{Type: "display", Value: "ON"}}}
+	browser := &fakeBrowser{}
+	engine := New(testConfig(idle, touch), browser, fakeHardware{browser}, nil, nil)
+	start := engine.started
+	engine.now = func() time.Time { return start.Add(30 * time.Second) }
+	engine.checkIdle(context.Background())
+	if browser.snapshot() != "" {
+		t.Fatalf("idle fired early: %s", browser.snapshot())
+	}
+	engine.now = func() time.Time { return start.Add(61 * time.Second) }
+	engine.checkIdle(context.Background())
+	engine.checkIdle(context.Background())
+	if got := browser.snapshot(); got != "display OFF|note OFF" {
+		t.Fatalf("idle calls = %s", got)
+	}
+	browser.lastActivity = start.Add(70 * time.Second)
+	engine.HandleActivity(context.Background())
+	if got := browser.snapshot(); got != "display OFF|note OFF|display ON|note ON" {
+		t.Fatalf("touch calls = %s", got)
+	}
+	engine.now = func() time.Time { return start.Add(131 * time.Second) }
+	engine.checkIdle(context.Background())
+	if got := browser.snapshot(); !strings.HasSuffix(got, "display ON|note ON|display OFF|note OFF") {
+		t.Fatalf("idle not re-armed: %s", got)
+	}
+}
+
+func TestDisplayActionRevertsAfterDuration(t *testing.T) {
+	rule := config.WorkflowRule{ID: "m", Name: "Motion", Trigger: config.RuleTrigger{Type: "touch"}, Actions: []config.RuleAction{{Type: "display", Value: "ON", DurationSeconds: 1}}}
+	browser := &fakeBrowser{}
+	engine := New(testConfig(rule), browser, fakeHardware{browser}, nil, nil)
+	if err := engine.Test(context.Background(), "m"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(browser.snapshot(), "display OFF") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := browser.snapshot(); got != "display ON|note ON|display OFF|note OFF" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestPageScriptsEncodeValues(t *testing.T) {
+	if script := clickScript(`button[title="Go"]`); !strings.Contains(script, `"button[title=\"Go\"]"`) || !strings.Contains(script, "shadowRoot") {
+		t.Fatalf("click script = %s", script)
+	}
+	if script := scrollScript("-400"); !strings.Contains(script, "top: -400") {
+		t.Fatalf("scroll script = %s", script)
+	}
+	if script := soundScript(""); !strings.Contains(script, "AudioContext") {
+		t.Fatalf("chime script = %s", script)
+	}
+	if script := soundScript("https://x/a.mp3"); script != `new Audio("https://x/a.mp3").play()` {
+		t.Fatalf("sound script = %s", script)
 	}
 }

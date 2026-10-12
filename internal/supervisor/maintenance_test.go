@@ -81,3 +81,46 @@ func TestOverlayScriptEscapesText(t *testing.T) {
 		t.Fatal("overlay duration missing")
 	}
 }
+
+func TestMaintenanceReloadAfterRotationCycles(t *testing.T) {
+	start := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	browser := runningTestBrowser(t, start)
+	maintenance := config.KioskMaintenance{ReloadAfterCycles: 2}
+	browser.rotationCycles = 1
+	if browser.maintenanceReloadDue(start.Add(time.Minute), maintenance) {
+		t.Fatal("reload after one round")
+	}
+	browser.rotationCycles = 2
+	if !browser.maintenanceReloadDue(start.Add(2*time.Minute), maintenance) {
+		t.Fatal("reload not due after two rounds")
+	}
+	if browser.rotationCycles != 0 {
+		t.Fatalf("cycle counter not reset: %d", browser.rotationCycles)
+	}
+}
+
+func TestOzonePlatformFlag(t *testing.T) {
+	if got := ozonePlatformFlag("wayland-0"); got != "--ozone-platform=wayland" {
+		t.Fatalf("wayland session flag = %q", got)
+	}
+	if got := ozonePlatformFlag(""); got != "--ozone-platform-hint=auto" {
+		t.Fatalf("default flag = %q", got)
+	}
+}
+
+func TestEvictTabsKeepsPreloadedPages(t *testing.T) {
+	browser := runningTestBrowser(t, time.Now())
+	cfg := &config.Config{Kiosk: config.KioskConfig{MaxTabs: 2, Pages: []config.KioskPage{
+		{URL: "https://a", Preload: true}, {URL: "https://b"}, {URL: "https://c"},
+	}}}
+	browser.tabs = map[int]string{0: "t0", 1: "t1", 2: "t2"}
+	browser.tabURL = map[int]string{}
+	browser.tabUse = []int{0, 1, 2}
+	evicted := browser.evictTabsLocked(cfg, 2)
+	if len(evicted) != 1 || evicted[0] != "t1" {
+		t.Fatalf("evicted = %v, want [t1]", evicted)
+	}
+	if _, ok := browser.tabs[0]; !ok {
+		t.Fatal("preloaded tab was evicted")
+	}
+}
