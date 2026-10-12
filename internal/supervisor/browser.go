@@ -63,6 +63,7 @@ type Browser struct {
 	scheduler        SchedulerStatus
 	rotationIndex    int
 	rotationUntil    time.Time
+	lastMaintenance  time.Time
 	devTools         bool
 	requiresControl  bool
 	readySince       time.Time
@@ -649,6 +650,14 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 				_ = b.SetActive(switchCtx, target)
 				cancel()
 			}
+			if b.maintenanceReloadDue(now, snap.Kiosk.Maintenance) {
+				b.logger.Info("scheduled page reload")
+				reloadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				if err := b.Reload(reloadCtx); err != nil {
+					b.logger.Warn("scheduled page reload failed", "error", err)
+				}
+				cancel()
+			}
 			wantOff := scheduleWantsDisplayOff(snap.Kiosk, target, status)
 			b.applyScheduleDisplayPower(ctx, target, status)
 			b.mu.Lock()
@@ -678,9 +687,55 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 				}
 				cancel()
 			}
-			timer.Reset(b.schedulerInterval())
+			timer.Reset(nextSchedulerWake(time.Now(), b.schedulerInterval(), status.NextSwitch))
 		}
 	}
+}
+
+// nextSchedulerWake waits for the regular tick, or less when a rotation or
+// time rule switch is due earlier, so pages change on time without a fast
+// polling tick.
+func nextSchedulerWake(now time.Time, tick time.Duration, next *time.Time) time.Duration {
+	if next == nil {
+		return tick
+	}
+	until := next.Sub(now)
+	if until < 0 {
+		return 0
+	}
+	if until < tick {
+		return until + 50*time.Millisecond
+	}
+	return tick
+}
+
+// maintenanceReloadDue reports whether a scheduled soft reload should run now
+// and records it. Reloads only count while the browser is running and the
+// display is not blanked by a schedule.
+func (b *Browser) maintenanceReloadDue(now time.Time, maintenance config.KioskMaintenance) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cmd == nil || b.cmd.Process == nil || b.idleBlanked || b.started.IsZero() {
+		return false
+	}
+	last := b.lastMaintenance
+	if last.IsZero() || last.Before(b.started) {
+		last = b.started
+	}
+	due := false
+	if every := maintenance.ReloadEveryMinutes; every > 0 && now.Sub(last) >= time.Duration(every)*time.Minute {
+		due = true
+	}
+	if at, ok := parseClock(maintenance.ReloadAt); ok {
+		target := time.Date(now.Year(), now.Month(), now.Day(), at/60, at%60, 0, 0, now.Location())
+		if !now.Before(target) && last.Before(target) {
+			due = true
+		}
+	}
+	if due {
+		b.lastMaintenance = now
+	}
+	return due
 }
 
 func (b *Browser) blankIdleDisplay(ctx context.Context) error {

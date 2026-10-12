@@ -48,19 +48,28 @@ func (c AdminConfig) Addr() string {
 }
 
 type KioskConfig struct {
-	URLs            []string       `json:"urls"`
-	Pages           []KioskPage    `json:"pages"`
-	BrowserPreset   string         `json:"browser_preset"`
-	BrowserCommand  string         `json:"browser_command"`
-	ExtraArgs       []string       `json:"extra_args"`
-	UserDataDir     string         `json:"user_data_dir"`
-	IsolateSessions bool           `json:"isolate_page_sessions"`
-	Theme           string         `json:"theme"`
-	ZoomPercent     int            `json:"zoom_percent"`
-	Widget          bool           `json:"widget"`
-	Scheduler       KioskScheduler `json:"scheduler"`
-	Rotation        []RotationItem `json:"rotation"`
-	TimeRules       []TimeRule     `json:"time_rules"`
+	URLs            []string         `json:"urls"`
+	Pages           []KioskPage      `json:"pages"`
+	BrowserPreset   string           `json:"browser_preset"`
+	BrowserCommand  string           `json:"browser_command"`
+	ExtraArgs       []string         `json:"extra_args"`
+	UserDataDir     string           `json:"user_data_dir"`
+	IsolateSessions bool             `json:"isolate_page_sessions"`
+	Theme           string           `json:"theme"`
+	ZoomPercent     int              `json:"zoom_percent"`
+	Widget          bool             `json:"widget"`
+	Scheduler       KioskScheduler   `json:"scheduler"`
+	Rotation        []RotationItem   `json:"rotation"`
+	TimeRules       []TimeRule       `json:"time_rules"`
+	Maintenance     KioskMaintenance `json:"maintenance,omitempty"`
+}
+
+// KioskMaintenance schedules soft page reloads. Dashboards that run for days
+// slowly leak memory in the page; a reload is far cheaper than a watchdog
+// browser restart and keeps the signed-in session.
+type KioskMaintenance struct {
+	ReloadEveryMinutes int    `json:"reload_every_minutes,omitempty"`
+	ReloadAt           string `json:"reload_at,omitempty"`
 }
 
 type KioskPage struct {
@@ -431,6 +440,12 @@ func Validate(cfg *Config) error {
 	}
 	if tick := cfg.Kiosk.Scheduler.TickInterval; tick < 0 || tick > 24*time.Hour {
 		return errors.New("scheduler tick interval must be between 0 and 24 hours")
+	}
+	if every := cfg.Kiosk.Maintenance.ReloadEveryMinutes; every != 0 && (every < 10 || every > 7*24*60) {
+		return errors.New("scheduled reload interval must be 0 or between 10 minutes and 7 days")
+	}
+	if at := strings.TrimSpace(cfg.Kiosk.Maintenance.ReloadAt); at != "" && !validClock(at) {
+		return errors.New("scheduled reload time must use HH:MM")
 	}
 	for index, page := range cfg.Kiosk.Pages {
 		if strings.TrimSpace(page.URL) == "" {
@@ -1130,3 +1145,4 @@ func randomToken() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
+

@@ -14,44 +14,65 @@ import (
 
 const clockTicks = 100
 
+// pssInterval bounds how often smaps_rollup is read. The kernel walks the page
+// tables of every Chromium process for it, which is far more expensive than
+// /proc/<pid>/stat; memory changes slowly enough for a one-minute cadence.
+const pssInterval = time.Minute
+
 func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats, error) {
 	if root <= 0 {
 		return ProcessTreeStats{}, errors.New("invalid pid")
 	}
-	pids := processTree(root)
+	pids, stats := processTree(root)
 	if len(pids) == 0 {
 		return ProcessTreeStats{}, os.ErrProcessDone
 	}
-	var rssKB uint64
+	now := time.Now()
 	var ticks uint64
 	for _, pid := range pids {
-		stat, err := readStat(pid)
-		if err != nil {
-			continue
-		}
-		ticks += stat.ticks
-		// Prefer PSS so Chromium shared mappings aren't counted once per process.
-		if pss, ok := readPSSKB(pid); ok {
-			rssKB += pss
-			continue
-		}
-		rssKB += stat.rssPages * uint64(os.Getpagesize()) / 1024
+		ticks += stats[pid].ticks
 	}
-	now := time.Now()
-	stats := ProcessTreeStats{
+	reusePSS := !previous.pssAt.IsZero() && now.Sub(previous.pssAt) < pssInterval && samePIDs(previous.PIDs, pids)
+	rssMB, pssAt := previous.RSSMB, previous.pssAt
+	if !reusePSS {
+		var rssKB uint64
+		for _, pid := range pids {
+			// Prefer PSS so Chromium shared mappings aren't counted once per process.
+			if pss, ok := readPSSKB(pid); ok {
+				rssKB += pss
+				continue
+			}
+			rssKB += stats[pid].rssPages * uint64(os.Getpagesize()) / 1024
+		}
+		rssMB, pssAt = rssKB/1024, now
+	}
+	result := ProcessTreeStats{
 		PIDs:       pids,
-		RSSMB:      rssKB / 1024,
+		RSSMB:      rssMB,
 		Updated:    now,
 		UpdatedAt:  &now,
 		totalTicks: ticks,
+		pssAt:      pssAt,
 	}
 	if !previous.Updated.IsZero() && ticks >= previous.totalTicks {
 		elapsed := now.Sub(previous.Updated).Seconds()
 		if elapsed > 0 {
-			stats.CPUPercent = float64(ticks-previous.totalTicks) / clockTicks / elapsed * 100
+			result.CPUPercent = float64(ticks-previous.totalTicks) / clockTicks / elapsed * 100
 		}
 	}
-	return stats, nil
+	return result, nil
+}
+
+func samePIDs(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type procStat struct {
@@ -60,17 +81,21 @@ type procStat struct {
 	rssPages uint64
 }
 
-func processTree(root int) []int {
+// processTree returns the sorted PIDs of root and its descendants together
+// with their parsed /proc/<pid>/stat, read once per call.
+func processTree(root int) ([]int, map[int]procStat) {
 	stats := map[int]procStat{}
-	entries, _ := filepath.Glob("/proc/[0-9]*/stat")
-	for _, file := range entries {
-		pid, err := strconv.Atoi(filepath.Base(filepath.Dir(file)))
+	children := map[int][]int{}
+	entries, _ := os.ReadDir("/proc")
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
 		if err != nil {
 			continue
 		}
 		stat, err := readStat(pid)
 		if err == nil {
 			stats[pid] = stat
+			children[stat.ppid] = append(children[stat.ppid], pid)
 		}
 	}
 	var out []int
@@ -86,14 +111,10 @@ func processTree(root int) []int {
 		if _, ok := stats[pid]; ok {
 			out = append(out, pid)
 		}
-		for child, stat := range stats {
-			if stat.ppid == pid {
-				queue = append(queue, child)
-			}
-		}
+		queue = append(queue, children[pid]...)
 	}
 	sort.Ints(out)
-	return out
+	return out, stats
 }
 
 func readStat(pid int) (procStat, error) {
