@@ -1,0 +1,6 @@
+# PAM session for kioskmate-cage@.service: gives the kiosk user a logind
+# session with XDG_RUNTIME_DIR, seat access and a session D-Bus.
+auth      required  pam_unix.so nullok
+account   required  pam_unix.so
+session   required  pam_unix.so
+session   required  pam_systemd.so

@@ -11,6 +11,8 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Embedded Admin UI with setup token, password login and session protection.
 - Visual kiosk sequence management with Storybook cards, a flow graph, a guided page wizard, rotation, fixed schedules and MQTT triggers.
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
+- Optional tab mode (`kiosk.page_switch: "tabs"`) that keeps recent pages open and switches without reloading.
+- Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.

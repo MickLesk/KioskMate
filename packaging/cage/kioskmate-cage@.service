@@ -1,0 +1,35 @@
+# KioskMate without a desktop: Cage (a Wayland compositor for exactly one
+# application) runs KioskMate on tty1 for the given user, and Chromium opens
+# inside it. Enable with: sudo /usr/share/kioskmate/cage/setup-cage.sh <user>
+[Unit]
+Description=KioskMate on Cage for %i
+After=systemd-user-sessions.service plymouth-quit-wait.service network-online.target
+Wants=network-online.target dbus.socket systemd-logind.service
+After=dbus.socket systemd-logind.service getty@tty1.service
+Conflicts=getty@tty1.service
+ConditionPathExists=/dev/tty1
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=%i
+PAMName=kioskmate-cage
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+# -d: no client-side decorations, -s: allow switching to other VTs for repair.
+ExecStart=/usr/bin/cage -d -s -- /usr/bin/kioskmate
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+UMask=0077
+
+[Install]
+WantedBy=graphical.target
