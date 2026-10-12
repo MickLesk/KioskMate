@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,9 @@ func (s *cdpSession) read(ctx context.Context) {
 			s.mu.Unlock()
 			return
 		}
+		if method, ok := peekEventMethod(data); ok && !cdpEventWanted(method, len(data)) {
+			continue
+		}
 		var message cdpMessage
 		if json.Unmarshal(data, &message) != nil {
 			continue
@@ -81,8 +85,44 @@ func (s *cdpSession) read(ctx context.Context) {
 	}
 }
 
+// maxAuthFrameEvent bounds the size of a WebSocket frame event that can still
+// carry a Home Assistant auth_invalid message. Larger frames (state updates,
+// history, camera data) are skipped without JSON decoding.
+const maxAuthFrameEvent = 2048
+
+// peekEventMethod reads the method of a CDP event without decoding the JSON.
+// Chromium serializes events as {"method":"...","params":...}; anything else
+// (command responses, unexpected layouts) reports ok=false and is decoded.
+func peekEventMethod(data []byte) (string, bool) {
+	const prefix = `{"method":"`
+	if !bytes.HasPrefix(data, []byte(prefix)) {
+		return "", false
+	}
+	rest := data[len(prefix):]
+	end := bytes.IndexByte(rest, '"')
+	if end <= 0 || end > 64 {
+		return "", false
+	}
+	return string(rest[:end]), true
+}
+
+func cdpEventWanted(method string, size int) bool {
+	switch method {
+	case "Network.webSocketFrameReceived":
+		return size <= maxAuthFrameEvent
+	case "Network.webSocketCreated", "Network.loadingFinished", "Network.responseReceived",
+		"Runtime.consoleAPICalled", "Page.frameNavigated":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *cdpSession) interestingEvent(event cdpMessage) bool {
 	switch event.Method {
+	case "Page.frameNavigated":
+		_, ok := mainFrameURL(event.Params)
+		return ok
 	case "Network.webSocketCreated":
 		return true
 	case "Network.loadingFinished":
@@ -177,4 +217,19 @@ func (s *cdpSession) command(ctx context.Context, method string, params any, res
 		}
 		return fmt.Errorf("DevTools disconnected: %w", err)
 	}
+}
+
+// mainFrameURL returns the URL of a Page.frameNavigated event for the top-level
+// frame; iframes report ok=false.
+func mainFrameURL(params json.RawMessage) (string, bool) {
+	var event struct {
+		Frame struct {
+			ParentID string `json:"parentId"`
+			URL      string `json:"url"`
+		} `json:"frame"`
+	}
+	if json.Unmarshal(params, &event) != nil || event.Frame.ParentID != "" {
+		return "", false
+	}
+	return event.Frame.URL, true
 }

@@ -205,9 +205,30 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 	}
 }
 
+// networkMonitorWindow is how long DevTools network events stay enabled after
+// a top-level navigation. Home Assistant authenticates while the frontend
+// loads; afterwards the event stream (WebSocket state updates, camera
+// streams) only costs CPU in Chromium and KioskMate. A later session loss
+// redirects to /auth/authorize, which is a new navigation and re-arms it.
+var networkMonitorWindow = 5 * time.Minute
+
+// networkEnableParams keep Chromium from buffering large response bodies for
+// DevTools; only small /auth/token bodies are ever read.
+var networkEnableParams = map[string]any{
+	"maxTotalBufferSize":    4 << 20,
+	"maxResourceBufferSize": 64 << 10,
+}
+
 func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme string, done <-chan struct{}, navigated *bool) error {
-	if err := session.command(ctx, "Network.enable", map[string]any{}, nil); err != nil {
+	if err := session.command(ctx, "Network.enable", networkEnableParams, nil); err != nil {
 		return err
+	}
+	networkOn := true
+	alwaysMonitor := strings.EqualFold(strings.TrimSpace(b.cfg.Snapshot().Performance.AuthMonitor), "always")
+	monitorTimer := time.NewTimer(networkMonitorWindow)
+	defer monitorTimer.Stop()
+	if alwaysMonitor {
+		monitorTimer.Stop()
 	}
 	if err := session.command(ctx, "Page.enable", map[string]any{}, nil); err != nil {
 		return err
@@ -269,7 +290,36 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			if err := session.command(ctx, "Page.getFrameTree", map[string]any{}, nil); err != nil {
 				return err
 			}
+		case <-monitorTimer.C:
+			if len(tokenFailures) > 0 {
+				monitorTimer.Reset(30 * time.Second)
+				continue
+			}
+			if err := session.command(ctx, "Network.disable", map[string]any{}, nil); err != nil {
+				return err
+			}
+			networkOn = false
+			clear(sockets)
 		case event := <-session.events:
+			if event.Method == "Page.frameNavigated" {
+				if alwaysMonitor {
+					continue
+				}
+				if !networkOn {
+					if err := session.command(ctx, "Network.enable", networkEnableParams, nil); err != nil {
+						return err
+					}
+					networkOn = true
+				}
+				if !monitorTimer.Stop() {
+					select {
+					case <-monitorTimer.C:
+					default:
+					}
+				}
+				monitorTimer.Reset(networkMonitorWindow)
+				continue
+			}
 			if event.Method == "Runtime.consoleAPICalled" {
 				if report, ok := parseThemeConsoleEvent(event.Params); ok {
 					b.setThemeReport(theme, report)

@@ -117,6 +117,10 @@ type PerfConfig struct {
 	Profile      string `json:"profile"`
 	GPUMode      string `json:"gpu_mode"`
 	ReduceMotion bool   `json:"reduce_motion"`
+	// AuthMonitor controls DevTools network monitoring for Home Assistant
+	// authentication failures: "window" (default) watches for a few minutes
+	// after every top-level navigation, "always" keeps it enabled.
+	AuthMonitor string `json:"auth_monitor,omitempty"`
 }
 
 type WatchdogConfig struct {
