@@ -6,8 +6,8 @@ import { normalizePages } from "./renderers.js";
 // They live in config.kiosk.rules and are saved with the rest of the kiosk.
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const TRIGGERS = ["mqtt", "time", "webhook"];
-const ACTIONS = ["show_page", "resume_playlist", "display", "brightness", "reload", "overlay", "script"];
+const TRIGGERS = ["mqtt", "time", "webhook", "touch", "idle"];
+const ACTIONS = ["show_page", "resume_playlist", "display", "brightness", "reload", "overlay", "script", "click", "scroll", "sound"];
 
 function rules() {
   return state.config?.kiosk?.rules || [];
@@ -35,13 +35,15 @@ function webhookURL(rule) {
 function triggerSummary(trigger = {}) {
   if (trigger.type === "mqtt") return `MQTT ${trigger.topic || "?"}${trigger.payload ? ` = ${trigger.payload}` : ""}`;
   if (trigger.type === "time") return `${t("trigger_time")} ${trigger.at || "--:--"}${trigger.days?.length ? ` (${trigger.days.map((day) => t(`dayShort_${day}`)).join(", ")})` : ""}`;
-  return t("trigger_webhook");
+  if (trigger.type === "idle") return t("idleSummary").replace("{seconds}", trigger.idle_seconds || 0);
+  return t(`trigger_${trigger.type || "webhook"}`);
 }
 
 function actionSummary(action = {}) {
   const label = t(`action_${action.type}`);
-  if (action.type === "show_page") return `${label}: ${pageName(action.page_id)}${action.duration_seconds ? ` (${action.duration_seconds}s)` : ""}`;
-  if (action.type === "display") return `${label}: ${action.value === "OFF" ? t("off") : t("on")}`;
+  if (action.type === "show_page") return `${label}: ${pageName(action.page_id)}${action.until_resume ? ` (${t("untilResume")})` : action.duration_seconds ? ` (${action.duration_seconds}s)` : ""}`;
+  if (action.type === "display") return `${label}: ${action.value === "OFF" ? t("off") : t("on")}${action.duration_seconds ? ` (${action.duration_seconds}s)` : ""}`;
+  if (["click", "scroll"].includes(action.type)) return `${label}: ${action.value}`;
   if (action.type === "brightness") return `${label}: ${action.value}%`;
   if (action.type === "overlay") return `${label}: “${action.value}”`;
   return label;
@@ -167,6 +169,8 @@ function renderTriggerFields(rule) {
   const trigger = rule.trigger;
   if (trigger.type === "mqtt") return `${field("wf-topic", t("mqttTopic"), "text", "", trigger.topic || "", "home/doorbell")}${field("wf-payload", t("payloadAny"), "text", "", trigger.payload || "")}`;
   if (trigger.type === "time") return `${field("wf-at", t("triggerAt"), "time", "", trigger.at || "07:00")}<div class="span-2">${dayPicker("wf-trigger-day", trigger.days)}</div>`;
+  if (trigger.type === "idle") return `${field("wf-idle", t("idleSeconds"), "number", "", trigger.idle_seconds || 300)}<p class="hint">${esc(t("idleTriggerHint"))}</p>`;
+  if (trigger.type === "touch") return `<p class="hint span-2">${esc(t("touchTriggerHint"))}</p>`;
   return `<div class="span-2 readonly-field workflow-webhook">
     <span>${esc(t("webhookUrl"))}</span>
     <code>${esc(webhookURL(rule))}</code>
@@ -178,8 +182,11 @@ function renderTriggerFields(rule) {
 function renderActionRow(action, index) {
   const pageOptions = pages().map((page) => [page.page_id, page.name || page.url]);
   let fields = "";
-  if (action.type === "show_page") fields = `${selectHtml(`wf-action-page-${index}`, t("workflowPage"), action.page_id || "", pageOptions)}${field(`wf-action-duration-${index}`, t("showPageDuration"), "number", "", action.duration_seconds || 0)}`;
-  if (action.type === "display") fields = selectHtml(`wf-action-value-${index}`, t("action_display"), action.value || "ON", [["ON", t("on")], ["OFF", t("off")]]);
+  if (action.type === "show_page") fields = `${selectHtml(`wf-action-page-${index}`, t("workflowPage"), action.page_id || "", pageOptions)}${field(`wf-action-duration-${index}`, t("showPageDuration"), "number", "", action.duration_seconds || 0)}<div class="span-2">${switchHtml(`wf-action-until-${index}`, t("untilResume"), !!action.until_resume)}</div>`;
+  if (action.type === "display") fields = `${selectHtml(`wf-action-value-${index}`, t("action_display"), action.value || "ON", [["ON", t("on")], ["OFF", t("off")]])}${field(`wf-action-duration-${index}`, t("displayRevertSeconds"), "number", "", action.duration_seconds || "", "0")}`;
+  if (action.type === "click") fields = field(`wf-action-value-${index}`, t("cssSelector"), "text", "", action.value || "", "button.primary");
+  if (action.type === "scroll") fields = field(`wf-action-value-${index}`, t("scrollTarget"), "text", "", action.value || "400");
+  if (action.type === "sound") fields = `<div class="span-2">${field(`wf-action-value-${index}`, t("soundUrl"), "url", "", action.value || "", "https://")}</div>`;
   if (action.type === "brightness") fields = field(`wf-action-value-${index}`, t("brightness"), "number", "", action.value || "80");
   if (action.type === "overlay") fields = `${field(`wf-action-value-${index}`, t("overlayText"), "text", "", action.value || "")}${field(`wf-action-duration-${index}`, t("durationSeconds"), "number", "", action.duration_seconds || 10)}`;
   if (action.type === "script") fields = `<div class="span-2"><label for="wf-action-value-${index}">JavaScript</label><textarea id="wf-action-value-${index}" rows="3" spellcheck="false">${esc(action.value || "")}</textarea></div>`;
@@ -279,13 +286,14 @@ function readWorkflowEditor() {
   const trigger = rule.trigger;
   if (trigger.type === "mqtt") Object.assign(trigger, { topic: val("wf-topic").trim(), payload: val("wf-payload").trim() });
   if (trigger.type === "time") Object.assign(trigger, { at: val("wf-at"), days: selectedDays("wf-trigger-day") });
+  if (trigger.type === "idle") trigger.idle_seconds = Number(val("wf-idle") || 0);
   const conditions = { start: val("wf-cond-start"), end: val("wf-cond-end"), days: selectedDays("wf-cond-day"), active_page_id: val("wf-cond-page") };
   rule.conditions = Object.fromEntries(Object.entries(conditions).filter(([, value]) => value && value.length));
   rule.actions = rule.actions.map((action, index) => {
     const next = { type: action.type };
-    if (action.type === "show_page") Object.assign(next, { page_id: val(`wf-action-page-${index}`), duration_seconds: Number(val(`wf-action-duration-${index}`) || 0) });
-    if (["display", "brightness", "overlay", "script"].includes(action.type)) next.value = val(`wf-action-value-${index}`);
-    if (action.type === "overlay") next.duration_seconds = Number(val(`wf-action-duration-${index}`) || 0);
+    if (action.type === "show_page") Object.assign(next, { page_id: val(`wf-action-page-${index}`), duration_seconds: Number(val(`wf-action-duration-${index}`) || 0), until_resume: checked(`wf-action-until-${index}`) });
+    if (["display", "brightness", "overlay", "script", "click", "scroll", "sound"].includes(action.type)) next.value = val(`wf-action-value-${index}`).trim();
+    if (["overlay", "display"].includes(action.type)) next.duration_seconds = Number(val(`wf-action-duration-${index}`) || 0);
     return next;
   });
 }
@@ -295,13 +303,15 @@ function validateWorkflow(rule) {
   const trigger = rule.trigger;
   if (trigger.type === "mqtt" && (!trigger.topic || /[+#]/.test(trigger.topic))) return t("validationWorkflowTopic");
   if (trigger.type === "time" && !trigger.at) return t("validationWorkflowTime");
+  if (trigger.type === "idle" && !(trigger.idle_seconds >= 10 && trigger.idle_seconds <= 86400)) return t("validationIdleSeconds");
   if (trigger.type === "webhook" && (trigger.token || "").length < 16) trigger.token = randomHex(16);
   if (!!rule.conditions.start !== !!rule.conditions.end) return t("validationWorkflowWindow");
   if (!rule.actions.length) return t("validationWorkflowActions");
   for (const action of rule.actions) {
     if (action.type === "show_page" && !action.page_id) return t("validationWorkflowActions");
     if (action.type === "brightness" && !(Number(action.value) >= 1 && Number(action.value) <= 100)) return t("validationBrightness");
-    if (["overlay", "script"].includes(action.type) && !String(action.value || "").trim()) return t("validationWorkflowActions");
+    if (["overlay", "script", "click", "scroll"].includes(action.type) && !String(action.value || "").trim()) return t("validationWorkflowActions");
+    if (action.type === "sound" && action.value && !/^https?:\/\//.test(action.value)) return t("validationSoundUrl");
   }
   return "";
 }

@@ -463,18 +463,66 @@ const NAV = [
 		  const quick = await getJSON("/api/status?fast=1", { timeout: 8000 });
 		  applyCoreState({ status: quick });
 		} catch (_) {}
+		// Only what every view needs; the rest is loaded by ensureViewData when
+		// a view that shows it is opened.
 		const requests = await Promise.allSettled([
 		  getJSON("/api/config"), getJSON("/api/status", { timeout: 20000 }), getJSON("/api/privilege"),
-		  getJSON("/api/time"), getJSON("/api/time/zones"), getJSON("/api/jobs?limit=25"),
-		  getJSON("/api/update/history"),
-		  getJSON("/api/browser/operations"),
-		  getJSON("/api/events?limit=200"),
+		  getJSON("/api/time"),
 		]);
 		const value = (index) => requests[index].status === "fulfilled" ? requests[index].value : undefined;
-		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6), operations: value(7), events: value(8) });
+		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3) });
 		const failed = requests.filter((item) => item.status === "rejected");
 		if (failed.length === requests.length) throw failed[0].reason;
+		ensureViewData(state.view);
       }
+
+	  // Saves the whole config and shows the conflicts the server found
+	  // (overlapping time rules, workflows sharing a trigger) as warnings.
+	  export async function saveConfig(cfg) {
+		const result = await postJSON("/api/config", cfg);
+		for (const conflict of (result?.conflicts || []).slice(0, 3)) {
+		  toast(t("configConflict"), t(`conflict_${conflict.kind}`).replace("{a}", conflict.first).replace("{b}", conflict.second), "warn");
+		}
+		return result;
+	  }
+
+	  const VIEW_DATA = {
+		dashboard: ["operations", "events"],
+		system: ["jobs"],
+		"system-maintenance": ["jobs"],
+		"system-device": ["zones", "jobs"],
+		"settings-updates": ["updateHistory"],
+	  };
+	  const VIEW_DATA_SOURCES = {
+		operations: ["/api/browser/operations", (value) => ({ operations: value })],
+		events: ["/api/events?limit=200", (value) => ({ events: value })],
+		jobs: ["/api/jobs?limit=25", (value) => ({ jobs: value })],
+		zones: ["/api/time/zones", (value) => ({ zones: value })],
+		updateHistory: ["/api/update/history", (value) => ({ updateHistory: value })],
+	  };
+	  const viewDataLoadedAt = new Map();
+
+	  // Loads data only some views show (journal, jobs, time zones, update
+	  // history) when such a view opens, and again when it is older than a
+	  // minute. The time zone list never changes while the Admin is open.
+	  export async function ensureViewData(view = state.view) {
+		const now = Date.now();
+		const keys = (VIEW_DATA[view] || []).filter((key) => {
+		  const loaded = viewDataLoadedAt.get(key);
+		  return loaded === undefined || (key !== "zones" && now - loaded > 60000);
+		});
+		if (!keys.length) return;
+		keys.forEach((key) => viewDataLoadedAt.set(key, now));
+		const results = await Promise.allSettled(keys.map((key) => getJSON(VIEW_DATA_SOURCES[key][0])));
+		const patch = {};
+		results.forEach((result, index) => {
+		  if (result.status === "fulfilled") Object.assign(patch, VIEW_DATA_SOURCES[keys[index]][1](result.value));
+		  else viewDataLoadedAt.delete(keys[index]);
+		});
+		if (!Object.keys(patch).length) return;
+		applyCoreState(patch);
+		if (state.view === view && state.auth?.authenticated) renderApp({ background: true });
+	  }
 
 	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
 		if (cfg) {
@@ -721,6 +769,7 @@ const NAV = [
           bindDirtyTracking();
         });
         startHeaderClock();
+        if (!background) ensureViewData(state.view);
       }
 
       function isEditing() {

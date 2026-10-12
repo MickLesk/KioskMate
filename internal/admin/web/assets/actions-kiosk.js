@@ -1,5 +1,5 @@
 import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
-import { checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { button, collectPages, collectRotation, collectRules, normalizePages, validatePages, validateScheduler, validationError } from "./renderers.js";
 import { bindWorkflows } from "./workflows.js";
 import { absolutePageIndexFromEnabled, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
@@ -181,6 +181,7 @@ export function bindKiosk() {
           ${selectHtml("wizard-source-type", t("pageSource"), page.source_type || "url", [["url", t("webAddress")], ["home_assistant", t("homeAssistantDashboard")]])}
           <div class="span-2">${field("wizard-page-url", t("pageUrl"), "url", "", page.url || "")}</div>
           <div class="span-2">${switchHtml("wizard-page-disabled", t("disablePage"), !!page.disabled)}</div>
+          <div class="span-2">${switchHtml("wizard-page-preload", t("preloadPage"), !!page.preload)}<small class="hint">${esc(t(state.config?.kiosk?.page_switch === "tabs" ? "preloadPageHint" : "preloadPageNeedsTabs"))}</small></div>
           <div class="span-2 wizard-callout"><strong>${esc(t("validation"))}</strong><span>${esc(t("urlValidationHint"))}</span></div>
         </div>`;
         if (wizard.step === 2) {
@@ -220,6 +221,7 @@ export function bindKiosk() {
           page.source_type = val("wizard-source-type") || page.source_type;
           page.url = val("wizard-page-url") || page.url;
           page.disabled = checked("wizard-page-disabled");
+          page.preload = checked("wizard-page-preload");
           if (validate && !String(page.name || "").trim()) validationError("wizard-page-name", t("validationPageName"));
           if (validate) {
             try { const parsed = new URL(page.url); if (!["http:", "https:", "file:"].includes(parsed.protocol)) throw new Error("protocol"); }
@@ -348,7 +350,7 @@ export function bindKiosk() {
             cfg.kiosk.scheduler.enabled = false;
           }
           validateScheduler(cfg.kiosk);
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           if (restart) await postJSON(state.status?.browser?.running ? "/api/browser/restart" : "/api/browser/start");
           await refreshCore();
           clearDirty("kiosk-pages");
@@ -652,7 +654,7 @@ export function bindKiosk() {
           // pages and wipe out any Zeitplan-only edits made here).
           mirrorRulesToSchedulePages(cfg.kiosk);
           validateScheduler(cfg.kiosk);
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           await refreshCore();
           clearDirty("kiosk-schedule");
           renderApp();

@@ -1,5 +1,5 @@
 import { applySafeMode, loadBrowserDiagnostics } from "./actions-kiosk.js";
-import { boot, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, getJSON, openModal, postJSON, refreshCore, renderApp, renderAppIfIdle, request, runAction, sleep, state, t, toast, val } from "./app-core.js";
+import { boot, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, getJSON, openModal, postJSON, refreshCore, renderApp, renderAppIfIdle, request, runAction, saveConfig, sleep, state, t, toast, val } from "./app-core.js";
 import { button, lines, metric, renderUpdatePreflight } from "./renderers.js";
 
 export function bindSettings() {
@@ -73,7 +73,7 @@ export function bindSettings() {
           cfg.admin = cfg.admin || {};
           cfg.admin.bind = val("admin-bind");
           cfg.admin.port = Number(val("admin-port") || 33333);
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           await refreshCore();
           clearDirty("settings-admin");
           renderApp();
@@ -104,13 +104,14 @@ export function bindSettings() {
           cfg.kiosk.maintenance = {
             reload_every_minutes: Number(val("kiosk-reload-every") || 0),
             reload_at: val("kiosk-reload-at"),
+            reload_after_cycles: Math.max(0, Number(val("kiosk-reload-cycles") || 0)),
           };
           cfg.watchdog.enabled = checked("watchdog-enabled");
           cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
           cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 300);
           cfg.watchdog.cpu_grace = durationToNs(val("watchdog-grace"));
           cfg.watchdog.check_interval = durationToNs(val("watchdog-interval"));
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
           state.config = cfg;
@@ -144,7 +145,7 @@ export function bindSettings() {
       async function saveRawConfig() {
         await runAction("config-raw-save", async () => {
           const cfg = JSON.parse(val("config-raw"));
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           await refreshCore();
           clearDirty("settings-config");
           renderApp();

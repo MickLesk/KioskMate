@@ -1,4 +1,4 @@
-import { appendMQTTEvent, applyCoreState, checked, clearDirty, cloneConfig, durationToNs, getJSON, openMQTTTestDialog, postJSON, refreshCore, renderApp, renderAppIfIdle, runAction, sleep, state, streamJSONLines, t, val } from "./app-core.js";
+import { appendMQTTEvent, applyCoreState, checked, clearDirty, cloneConfig, durationToNs, getJSON, openMQTTTestDialog, postJSON, refreshCore, renderApp, renderAppIfIdle, runAction, saveConfig, sleep, state, streamJSONLines, t, val } from "./app-core.js";
 import { button, commandTopic, validateMQTT } from "./renderers.js";
 
 export function bindMQTT() {
@@ -40,7 +40,7 @@ export function bindMQTT() {
           Object.assign(cfg.mqtt, mqttUpdate);
           delete cfg.mqtt.password_configured;
           validateMQTT(cfg.mqtt);
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           await refreshCore();
           clearDirty("mqtt");
           renderApp();

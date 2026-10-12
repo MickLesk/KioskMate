@@ -80,6 +80,7 @@ export function renderSettingsAdmin() {
                 <p class="hint span-2">${esc(t(kiosk.isolate_page_sessions ? "pageSwitchIsolatedHint" : "pageSwitchHint"))}</p>
                 ${field("kiosk-reload-every", t("reloadEveryMinutes"), "number", "", kiosk.maintenance?.reload_every_minutes || "", "0")}
                 ${field("kiosk-reload-at", t("reloadAtTime"), "time", "", kiosk.maintenance?.reload_at || "")}
+                ${field("kiosk-reload-cycles", t("reloadAfterCycles"), "number", "", kiosk.maintenance?.reload_after_cycles || "", "0")}
                 <p class="hint span-2">${esc(t("scheduledReloadHint"))}</p>
                 ${selectHtml("perf-auth-monitor", t("authMonitor"), perf.auth_monitor || "window", [["window", t("authMonitorWindow")], ["always", t("authMonitorAlways")]])}
                 <p class="hint span-2">${esc(t("authMonitorHint"))}</p>
@@ -109,7 +110,7 @@ export function renderSettingsAdmin() {
                 ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
                 ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
                 ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
-                <div>${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}</div>
+                <div>${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}<small class="hint">${esc(t("isolatePageSessionsHint"))}</small></div>
                 <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
                 <div class="span-2">${button("testBrowser", "browser-diagnostics")}</div>
                 ${state.diagnostics ? `<div class="span-2">${kvTable(objectEntries(state.diagnostics))}</div>` : ""}
