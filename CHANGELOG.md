@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Lower resource use on small hardware
+- Cached slow hardware probes (sudo rights, display command, session type, DDC/CI) instead of re-running them on every status request; **System -> Rediscover hardware** forces a fresh scan.
+- Limited Chromium network monitoring for the Home Assistant auth guard to five minutes after each navigation, with capped DevTools buffers and large WebSocket frames dropped before decoding (`perf.auth_monitor: "always"` keeps the old behaviour).
+- Reused process memory (PSS) samples for a minute and built the process tree in one pass.
+- Merged Chromium `--enable-features` flags, enabled GPU rasterization in hardware GPU mode, stopped adding `--disable-dev-shm-usage` and reported the GPU feature status in the Doctor.
+
+### Kiosk
+- Added workflows: rules triggered by MQTT, a time of day or a webhook that show a page, switch the display, set brightness, reload, show a banner or run a script, with conditions, cooldown, a test button and run history.
+- Added an optional tab mode that keeps recent pages open and switches without reloading.
+- Added scheduled maintenance reloads every N minutes or at a fixed time.
+- Added an optional desktop-free mode with the Cage compositor.
+
+### Admin UI
+- Converted the Admin UI to ES modules with per-language translation files loaded on demand.
+- Added live updates over Server-Sent Events and DOM morphing so open forms keep focus and input.
+- Served assets with ETag revalidation and gzip.
+
 ## v0.8.0
 
 ### Runtime reliability and diagnostics

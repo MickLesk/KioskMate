@@ -2673,3 +2673,137 @@ tr:last-child td {
     grid-template-rows: auto minmax(300px, 54vh) auto;
   }
 }
+
+.workflow-list {
+  display: grid;
+}
+
+.workflow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.workflow-row > .actions {
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+.workflow-row.disabled .workflow-copy {
+  opacity: 0.6;
+}
+
+.workflow-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.workflow-copy span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.workflow-history {
+  margin-top: 12px;
+}
+
+.workflow-history summary {
+  cursor: pointer;
+  color: var(--soft);
+  font-size: 13px;
+}
+
+.workflow-runs {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.workflow-runs li {
+  display: grid;
+  grid-template-columns: 150px minmax(100px, 0.6fr) 80px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.workflow-runs li.error-text {
+  color: var(--red);
+}
+
+.workflow-editor {
+  width: min(760px, 100%);
+}
+
+.workflow-editor-body {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.workflow-editor-body h4 {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.workflow-editor .wizard-options > .wizard-step-grid {
+  border-top: 1px solid var(--line);
+  padding: 12px;
+}
+
+.workflow-editor textarea {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+}
+
+.workflow-webhook code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.workflow-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.workflow-action-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 620px) {
+  .workflow-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workflow-row > .actions {
+    display: flex;
+  }
+
+  .workflow-row > .actions button {
+    flex: 1;
+  }
+
+  .workflow-action-fields,
+  .workflow-runs li {
+    grid-template-columns: 1fr;
+  }
+}

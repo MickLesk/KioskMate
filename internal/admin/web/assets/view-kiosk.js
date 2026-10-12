@@ -1,6 +1,7 @@
 import { formatSchedulerReason } from "./actions-core.js";
 import { esc, field, formatDate, formatDuration, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
 import { button, normalizePages, renderRotation, renderRules, stateBanner, statusTile } from "./renderers.js";
+import { renderWorkflows } from "./workflows.js";
 
 export function renderKiosk() {
         const kiosk = state.config?.kiosk || {};
@@ -59,6 +60,7 @@ export function renderKiosk() {
 			  <button class="primary" data-action="override-apply" ${pages.length ? "" : "disabled"}>${esc(t("showSelectedTemporarily"))}</button>
 			  ${override.active ? `<button data-action="override-clear">${esc(t("endOverride"))}</button>` : ""}
 			</section>
+            ${renderWorkflows()}
             <details class="card disclosure advanced-settings">
               <summary>${esc(t("sequenceAdvanced"))}</summary>
               <div class="disclosure-body advanced-sequence-grid">

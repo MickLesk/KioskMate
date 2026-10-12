@@ -12,6 +12,8 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Visual kiosk sequence management with Storybook cards, a flow graph, a guided page wizard, rotation, fixed schedules and MQTT triggers.
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
 - Optional tab mode (`kiosk.page_switch: "tabs"`) that keeps recent pages open and switches without reloading.
+- Workflows: rules that react to an MQTT message, a time of day or a webhook and show a page for a while, switch the display, set brightness, reload, show a banner or run a script.
+- Scheduled maintenance reloads (every N minutes or at a fixed time).
 - Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
@@ -186,6 +188,31 @@ KioskMate also publishes per-page Home Assistant entities for:
 Diagnostic entities also expose the Home Assistant authentication guard, Chromium DevTools control, MQTT runtime state, last MQTT publish, timezone, NTP server, synchronization state and the complete updater state. Home Assistant receives the actual latest release, update availability/installing state, last check/error and rollback target, plus actions to check updates or trigger a passwordless rollback.
 
 If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
+
+## Workflows
+
+Workflows are rules on top of the page sequence. Create them under **Kiosk -> Pages and workflow -> Workflows**; they are stored in `kiosk.rules`.
+
+```json
+{
+  "id": "doorbell",
+  "name": "Doorbell",
+  "trigger": { "type": "mqtt", "topic": "home/doorbell", "payload": "ring" },
+  "conditions": { "start": "07:00", "end": "22:00" },
+  "actions": [
+    { "type": "display", "value": "ON" },
+    { "type": "show_page", "page_id": "camera", "duration_seconds": 30 },
+    { "type": "overlay", "value": "Someone is at the door", "duration_seconds": 10 }
+  ],
+  "cooldown_seconds": 30
+}
+```
+
+- Triggers: `mqtt` (exact topic, optional payload), `time` (`at` as HH:MM, optional `days`) and `webhook` (per-rule `token`, at least 16 characters).
+- Conditions (optional, all must hold): `days`, a `start`/`end` window and `active_page_id`.
+- Actions run in order: `show_page` (then back to the sequence; 0 seconds means one hour), `resume_playlist`, `display` (`ON`/`OFF`), `brightness` (1-100), `reload`, `overlay` and `script` (JavaScript in the current page).
+- A webhook rule is fired with `curl -X POST "http://<kiosk-ip>:33333/api/rules/<id>/trigger?token=<token>"` or the `X-KioskMate-Token` header. It needs no Admin login, so treat the URL like a password; wrong tokens count against the login throttle.
+- **Test** in the Admin UI runs the saved actions immediately; the last 50 runs are listed under **Recent runs** and in the event journal.
 
 ## Home Assistant 403 / White Page Troubleshooting
 

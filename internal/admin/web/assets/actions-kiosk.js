@@ -1,6 +1,7 @@
 import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
 import { checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { button, collectPages, collectRotation, collectRules, normalizePages, validatePages, validateScheduler, validationError } from "./renderers.js";
+import { bindWorkflows } from "./workflows.js";
 import { absolutePageIndexFromEnabled, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
 
 export function bindKiosk() {
@@ -23,6 +24,7 @@ export function bindKiosk() {
         document.querySelector('[data-action="page-wizard-new"]')?.addEventListener("click", () => openPageWizard(null, collectPages().length));
         document.querySelectorAll("[data-page-insert]").forEach((button) => button.addEventListener("click", () => openPageWizard(null, Number(button.dataset.pageInsert))));
         bindSequenceDragAndDrop();
+        bindWorkflows();
         document.querySelectorAll('[data-action="page-add"]').forEach((button) => button.addEventListener("click", () => addKioskPage(false)));
         document.querySelectorAll('[data-action="page-add-ha"]').forEach((button) => button.addEventListener("click", () => addKioskPage(true)));
         document.querySelector('[data-action="kiosk-save"]')?.addEventListener("click", () => saveKiosk(false));
