@@ -13,6 +13,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
 - Optional tab mode (`kiosk.page_switch: "tabs"`) that keeps recent pages open and switches without reloading.
 - Workflows: rules that react to an MQTT message, a time of day or a webhook and show a page for a while, switch the display, set brightness, reload, show a banner or run a script.
+- Local pages without an extra server: a clock, an image slideshow from a folder, or your own HTML.
 - Scheduled maintenance reloads (every N minutes, at a fixed time or after N rotation rounds) and preloaded pages in tab mode.
 - Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
 - Ready-to-flash Raspberry Pi OS Lite image with Cage, Chromium and first-boot setup from `kioskmate.txt`, see [docs/IMAGE.md](docs/IMAGE.md).
@@ -216,6 +217,22 @@ Workflows are rules on top of the page sequence. Create them under **Kiosk -> Pa
 - Saving reports likely mistakes as warnings: overlapping time rules, workflows with the same trigger, and workflows sharing a page's MQTT topic.
 - A webhook rule is fired with `curl -X POST "http://<kiosk-ip>:33333/api/rules/<id>/trigger?token=<token>"` or the `X-KioskMate-Token` header. It needs no Admin login, so treat the URL like a password; wrong tokens count against the login throttle.
 - **Test** in the Admin UI runs the saved actions immediately; the last 50 runs are listed under **Recent runs** and in the event journal.
+
+## Local Pages
+
+Besides web addresses and Home Assistant dashboards, a page can be rendered by KioskMate itself (`source_type` plus a `local` block). The page wizard sets them up; the browser opens them at `http://127.0.0.1:<admin port>/local/<page_id>`, and the URL is filled in automatically.
+
+```json
+{ "name": "Clock", "source_type": "clock", "local": { "title": "Lobby", "show_seconds": true } }
+{ "name": "Photos", "source_type": "slideshow", "local": { "folder": "/home/pi/Pictures", "interval_seconds": 10, "fit": "contain", "shuffle": true } }
+{ "name": "Notice", "source_type": "html", "local": { "html": "<h1>Welcome</h1>" } }
+```
+
+- `clock`: time and date in the browser's language; `hour12`, `show_seconds` and `hide_date` change the layout. It shifts slightly every minute against burn-in unless reduced motion is on.
+- `slideshow`: JPG, PNG, WebP, GIF, AVIF and BMP files from an absolute folder, sorted by name or shuffled, cross-faded every `interval_seconds` (2-86400). New files appear after one pass. Chromium decodes every image at full size, so images close to the screen resolution keep memory low on a Raspberry Pi.
+- `html`: up to 256 KB of your own HTML, pasted or loaded from a file in the wizard.
+- Local pages need no login but are only served to the device itself (and to a signed-in admin for a preview). They run in a sandbox with their own origin, so their scripts cannot use the Admin API, cookies or local storage.
+- With admin TLS the browser gets `--allow-insecure-localhost` so a self-signed certificate is accepted for these pages.
 
 ## Home Assistant 403 / White Page Troubleshooting
 

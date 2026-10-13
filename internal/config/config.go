@@ -94,6 +94,9 @@ type KioskPage struct {
 	// Preload opens the page as a background tab when the browser starts and
 	// keeps it open (tab mode only).
 	Preload bool `json:"preload,omitempty"`
+	// Local holds the settings of clock, slideshow and html pages, which
+	// KioskMate renders itself (see localpages.go).
+	Local *LocalPage `json:"local,omitempty"`
 }
 
 type KioskPageSchedule struct {
@@ -486,15 +489,22 @@ func Validate(cfg *Config) error {
 		return errors.New("reload after rotation rounds must be between 0 and 10000")
 	}
 	for index, page := range cfg.Kiosk.Pages {
-		if strings.TrimSpace(page.URL) == "" {
-			if page.Disabled {
-				continue
+		if page.IsLocal() {
+			// The URL of a local page is derived from the admin address.
+			if err := validateLocalPage(index, page); err != nil {
+				return err
 			}
-			return fmt.Errorf("kiosk page %d URL is required", index+1)
-		}
-		parsed, err := url.Parse(strings.TrimSpace(page.URL))
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-			return fmt.Errorf("kiosk page %d URL must use http:// or https:// and include a host", index+1)
+		} else {
+			if strings.TrimSpace(page.URL) == "" {
+				if page.Disabled {
+					continue
+				}
+				return fmt.Errorf("kiosk page %d URL is required", index+1)
+			}
+			parsed, err := url.Parse(strings.TrimSpace(page.URL))
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+				return fmt.Errorf("kiosk page %d URL must use http:// or https:// and include a host", index+1)
+			}
 		}
 		if page.DurationSeconds < 0 || page.DurationSeconds > 7*24*60*60 {
 			return fmt.Errorf("kiosk page %d duration must be between 0 and 604800 seconds", index+1)
@@ -715,6 +725,7 @@ func normalize(cfg *Config) {
 	}
 	migrateLegacySequence(&cfg.Kiosk)
 	normalizeKioskPages(&cfg.Kiosk)
+	normalizeLocalPages(cfg)
 	cfg.Kiosk.URLs = cfg.Kiosk.PageURLs()
 	if cfg.Kiosk.BrowserPreset == "" {
 		cfg.Kiosk.BrowserPreset = "chromium"

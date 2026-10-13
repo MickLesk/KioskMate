@@ -233,6 +233,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/assets/", s.asset)
+	mux.HandleFunc("/local/", s.localPage)
 	mux.HandleFunc("/api/auth/status", s.authStatus)
 	mux.HandleFunc("/api/auth/setup", s.authSetup)
 	mux.HandleFunc("/api/auth/login", s.authLogin)

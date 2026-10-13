@@ -1,6 +1,6 @@
 import { formatSchedulerReason } from "./actions-core.js";
 import { esc, field, formatDate, formatDuration, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
-import { button, normalizePages, renderRotation, renderRules, stateBanner, statusTile } from "./renderers.js";
+import { button, isLocalSource, normalizePages, renderRotation, renderRules, sourceLabel, sourceMark, stateBanner, statusTile } from "./renderers.js";
 import { renderWorkflows } from "./workflows.js";
 
 export function renderKiosk() {
@@ -135,17 +135,24 @@ export function renderKiosk() {
         </div>`;
       }
 
+      function localPageSummary(page) {
+        const local = page.local || {};
+        if (page.source_type === "slideshow") return local.folder || t("notConfigured");
+        return local.title || sourceLabel(page.source_type);
+      }
+
       function renderSequenceCard(page, index, selected) {
         let host = "";
-        try { host = new URL(page.url).host; } catch { host = page.url || t("notConfigured"); }
+        if (isLocalSource(page.source_type)) host = sourceLabel(page.source_type);
+        else try { host = new URL(page.url).host; } catch { host = page.url || t("notConfigured"); }
         return `<article class="sequence-card ${selected === index ? "selected" : ""} ${page.disabled ? "disabled" : ""}" draggable="true" data-sequence-index="${index}" data-page-select="${index}">
           <div class="sequence-card-top"><span class="step-number">${index + 1}</span><span class="duration-badge">${esc(pageTimingLabel(page))}</span><button class="icon-button drag-handle" data-page-drag-handle title="${esc(t("dragToReorder"))}" aria-label="${esc(t("dragToReorder"))}">&#8942;&#8942;</button></div>
           <button class="page-preview-tile" data-page-edit="${index}" title="${esc(t("editPage"))}">
-            <span class="source-mark">${page.source_type === "home_assistant" ? "HA" : "WEB"}</span>
+            <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
             <strong>${esc(host)}</strong>
             <small>${esc(page.display_mode === "schedule" ? t("fixedSchedule") : page.display_mode === "mqtt" ? t("triggerBased") : t("customDuration"))}</small>
           </button>
-          <div class="sequence-card-copy"><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><span>${esc(page.url || t("notConfigured"))}</span></div>
+          <div class="sequence-card-copy"><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><span>${esc(isLocalSource(page.source_type) ? localPageSummary(page) : page.url || t("notConfigured"))}</span></div>
           <div class="sequence-card-actions">
             <button data-page-move="${index}" data-direction="-1" ${index === 0 ? "disabled" : ""} title="${esc(t("moveUp"))}" aria-label="${esc(t("moveUp"))}">&larr;</button>
             <button data-page-move="${index}" data-direction="1" ${index === normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls).length - 1 ? "disabled" : ""} title="${esc(t("moveDown"))}" aria-label="${esc(t("moveDown"))}">&rarr;</button>

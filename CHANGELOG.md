@@ -11,6 +11,7 @@
 ### Kiosk
 - Added a renderer heartbeat: a page that stops responding is reloaded, then the browser restarts, and optionally the system reboots when restarts stop helping.
 - Added workflows: rules triggered by MQTT, a time of day, a webhook, touch input or inactivity that show a page, switch the display, set brightness, reload, show a banner, click, scroll, play a sound or run a script, with conditions, cooldown, fixed priority below manual overrides, conflict warnings, a test button and run history.
+- Added local pages that KioskMate renders itself: a clock, an image slideshow from a folder and custom HTML, sandboxed and only served to the device.
 - Added an optional tab mode that keeps recent pages open and switches without reloading, with per-page preloading.
 - Added scheduled maintenance reloads every N minutes, at a fixed time or after N rotation rounds.
 - Added an optional desktop-free mode with the Cage compositor.

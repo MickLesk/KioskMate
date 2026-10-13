@@ -1498,6 +1498,11 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		args = append(args, "--force-dark-mode", "--enable-features=WebContentsForceDark")
 	}
 	args = append(args, performanceArgs(cfg.Performance.Profile)...)
+	if cfg.Admin.TLSCert != "" && cfg.Admin.TLSKey != "" && hasLocalPages(cfg) {
+		// Local pages are served by the admin server, whose certificate is
+		// usually self-signed.
+		args = append(args, "--allow-insecure-localhost")
+	}
 	if cfg.Kiosk.ZoomPercent > 0 && cfg.Kiosk.ZoomPercent != 100 {
 		args = append(args, fmt.Sprintf("--force-device-scale-factor=%.2f", float64(cfg.Kiosk.ZoomPercent)/100.0))
 	}
@@ -1736,4 +1741,13 @@ func firefoxArgs(cfg *config.Config, page int) []string {
 		args = append(args, "--profile", browserUserDataDir(cfg, page))
 	}
 	return args
+}
+
+func hasLocalPages(cfg *config.Config) bool {
+	for _, page := range cfg.Kiosk.Pages {
+		if !page.Disabled && page.IsLocal() {
+			return true
+		}
+	}
+	return false
 }

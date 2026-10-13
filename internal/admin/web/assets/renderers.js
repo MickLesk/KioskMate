@@ -247,6 +247,7 @@ function renderPages(pages) {
         pages.forEach((page, index) => {
           if (page.disabled && !page.name && !page.url) return;
           if (!page.name.trim()) validationError(`page-name-${index}`, t("validationPageName"));
+          if (isLocalSource(page.source_type)) return;
           if (!page.url.trim()) validationError(`page-url-${index}`, t("validationPageUrl"));
           try {
             const parsed = new URL(page.url);
@@ -439,6 +440,20 @@ function renderPages(pages) {
 
       export function unsupportedControl(label) {
         return `<div class="unsupported-control"><label>${esc(label)}</label><span>${esc(t("notSupportedOnDevice"))}</span></div>`;
+      }
+
+      export const LOCAL_SOURCES = ["clock", "slideshow", "html"];
+
+      export function isLocalSource(type) {
+        return LOCAL_SOURCES.includes(type);
+      }
+
+      export function sourceMark(type) {
+        return { home_assistant: "HA", clock: "CLK", slideshow: "IMG", html: "HTML" }[type] || "WEB";
+      }
+
+      export function sourceLabel(type) {
+        return t({ home_assistant: "homeAssistantDashboard", clock: "sourceClock", slideshow: "sourceSlideshow", html: "sourceHtml" }[type] || "webAddress");
       }
 
       export function textarea(id, label, value = "") {

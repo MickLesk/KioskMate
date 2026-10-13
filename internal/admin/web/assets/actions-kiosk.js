@@ -1,6 +1,6 @@
 import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
 import { checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
-import { button, collectPages, collectRotation, collectRules, normalizePages, validatePages, validateScheduler, validationError } from "./renderers.js";
+import { button, collectPages, collectRotation, collectRules, isLocalSource, normalizePages, sourceLabel, sourceMark, validatePages, validateScheduler, validationError } from "./renderers.js";
 import { bindWorkflows } from "./workflows.js";
 import { absolutePageIndexFromEnabled, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
 
@@ -122,11 +122,12 @@ export function bindKiosk() {
       function openPageWizard(index = null, insertAt = null, sourceType = "url") {
         const pages = collectPages();
         const editing = index !== null && pages[index];
-        const page = editing ? { ...pages[index], schedule: { ...(pages[index].schedule || {}) }, trigger: { ...(pages[index].trigger || {}) }, display_options: { ...(pages[index].display_options || {}) } } : {
+        const page = editing ? { ...pages[index], local: { ...(pages[index].local || {}) }, schedule: { ...(pages[index].schedule || {}) }, trigger: { ...(pages[index].trigger || {}) }, display_options: { ...(pages[index].display_options || {}) } } : {
           page_id: createPageID(),
           name: sourceType === "home_assistant" ? "Home Assistant" : `${t("pages")} ${pages.length + 1}`,
           url: sourceType === "home_assistant" ? "http://homeassistant.local:8123" : "https://",
           source_type: sourceType,
+          local: {},
           display_mode: "duration",
           duration_seconds: 60,
           schedule: { start: "08:00", end: "18:00", days: [] },
@@ -168,6 +169,13 @@ export function bindKiosk() {
           if (event.target.value === "home_assistant" && (!state.pageWizard.page.url || state.pageWizard.page.url === "https://")) state.pageWizard.page.url = "http://homeassistant.local:8123";
           renderPageWizard();
         });
+        document.getElementById("wizard-local-html-file")?.addEventListener("change", async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          if (file.size > 256 * 1024) { toast(t("validationFailed"), t("validationLocalHtmlSize"), "error"); return; }
+          const area = document.getElementById("wizard-local-html");
+          if (area) area.value = await file.text();
+        });
         document.getElementById("wizard-brightness")?.addEventListener("input", (event) => {
           const output = document.getElementById("wizard-brightness-value");
           if (output) output.textContent = `${event.target.value}%`;
@@ -178,11 +186,11 @@ export function bindKiosk() {
         const page = wizard.page;
         if (wizard.step === 1) return `<div class="wizard-step-grid">
           ${field("wizard-page-name", t("pageName"), "text", "", page.name || "")}
-          ${selectHtml("wizard-source-type", t("pageSource"), page.source_type || "url", [["url", t("webAddress")], ["home_assistant", t("homeAssistantDashboard")]])}
-          <div class="span-2">${field("wizard-page-url", t("pageUrl"), "url", "", page.url || "")}</div>
+          ${selectHtml("wizard-source-type", t("pageSource"), page.source_type || "url", ["url", "home_assistant", "clock", "slideshow", "html"].map((type) => [type, sourceLabel(type)]))}
+          ${isLocalSource(page.source_type) ? renderLocalPageFields(page) : `<div class="span-2">${field("wizard-page-url", t("pageUrl"), "url", "", page.url || "")}</div>`}
           <div class="span-2">${switchHtml("wizard-page-disabled", t("disablePage"), !!page.disabled)}</div>
           <div class="span-2">${switchHtml("wizard-page-preload", t("preloadPage"), !!page.preload)}<small class="hint">${esc(t(state.config?.kiosk?.page_switch === "tabs" ? "preloadPageHint" : "preloadPageNeedsTabs"))}</small></div>
-          <div class="span-2 wizard-callout"><strong>${esc(t("validation"))}</strong><span>${esc(t("urlValidationHint"))}</span></div>
+          <div class="span-2 wizard-callout"><strong>${esc(t(isLocalSource(page.source_type) ? "localPage" : "validation"))}</strong><span>${esc(t(isLocalSource(page.source_type) ? "localPageHint" : "urlValidationHint"))}</span></div>
         </div>`;
         if (wizard.step === 2) {
           const mode = page.display_mode || "duration";
@@ -201,10 +209,51 @@ export function bindKiosk() {
         const nextIndex = wizard.index === null ? Math.min(wizard.insertAt, pages.length - 1) : (wizard.index + 1) % Math.max(1, pages.length);
         const next = pages[nextIndex];
         return `<div class="wizard-review">
-          <div class="review-visual"><span>${esc(page.source_type === "home_assistant" ? "HA" : "WEB")}</span><strong>${esc(page.name)}</strong><small>${esc(page.url)}</small></div>
+          <div class="review-visual"><span>${esc(sourceMark(page.source_type))}</span><strong>${esc(page.name)}</strong><small>${esc(isLocalSource(page.source_type) ? sourceLabel(page.source_type) : page.url)}</small></div>
           <dl><div><dt>${esc(t("displayMode"))}</dt><dd>${esc(page.display_mode === "schedule" ? t("fixedSchedule") : page.display_mode === "mqtt" ? t("triggerBased") : t("customDuration"))}</dd></div><div><dt>${esc(t("timing"))}</dt><dd>${esc(pageTimingLabel(page))}</dd></div><div><dt>${esc(t("nextPage"))}</dt><dd>${esc(next?.name || (pages.length ? pages[0]?.name : t("loop")))}</dd></div><div><dt>${esc(t("brightness"))}</dt><dd>${esc(page.display_options?.brightness ?? 100)}%</dd></div></dl>
           <div class="wizard-summary">${esc(t("workflowReview").replace("{name}", page.name).replace("{timing}", pageTimingLabel(page)).replace("{next}", next?.name || t("loop")))}</div>
         </div>`;
+      }
+
+      function renderLocalPageFields(page) {
+        const local = page.local || {};
+        const title = `<div class="span-2">${field("wizard-local-title", t("localTitle"), "text", "", local.title || "")}</div>`;
+        if (page.source_type === "clock") return `${title}
+          <div class="span-2">${switchHtml("wizard-local-hour12", t("clockHour12"), !!local.hour12)}</div>
+          <div class="span-2">${switchHtml("wizard-local-seconds", t("clockSeconds"), !!local.show_seconds)}</div>
+          <div class="span-2">${switchHtml("wizard-local-date", t("clockDate"), !local.hide_date)}</div>`;
+        if (page.source_type === "slideshow") return `
+          <div class="span-2">${field("wizard-local-folder", t("slideshowFolder"), "text", "", local.folder || "", "/home/pi/Pictures")}<small class="hint">${esc(t("slideshowFolderHint"))}</small></div>
+          ${field("wizard-local-interval", t("slideshowInterval"), "number", "", local.interval_seconds || 10)}
+          ${selectHtml("wizard-local-fit", t("slideshowFit"), local.fit || "contain", [["contain", t("slideshowFitContain")], ["cover", t("slideshowFitCover")]])}
+          <div class="span-2">${switchHtml("wizard-local-shuffle", t("slideshowShuffle"), !!local.shuffle)}</div>`;
+        return `
+          <div class="span-2"><label for="wizard-local-html">${esc(t("localHtml"))}</label><textarea id="wizard-local-html" rows="10" spellcheck="false">${esc(local.html || "")}</textarea><small class="hint">${esc(t("localHtmlHint"))}</small></div>
+          <div class="span-2"><label for="wizard-local-html-file">${esc(t("localHtmlUpload"))}</label><input id="wizard-local-html-file" type="file" accept=".html,.htm,text/html"></div>`;
+      }
+
+      function readLocalPageFields(page, validate) {
+        const local = { ...(page.local || {}) };
+        if (document.getElementById("wizard-local-title")) local.title = val("wizard-local-title");
+        if (page.source_type === "clock" && document.getElementById("wizard-local-hour12")) {
+          local.hour12 = checked("wizard-local-hour12");
+          local.show_seconds = checked("wizard-local-seconds");
+          local.hide_date = !checked("wizard-local-date");
+        }
+        if (page.source_type === "slideshow" && document.getElementById("wizard-local-folder")) {
+          local.folder = val("wizard-local-folder").trim();
+          local.interval_seconds = Number(val("wizard-local-interval") || 10);
+          local.fit = val("wizard-local-fit") || "contain";
+          local.shuffle = checked("wizard-local-shuffle");
+          if (validate && !/^(\/|[A-Za-z]:[\\/])/.test(local.folder)) validationError("wizard-local-folder", t("validationSlideshowFolder"));
+          if (validate && (local.interval_seconds < 2 || local.interval_seconds > 86400)) validationError("wizard-local-interval", t("validationSlideshowInterval"));
+        }
+        if (page.source_type === "html" && document.getElementById("wizard-local-html")) {
+          local.html = document.getElementById("wizard-local-html").value;
+          if (validate && !local.html.trim()) validationError("wizard-local-html", t("validationLocalHtml"));
+          if (validate && new Blob([local.html]).size > 256 * 1024) validationError("wizard-local-html", t("validationLocalHtmlSize"));
+        }
+        page.local = local;
       }
 
       function renderWizardDayPicker(selected) {
@@ -219,11 +268,12 @@ export function bindKiosk() {
         if (wizard.step === 1) {
           page.name = val("wizard-page-name") || page.name;
           page.source_type = val("wizard-source-type") || page.source_type;
-          page.url = val("wizard-page-url") || page.url;
+          if (document.getElementById("wizard-page-url")) page.url = val("wizard-page-url") || page.url;
           page.disabled = checked("wizard-page-disabled");
           page.preload = checked("wizard-page-preload");
           if (validate && !String(page.name || "").trim()) validationError("wizard-page-name", t("validationPageName"));
-          if (validate) {
+          if (isLocalSource(page.source_type)) readLocalPageFields(page, validate);
+          else if (validate) {
             try { const parsed = new URL(page.url); if (!["http:", "https:", "file:"].includes(parsed.protocol)) throw new Error("protocol"); }
             catch { validationError("wizard-page-url", t("validationPageUrl")); }
           }
