@@ -712,7 +712,6 @@ const NAV = [
         const browser = state.status?.browser || {};
         const mqtt = state.status?.mqtt || {};
         const timeInfo = state.time || {};
-        const keepContent = background && (state.dirtyViews.size > 0 || isEditing());
         if (!root.querySelector(":scope > .layout")) root.innerHTML = "";
         const html = `
           <div class="layout">
@@ -761,7 +760,8 @@ const NAV = [
           </div>`;
         morph(root, html, {
           preserveFocused: background,
-          skip: keepContent ? (element) => element.classList.contains("content") : undefined,
+          preserveEdited: background,
+          preserveExternal: background,
         });
         bindScope(() => {
           bindShell();
@@ -770,11 +770,6 @@ const NAV = [
         });
         startHeaderClock();
         if (!background) ensureViewData(state.view);
-      }
-
-      function isEditing() {
-        const active = document.activeElement;
-        return !!active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
       }
 
 	  // Background refreshes (loaded data, live updates) never discard input.

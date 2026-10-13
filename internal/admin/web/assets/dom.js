@@ -12,6 +12,31 @@
 
 const FORM_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA"]);
 
+// Form fields the user changed since their last foreground render. Background
+// renders (live status updates) keep their values, so a half-edited form can
+// stay on screen while everything around it updates.
+const edited = new WeakSet();
+const noteEdit = (event) => {
+  if (FORM_TAGS.has(event.target?.nodeName)) edited.add(event.target);
+};
+document.addEventListener("input", noteEdit, true);
+document.addEventListener("change", noteEdit, true);
+
+// Elements whose content an action wrote directly (check results, test
+// output, log text). Background renders leave them alone, otherwise a live
+// status update would wipe a result the user is reading. Writes are found
+// with a MutationObserver; mutations made by morph itself are discarded.
+const external = new WeakSet();
+const observed = new WeakSet();
+const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(collectExternal);
+
+function collectExternal(records) {
+  for (const record of records) {
+    const element = record.target.nodeType === Node.ELEMENT_NODE ? record.target : record.target.parentElement;
+    if (element) external.add(element);
+  }
+}
+
 function sameNode(from, to) {
   if (from.nodeType !== to.nodeType || from.nodeName !== to.nodeName) return false;
   if (from.nodeType !== Node.ELEMENT_NODE) return true;
@@ -33,6 +58,8 @@ function syncAttributes(from, to) {
 
 function syncFormValue(from, to, options) {
   if (options.preserveFocused && from === document.activeElement) return;
+  if (options.preserveEdited && edited.has(from)) return;
+  edited.delete(from);
   if (from.nodeName === "INPUT") {
     if (from.type === "checkbox" || from.type === "radio") {
       from.checked = to.hasAttribute("checked");
@@ -56,6 +83,8 @@ function morphNode(from, to, options) {
     return;
   }
   if (options.skip?.(from)) return;
+  if (options.preserveExternal && external.has(from)) return;
+  if (!options.preserveExternal) external.delete(from);
   syncAttributes(from, to);
   if (from.nodeName !== "TEXTAREA") morphChildren(from, to, options);
   if (FORM_TAGS.has(from.nodeName)) syncFormValue(from, to, options);
@@ -87,11 +116,19 @@ function morphChildren(from, to, options) {
 
 // morph replaces the children of target with html, reusing matching nodes.
 // options.skip(element) leaves an element and its subtree untouched;
-// options.preserveFocused keeps the value of the focused form field.
+// options.preserveFocused keeps the value of the focused form field;
+// options.preserveEdited keeps the values of fields the user changed.
+// options.preserveExternal keeps elements an action wrote to directly.
 export function morph(target, html, options = {}) {
+  if (observer && !observed.has(target)) {
+    observer.observe(target, { childList: true, characterData: true, subtree: true });
+    observed.add(target);
+  }
+  if (observer) collectExternal(observer.takeRecords());
   const template = document.createElement("template");
   template.innerHTML = html;
   morphChildren(target, template.content, options);
+  observer?.takeRecords();
 }
 
 const tracked = new Set();
