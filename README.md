@@ -250,6 +250,8 @@ The shell command is a compatibility wrapper around the canonical, cross-platfor
 python scripts/package-deb.py --version 0.8.0 --arch arm64 --arch amd64
 ```
 
+Packages embed a minified Admin UI: the builder runs `go run ./tools/minify` (esbuild, only at build time) and builds with `-tags minified`. Plain `go build` keeps embedding the readable sources.
+
 The package installs:
 
 - `/usr/bin/kioskmate`

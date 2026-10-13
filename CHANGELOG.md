@@ -20,6 +20,8 @@
 - Startup loads only what every view needs; journal, jobs, time zones and update history load with their view.
 - Served assets with ETag revalidation and gzip.
 - Split the stylesheet into tokens, layout, components and views and removed unused rules.
+- Release packages embed a minified Admin UI (about 25% smaller, 12% after gzip).
+- Live updates keep running while a form has unsaved changes; edited fields and action results stay as they are.
 
 ## v0.8.0
 

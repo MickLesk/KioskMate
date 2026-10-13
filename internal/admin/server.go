@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -42,9 +41,6 @@ import (
 	"github.com/MickLesk/KioskMate/internal/updater"
 	"golang.org/x/crypto/argon2"
 )
-
-//go:embed web/index.html web/assets/*
-var content embed.FS
 
 const sessionCookieName = "kioskmate_session"
 

@@ -31,6 +31,8 @@ def main() -> int:
     dist = root / "dist"
     dist.mkdir(parents=True, exist_ok=True)
 
+    # Release packages embed a minified Admin UI (go build -tags minified).
+    subprocess.run(["go", "run", "./tools/minify"], cwd=root, check=True)
     for arch in args.arch:
         build_package(root, dist, args.version, arch)
 
@@ -62,6 +64,7 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
             "go",
             "build",
             "-trimpath",
+            "-tags=minified",
             f"-ldflags=-s -w -X main.version={version}",
             "-o",
             str(pkg / "usr/bin/kioskmate"),

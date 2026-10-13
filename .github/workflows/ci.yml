@@ -29,6 +29,12 @@ jobs:
         run: |
           for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
+      - name: Minified Admin UI
+        run: |
+          go run ./tools/minify
+          for file in internal/admin/webmin/web/assets/*.js; do node --check "$file"; done
+          go vet -tags minified ./internal/admin
+          go test -tags minified -run 'TestAsset|TestIndex' ./internal/admin
       - name: Build Linux binaries
         run: |
           GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-linux-arm64 ./cmd/kioskmate
