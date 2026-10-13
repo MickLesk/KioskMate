@@ -297,6 +297,8 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 	tokenFailures := map[string]authEvidence{}
 	heartbeat := time.NewTicker(30 * time.Second)
 	defer heartbeat.Stop()
+	missed := 0
+	lastNavigation := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -306,6 +308,22 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 		case <-heartbeat.C:
 			if err := session.command(ctx, "Page.getFrameTree", map[string]any{}, nil); err != nil {
 				return err
+			}
+			// A heavy dashboard can keep the main thread busy while it
+			// loads on slow hardware; only probe pages that settled.
+			if time.Since(lastNavigation) < time.Minute || rendererResponds(ctx, session) {
+				missed = 0
+				continue
+			}
+			missed++
+			switch {
+			case missed == 2:
+				b.logger.Warn("kiosk page did not respond twice; reloading")
+				_ = session.command(ctx, "Page.reload", map[string]any{"ignoreCache": true}, nil)
+				lastNavigation = time.Now()
+			case missed >= 4:
+				go b.handleRendererHang()
+				return errRendererHung
 			}
 		case <-monitorTimer.C:
 			if len(tokenFailures) > 0 {
@@ -319,6 +337,7 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			clear(sockets)
 		case event := <-session.events:
 			if event.Method == "Page.frameNavigated" {
+				lastNavigation = time.Now()
 				if alwaysMonitor {
 					continue
 				}

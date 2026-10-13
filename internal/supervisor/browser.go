@@ -67,6 +67,8 @@ type Browser struct {
 	lastMaintenance  time.Time
 	lastActivity     time.Time
 	activityHandler  func()
+	rebootHandler    func(context.Context) error
+	rebootRequested  bool
 	activeTarget     string
 	tabs             map[int]string
 	tabUse           []int

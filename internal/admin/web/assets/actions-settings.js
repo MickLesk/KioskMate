@@ -111,6 +111,7 @@ export function bindSettings() {
           cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 300);
           cfg.watchdog.cpu_grace = durationToNs(val("watchdog-grace"));
           cfg.watchdog.check_interval = durationToNs(val("watchdog-interval"));
+          cfg.watchdog.reboot_on_hang = checked("watchdog-reboot-hang");
           await saveConfig(cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();

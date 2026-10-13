@@ -150,6 +150,9 @@ type WatchdogConfig struct {
 	MaxRSSMB      uint64        `json:"max_rss_mb"`
 	MaxCPUPercent float64       `json:"max_cpu_percent"`
 	CPUGrace      time.Duration `json:"cpu_grace"`
+	// RebootOnHang reboots the system when the kiosk page stays frozen and
+	// browser restarts no longer help (restart budget exhausted).
+	RebootOnHang bool `json:"reboot_on_hang,omitempty"`
 }
 
 type MQTTConfig struct {

@@ -778,5 +778,7 @@
   "conflict_time_rules_overlap": "The time rules {a} and {b} overlap; the first one wins.",
   "conflict_rules_same_trigger": "The workflows {a} and {b} react to the same event and both run.",
   "conflict_rule_page_topic": "The workflow {a} and the page {b} listen on the same MQTT topic.",
-  "isolatePageSessionsHint": "Only needed when pages sign in as different Home Assistant users: every page switch then restarts the browser."
+  "isolatePageSessionsHint": "Only needed when pages sign in as different Home Assistant users: every page switch then restarts the browser.",
+  "watchdogRebootOnHang": "Reboot when the page stays frozen",
+  "watchdogRebootOnHangHint": "A frozen page is reloaded first, then the browser restarts. Only when restarts stop helping (6 per hour) is the system rebooted. Needs reboot rights under Privileges."
 }

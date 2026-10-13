@@ -102,6 +102,7 @@ export function renderSettingsAdmin() {
                 ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 300)}
                 ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 600))}
                 ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
+                <div class="span-2">${switchHtml("watchdog-reboot-hang", t("watchdogRebootOnHang"), !!watchdog.reboot_on_hang)}<small class="hint">${esc(t("watchdogRebootOnHangHint"))}</small></div>
               </div>
             </div>
             <details class="card disclosure advanced-settings">
