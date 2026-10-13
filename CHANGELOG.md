@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0
 
 ### Lower resource use on small hardware
 - Cached slow hardware probes (sudo rights, display command, session type, DDC/CI) instead of re-running them on every status request; **System -> Rediscover hardware** forces a fresh scan.

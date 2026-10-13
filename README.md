@@ -35,7 +35,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.8.0` includes the authentication safety, lifecycle diagnostics and capability-aware discovery improvements described below.
+KioskMate `0.9.0` adds workflows, tab mode, local pages, a renderer watchdog, a ready-made Raspberry Pi OS image and experimental Windows support, and uses noticeably less CPU on small hardware. See [CHANGELOG.md](CHANGELOG.md).
 
 The Admin UI is organized by task:
 
@@ -84,14 +84,14 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.8.0/kioskmate_0.8.0_arm64.deb
-sudo apt install ./kioskmate_0.8.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.9.0/kioskmate_0.9.0_arm64.deb
+sudo apt install ./kioskmate_0.9.0_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
 Run the final `systemctl --user` command as the desktop user that owns the kiosk session, not as `root`. If the package was installed from a root shell, leave that shell with `exit` before enabling the user service.
 
-For amd64, use the `_amd64.deb` asset.
+For amd64, use the `_amd64.deb` asset. Windows builds are the `_windows_amd64.zip` and `_windows_arm64.zip` assets, see [docs/WINDOWS.md](docs/WINDOWS.md).
 
 KioskMate checks for updates when the service starts and every six hours. Available releases appear in the Admin header and Dashboard. Installing a Debian update requires passwordless sudo, a sudo password or the root password. Credentials can optionally remain in process memory for 15 minutes; they are never stored in the config file or on disk.
 
@@ -259,14 +259,14 @@ The event journal is stored at `~/.config/kioskmate/events.jsonl`. It is bounded
 ## Packaging
 
 ```bash
-VERSION=0.8.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.8.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.9.0 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.9.0 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 The shell command is a compatibility wrapper around the canonical, cross-platform package builder. Both architectures can be built in one invocation without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.8.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.9.0 --arch arm64 --arch amd64
 ```
 
 Packages embed a minified Admin UI: the builder runs `go run ./tools/minify` (esbuild, only at build time) and builds with `-tags minified`. Plain `go build` keeps embedding the readable sources.
