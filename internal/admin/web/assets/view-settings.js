@@ -1,6 +1,7 @@
-"use strict";
+import { checked, esc, field, formatDate, formatValue, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
+import { browserPresetOptions, button, kvTable, objectEntries, renderBackups, renderSessions, renderTelemetryChart, renderUpdateHistory, renderUpdateJobsHTML, renderUpdatePreflight, statusTile, textarea } from "./renderers.js";
 
-function renderSettingsAdmin() {
+export function renderSettingsAdmin() {
         const cfg = state.config || {};
         const endpoint = `${cfg.admin?.bind || "0.0.0.0"}:${cfg.admin?.port || 33333}`;
         return `
@@ -42,7 +43,7 @@ function renderSettingsAdmin() {
           </div>`;
       }
 
-      function renderSettingsBrowser() {
+      export function renderSettingsBrowser() {
         const cfg = state.config || {};
         const kiosk = cfg.kiosk || {};
         const perf = cfg.performance || {};
@@ -71,6 +72,20 @@ function renderSettingsAdmin() {
                 </div>
               </div>
             </div>
+            <div class="card">
+              <div class="head"><div><h3>${esc(t("pageSwitching"))}</h3><span class="section-kicker">${esc(t("pageSwitchingKicker"))}</span></div></div>
+              <div class="body form-grid">
+                ${selectHtml("kiosk-page-switch", t("pageSwitchMode"), kiosk.page_switch || "navigate", [["navigate", t("pageSwitchNavigate")], ["tabs", t("pageSwitchTabs")]])}
+                ${field("kiosk-max-tabs", t("maxOpenTabs"), "number", "", kiosk.max_tabs || 3)}
+                <p class="hint span-2">${esc(t(kiosk.isolate_page_sessions ? "pageSwitchIsolatedHint" : "pageSwitchHint"))}</p>
+                ${field("kiosk-reload-every", t("reloadEveryMinutes"), "number", "", kiosk.maintenance?.reload_every_minutes || "", "0")}
+                ${field("kiosk-reload-at", t("reloadAtTime"), "time", "", kiosk.maintenance?.reload_at || "")}
+                ${field("kiosk-reload-cycles", t("reloadAfterCycles"), "number", "", kiosk.maintenance?.reload_after_cycles || "", "0")}
+                <p class="hint span-2">${esc(t("scheduledReloadHint"))}</p>
+                ${selectHtml("perf-auth-monitor", t("authMonitor"), perf.auth_monitor || "window", [["window", t("authMonitorWindow")], ["always", t("authMonitorAlways")]])}
+                <p class="hint span-2">${esc(t("authMonitorHint"))}</p>
+              </div>
+            </div>
 			<div class="card">
 			  <div class="head"><div><h3>${esc(t("runtimeTelemetry"))}</h3><span class="section-kicker">${esc(t("last24Hours"))}</span></div><button data-action="telemetry-reset">${esc(t("resetTelemetry"))}</button></div>
 			  <div class="body telemetry-panel">
@@ -87,6 +102,7 @@ function renderSettingsAdmin() {
                 ${field("watchdog-cpu", t("maxCpu"), "number", "", watchdog.max_cpu_percent || 300)}
                 ${field("watchdog-grace", t("cpuGrace"), "number", "", secondsToDuration(watchdog.cpu_grace, 600))}
                 ${field("watchdog-interval", t("checkInterval"), "number", "", secondsToDuration(watchdog.check_interval, 10))}
+                <div class="span-2">${switchHtml("watchdog-reboot-hang", t("watchdogRebootOnHang"), !!watchdog.reboot_on_hang)}<small class="hint">${esc(t("watchdogRebootOnHangHint"))}</small></div>
               </div>
             </div>
             <details class="card disclosure advanced-settings">
@@ -95,7 +111,7 @@ function renderSettingsAdmin() {
                 ${selectHtml("kiosk-browser-preset", t("browserPreset"), kiosk.browser_preset || "chromium", browserPresetOptions())}
                 ${field("kiosk-browser", t("browserCommand"), "text", "", kiosk.browser_command || "")}
                 ${field("kiosk-user-data", t("browserProfile"), "text", "", kiosk.user_data_dir || "")}
-                <div>${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}</div>
+                <div>${switchHtml("kiosk-isolate-sessions", t("isolatePageSessions"), !!kiosk.isolate_page_sessions)}<small class="hint">${esc(t("isolatePageSessionsHint"))}</small></div>
                 <div class="span-2">${textarea("kiosk-extra-args", t("extraArgs"), (kiosk.extra_args || []).join("\n"))}</div>
                 <div class="span-2">${button("testBrowser", "browser-diagnostics")}</div>
                 ${state.diagnostics ? `<div class="span-2">${kvTable(objectEntries(state.diagnostics))}</div>` : ""}
@@ -105,7 +121,7 @@ function renderSettingsAdmin() {
           </div>`;
       }
 
-      function renderSettingsConfig() {
+      export function renderSettingsConfig() {
         const cfg = state.config || {};
         return `
           <div class="page-stack">
@@ -126,7 +142,7 @@ function renderSettingsAdmin() {
           </div>`;
       }
 
-      function renderSettingsMaintenance() {
+      export function renderSettingsMaintenance() {
         const update = state.update || {};
         const privilege = state.privilege || {};
         const passwordless = !!state.hardware?.support?.sudo_rights;

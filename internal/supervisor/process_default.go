@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package supervisor
 
@@ -18,3 +18,5 @@ func terminateProcessTree(pid int) error {
 	}
 	return exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
 }
+
+func adoptProcessTree(int) {}

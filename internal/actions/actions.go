@@ -63,6 +63,9 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 	if !ok {
 		return nil, fmt.Errorf("unknown action: %s", name)
 	}
+	if err := checkPlatform(name); err != nil {
+		return nil, err
+	}
 	rememberPassword := strings.TrimSpace(password) != ""
 	if password == "" {
 		if storedMode, storedPassword, ok := s.privilegeCredential(); ok {
@@ -115,6 +118,9 @@ func (s *Service) StartPrivileged(ctx context.Context, name string, mode string,
 }
 
 func (s *Service) StartTimeConfig(ctx context.Context, timezone string, server string, mode string, password string) (*Job, error) {
+	if err := checkPlatform("time-config"); err != nil {
+		return nil, err
+	}
 	timezone = strings.TrimSpace(timezone)
 	server = strings.TrimSpace(server)
 	if timezone == "" || server == "" {
@@ -176,6 +182,9 @@ func (s *Service) startCommand(ctx context.Context, name string, command string,
 }
 
 func (s *Service) RememberPrivilege(mode string, password string) error {
+	if err := checkPlatform("privilege"); err != nil {
+		return err
+	}
 	password = strings.TrimSpace(password)
 	if password == "" {
 		return fmt.Errorf("password required")

@@ -50,10 +50,10 @@ type themeReport struct {
 	AppliedDark    *bool  `json:"applied_dark,omitempty"`
 }
 
-func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
+func dialDevTools(ctx context.Context, profile string, preferred string) (*cdpSession, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	target, err := waitForDevToolsTarget(ctx, profile)
+	target, err := waitForDevToolsTarget(ctx, profile, preferred)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +69,8 @@ func dialDevTools(ctx context.Context, profile string) (*cdpSession, error) {
 	return session, nil
 }
 
-func captureDevToolsScreenshot(ctx context.Context, profile string) ([]byte, error) {
-	session, err := dialDevTools(ctx, profile)
+func captureDevToolsScreenshot(ctx context.Context, profile string, preferred string) ([]byte, error) {
+	session, err := dialDevTools(ctx, profile, preferred)
 	if err != nil {
 		return nil, err
 	}
@@ -144,10 +144,23 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 	}()
 	navigated := false
 	for attempt := 0; ctx.Err() == nil; attempt++ {
-		session, err := dialDevTools(ctx, profile)
+		b.mu.Lock()
+		preferred := b.activeTarget
+		b.mu.Unlock()
+		session, err := dialDevTools(ctx, profile, preferred)
 		if err == nil {
+			if b.bindControlTarget(session.target.ID) {
+				// A freshly created tab starts blank; navigate it once
+				// monitoring is attached, like the initial launch.
+				navigated = false
+			}
 			err = b.runDevTools(ctx, session, theme, done, &navigated)
 			session.close()
+		}
+		if b.consumeRetarget() && ctx.Err() == nil {
+			// Planned switch to another tab, not a control failure.
+			attempt = -1
+			continue
 		}
 		b.mu.Lock()
 		shouldRecover := false
@@ -205,9 +218,30 @@ func (b *Browser) monitorDevTools(profile string, theme string, done <-chan stru
 	}
 }
 
+// networkMonitorWindow is how long DevTools network events stay enabled after
+// a top-level navigation. Home Assistant authenticates while the frontend
+// loads; afterwards the event stream (WebSocket state updates, camera
+// streams) only costs CPU in Chromium and KioskMate. A later session loss
+// redirects to /auth/authorize, which is a new navigation and re-arms it.
+var networkMonitorWindow = 5 * time.Minute
+
+// networkEnableParams keep Chromium from buffering large response bodies for
+// DevTools; only small /auth/token bodies are ever read.
+var networkEnableParams = map[string]any{
+	"maxTotalBufferSize":    4 << 20,
+	"maxResourceBufferSize": 64 << 10,
+}
+
 func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme string, done <-chan struct{}, navigated *bool) error {
-	if err := session.command(ctx, "Network.enable", map[string]any{}, nil); err != nil {
+	if err := session.command(ctx, "Network.enable", networkEnableParams, nil); err != nil {
 		return err
+	}
+	networkOn := true
+	alwaysMonitor := strings.EqualFold(strings.TrimSpace(b.cfg.Snapshot().Performance.AuthMonitor), "always")
+	monitorTimer := time.NewTimer(networkMonitorWindow)
+	defer monitorTimer.Stop()
+	if alwaysMonitor {
+		monitorTimer.Stop()
 	}
 	if err := session.command(ctx, "Page.enable", map[string]any{}, nil); err != nil {
 		return err
@@ -217,6 +251,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 	}
 	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
 		b.setThemeError(theme, err)
+	}
+	if err := installActivityListener(ctx, session); err != nil {
+		b.logger.Debug("kiosk input listener unavailable", "error", err)
 	}
 	b.mu.Lock()
 	if b.done != done {
@@ -246,6 +283,7 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			return fmt.Errorf("navigate to kiosk page: %s", result.Error)
 		}
 		*navigated = true
+		go b.preloadTabs(ctx, cfg)
 		b.mu.Lock()
 		if b.done == done && !b.authGuard.Tripped {
 			b.readySince = time.Now()
@@ -259,6 +297,8 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 	tokenFailures := map[string]authEvidence{}
 	heartbeat := time.NewTicker(30 * time.Second)
 	defer heartbeat.Stop()
+	missed := 0
+	lastNavigation := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -269,7 +309,57 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			if err := session.command(ctx, "Page.getFrameTree", map[string]any{}, nil); err != nil {
 				return err
 			}
+			// A heavy dashboard can keep the main thread busy while it
+			// loads on slow hardware; only probe pages that settled.
+			if time.Since(lastNavigation) < time.Minute || rendererResponds(ctx, session) {
+				missed = 0
+				continue
+			}
+			missed++
+			switch {
+			case missed == 2:
+				b.logger.Warn("kiosk page did not respond twice; reloading")
+				_ = session.command(ctx, "Page.reload", map[string]any{"ignoreCache": true}, nil)
+				lastNavigation = time.Now()
+			case missed >= 4:
+				go b.handleRendererHang()
+				return errRendererHung
+			}
+		case <-monitorTimer.C:
+			if len(tokenFailures) > 0 {
+				monitorTimer.Reset(30 * time.Second)
+				continue
+			}
+			if err := session.command(ctx, "Network.disable", map[string]any{}, nil); err != nil {
+				return err
+			}
+			networkOn = false
+			clear(sockets)
 		case event := <-session.events:
+			if event.Method == "Page.frameNavigated" {
+				lastNavigation = time.Now()
+				if alwaysMonitor {
+					continue
+				}
+				if !networkOn {
+					if err := session.command(ctx, "Network.enable", networkEnableParams, nil); err != nil {
+						return err
+					}
+					networkOn = true
+				}
+				if !monitorTimer.Stop() {
+					select {
+					case <-monitorTimer.C:
+					default:
+					}
+				}
+				monitorTimer.Reset(networkMonitorWindow)
+				continue
+			}
+			if event.Method == "Runtime.bindingCalled" {
+				b.noteActivity()
+				continue
+			}
 			if event.Method == "Runtime.consoleAPICalled" {
 				if report, ok := parseThemeConsoleEvent(event.Params); ok {
 					b.setThemeReport(theme, report)
@@ -522,11 +612,11 @@ func authRelevantResourceType(kind string) bool {
 	}
 }
 
-func waitForDevToolsTarget(ctx context.Context, profile string) (devToolsTarget, error) {
+func waitForDevToolsTarget(ctx context.Context, profile string, preferred string) (devToolsTarget, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		target, err := readDevToolsTarget(ctx, profile)
+		target, err := readDevToolsTarget(ctx, profile, preferred)
 		if err == nil {
 			return target, nil
 		}
@@ -538,7 +628,7 @@ func waitForDevToolsTarget(ctx context.Context, profile string) (devToolsTarget,
 	}
 }
 
-func readDevToolsTarget(ctx context.Context, profile string) (devToolsTarget, error) {
+func readDevToolsTarget(ctx context.Context, profile string, preferred string) (devToolsTarget, error) {
 	data, err := os.ReadFile(filepath.Join(profile, "DevToolsActivePort"))
 	if err != nil {
 		return devToolsTarget{}, err
@@ -567,6 +657,19 @@ func readDevToolsTarget(ctx context.Context, profile string) (devToolsTarget, er
 	var targets []devToolsTarget
 	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
 		return devToolsTarget{}, err
+	}
+	return pickDevToolsTarget(targets, preferred)
+}
+
+// pickDevToolsTarget returns the preferred page target (the active kiosk tab)
+// when it exists, otherwise the first page target.
+func pickDevToolsTarget(targets []devToolsTarget, preferred string) (devToolsTarget, error) {
+	if preferred != "" {
+		for _, target := range targets {
+			if target.ID == preferred && target.Type == "page" && target.WebSocketDebuggerURL != "" {
+				return target, nil
+			}
+		}
 	}
 	for _, target := range targets {
 		if target.Type == "page" && target.WebSocketDebuggerURL != "" {

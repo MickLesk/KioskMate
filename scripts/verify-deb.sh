@@ -34,6 +34,9 @@ mkdir -p "$ROOTFS"
 dpkg-deb --extract "$DEB" "$ROOTFS"
 test -x "$ROOTFS/usr/bin/kioskmate"
 test -r "$ROOTFS/usr/lib/systemd/user/kioskmate.service"
+test -r "$ROOTFS/usr/lib/systemd/system/kioskmate-cage@.service"
+test -x "$ROOTFS/usr/share/kioskmate/cage/setup-cage.sh"
+bash -n "$ROOTFS/usr/share/kioskmate/cage/setup-cage.sh"
 if [ "$ARCH" = "$(dpkg --print-architecture)" ]; then
   test "$("$ROOTFS/usr/bin/kioskmate" --version)" = "$VERSION"
 fi

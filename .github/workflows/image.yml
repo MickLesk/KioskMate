@@ -1,0 +1,45 @@
+name: Raspberry Pi image
+
+# Manual only: a pi-gen build takes a long time and needs privileged Docker.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "KioskMate version for the package and the image name"
+        required: true
+        default: "0.0.0-dev"
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    # Native arm64 runner: pi-gen builds without qemu emulation.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - name: Build Debian package
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 scripts/package-deb.py --version "$VERSION" --arch arm64
+          bash scripts/verify-deb.sh "dist/kioskmate_${VERSION}_arm64.deb"
+      - name: Build image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: KIOSKMATE_DEB="dist/kioskmate_${VERSION}_arm64.deb" bash image/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kioskmate-image-${{ inputs.version }}
+          path: dist/image/
+          compression-level: 0
+          retention-days: 14

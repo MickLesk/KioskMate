@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/logutil"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/updater"
+	"github.com/MickLesk/KioskMate/internal/workflow"
 )
 
 var version = "dev"
@@ -37,6 +39,8 @@ func main() {
 	repair := flag.Bool("repair", false, "Repair config and user service defaults")
 	adminReset := flag.Bool("admin-reset", false, "Remove admin password hash and return to setup mode")
 	adminPassword := flag.Bool("admin-password", false, "Set admin password from KIOSKMATE_ADMIN_PASSWORD")
+	adminPasswordStdin := flag.Bool("set-admin-password-stdin", false, "Read the admin password from standard input, store its hash and exit")
+	startURL := flag.String("set-start-url", "", "Set the first kiosk page URL (or create a page) and exit")
 	flag.Parse()
 
 	if *printVersion {
@@ -56,6 +60,13 @@ func main() {
 	}
 	if *adminInfo || *doctor || *repair || *adminReset || *adminPassword {
 		if err := handleCommand(*adminInfo, *doctor, *repair, *adminReset, *adminPassword, cfg, version, logFile); err != nil {
+			logger.Error("command failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *adminPasswordStdin || *startURL != "" {
+		if err := handleSetup(cfg, *adminPasswordStdin, os.Stdin, *startURL); err != nil {
 			logger.Error("command failed", "error", err)
 			os.Exit(1)
 		}
@@ -87,6 +98,9 @@ func main() {
 	browser.SetDisplayPower(hardwareService)
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"), eventJournal)
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"), eventJournal)
+	workflowEngine := workflow.New(cfg, browser, hardwareService, logger.With("component", "workflow"), eventJournal)
+	mqttService.SetWorkflow(workflowEngine)
+	server.SetWorkflow(workflowEngine)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -106,6 +120,12 @@ func main() {
 	}()
 	go browser.RunScheduler(ctx)
 	go mqttService.Run(ctx)
+	browser.SetActivityHandler(func() { workflowEngine.HandleActivity(ctx) })
+	browser.SetRebootHandler(func(ctx context.Context) error {
+		_, err := actionService.Start(ctx, "reboot")
+		return err
+	})
+	go workflowEngine.Run(ctx)
 	go updateService.Run(ctx)
 
 	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
@@ -242,6 +262,69 @@ func handleCommand(adminInfo, doctor, repair, adminReset, adminPassword bool, cf
 		fmt.Println(string(data))
 	}
 	return nil
+}
+
+// handleSetup applies the non-interactive setup flags used by image
+// provisioning (first-boot kioskmate.txt). Changes go through Config.Mutate so
+// they are normalized, validated and backed up like Admin UI saves.
+func handleSetup(cfg *config.Config, passwordFromStdin bool, stdin io.Reader, startURL string) error {
+	if passwordFromStdin {
+		if err := setAdminPassword(cfg, stdin); err != nil {
+			return err
+		}
+		fmt.Println("Admin password updated.")
+	}
+	if startURL != "" {
+		if err := setStartURL(cfg, startURL); err != nil {
+			return err
+		}
+		fmt.Println("Start URL updated.")
+	}
+	return nil
+}
+
+func setAdminPassword(cfg *config.Config, stdin io.Reader) error {
+	data, err := io.ReadAll(io.LimitReader(stdin, 4097))
+	if err != nil {
+		return err
+	}
+	if len(data) > 4096 {
+		return errors.New("admin password on standard input is too long")
+	}
+	// Only the line terminator is stripped; other whitespace is part of the password.
+	password := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+	if strings.ContainsAny(password, "\r\n") {
+		return errors.New("admin password must be a single line")
+	}
+	if len(password) < 8 {
+		return errors.New("admin password must contain at least 8 characters")
+	}
+	hash, err := admin.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	return cfg.Mutate(func(next *config.Config) error {
+		next.Admin.PasswordHash = hash
+		return nil
+	})
+}
+
+func setStartURL(cfg *config.Config, startURL string) error {
+	startURL = strings.TrimSpace(startURL)
+	return cfg.Mutate(func(next *config.Config) error {
+		if len(next.Kiosk.Pages) == 0 {
+			next.Kiosk.Pages = []config.KioskPage{{Name: "Kiosk", URL: startURL}}
+			return nil
+		}
+		page := &next.Kiosk.Pages[0]
+		if page.Name == "" || page.Name == "Home Assistant Demo" {
+			page.Name = "Kiosk"
+		}
+		page.URL = startURL
+		page.SourceType = "" // re-detected by normalize
+		page.Disabled = false
+		return nil
+	})
 }
 
 func fileExists(path string) bool {

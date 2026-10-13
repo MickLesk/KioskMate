@@ -48,19 +48,36 @@ func (c AdminConfig) Addr() string {
 }
 
 type KioskConfig struct {
-	URLs            []string       `json:"urls"`
-	Pages           []KioskPage    `json:"pages"`
-	BrowserPreset   string         `json:"browser_preset"`
-	BrowserCommand  string         `json:"browser_command"`
-	ExtraArgs       []string       `json:"extra_args"`
-	UserDataDir     string         `json:"user_data_dir"`
-	IsolateSessions bool           `json:"isolate_page_sessions"`
-	Theme           string         `json:"theme"`
-	ZoomPercent     int            `json:"zoom_percent"`
-	Widget          bool           `json:"widget"`
-	Scheduler       KioskScheduler `json:"scheduler"`
-	Rotation        []RotationItem `json:"rotation"`
-	TimeRules       []TimeRule     `json:"time_rules"`
+	URLs            []string         `json:"urls"`
+	Pages           []KioskPage      `json:"pages"`
+	BrowserPreset   string           `json:"browser_preset"`
+	BrowserCommand  string           `json:"browser_command"`
+	ExtraArgs       []string         `json:"extra_args"`
+	UserDataDir     string           `json:"user_data_dir"`
+	IsolateSessions bool             `json:"isolate_page_sessions"`
+	Theme           string           `json:"theme"`
+	ZoomPercent     int              `json:"zoom_percent"`
+	Widget          bool             `json:"widget"`
+	Scheduler       KioskScheduler   `json:"scheduler"`
+	Rotation        []RotationItem   `json:"rotation"`
+	TimeRules       []TimeRule       `json:"time_rules"`
+	Maintenance     KioskMaintenance `json:"maintenance,omitempty"`
+	// PageSwitch is "navigate" (default) or "tabs": keep up to MaxTabs pages
+	// open as tabs and switch between them without reloading.
+	PageSwitch string `json:"page_switch,omitempty"`
+	MaxTabs    int    `json:"max_tabs,omitempty"`
+	// Rules are event-driven workflow steps on top of the playlist.
+	Rules []WorkflowRule `json:"rules,omitempty"`
+}
+
+// KioskMaintenance schedules soft page reloads. Dashboards that run for days
+// slowly leak memory in the page; a reload is far cheaper than a watchdog
+// browser restart and keeps the signed-in session.
+type KioskMaintenance struct {
+	ReloadEveryMinutes int    `json:"reload_every_minutes,omitempty"`
+	ReloadAt           string `json:"reload_at,omitempty"`
+	// ReloadAfterCycles reloads after the rotation ran this many full rounds.
+	ReloadAfterCycles int `json:"reload_after_cycles,omitempty"`
 }
 
 type KioskPage struct {
@@ -74,6 +91,12 @@ type KioskPage struct {
 	Trigger         KioskPageTrigger    `json:"trigger,omitempty"`
 	DisplayOptions  KioskDisplayOptions `json:"display_options,omitempty"`
 	Disabled        bool                `json:"disabled"`
+	// Preload opens the page as a background tab when the browser starts and
+	// keeps it open (tab mode only).
+	Preload bool `json:"preload,omitempty"`
+	// Local holds the settings of clock, slideshow and html pages, which
+	// KioskMate renders itself (see localpages.go).
+	Local *LocalPage `json:"local,omitempty"`
 }
 
 type KioskPageSchedule struct {
@@ -117,6 +140,10 @@ type PerfConfig struct {
 	Profile      string `json:"profile"`
 	GPUMode      string `json:"gpu_mode"`
 	ReduceMotion bool   `json:"reduce_motion"`
+	// AuthMonitor controls DevTools network monitoring for Home Assistant
+	// authentication failures: "window" (default) watches for a few minutes
+	// after every top-level navigation, "always" keeps it enabled.
+	AuthMonitor string `json:"auth_monitor,omitempty"`
 }
 
 type WatchdogConfig struct {
@@ -126,6 +153,9 @@ type WatchdogConfig struct {
 	MaxRSSMB      uint64        `json:"max_rss_mb"`
 	MaxCPUPercent float64       `json:"max_cpu_percent"`
 	CPUGrace      time.Duration `json:"cpu_grace"`
+	// RebootOnHang reboots the system when the kiosk page stays frozen and
+	// browser restarts no longer help (restart budget exhausted).
+	RebootOnHang bool `json:"reboot_on_hang,omitempty"`
 }
 
 type MQTTConfig struct {
@@ -205,6 +235,17 @@ func (k KioskConfig) PageName(index int) string {
 
 func (k KioskConfig) PageCount() int {
 	return len(k.PageURLs())
+}
+
+// PreloadIndexes returns the enabled-page indexes marked for preloading.
+func (k KioskConfig) PreloadIndexes() []int {
+	var out []int
+	for index, page := range k.enabledPages() {
+		if page.Preload {
+			out = append(out, index)
+		}
+	}
+	return out
 }
 
 func (k KioskConfig) enabledPages() []KioskPage {
@@ -322,6 +363,7 @@ func (cfg *Config) Snapshot() *Config {
 	for i := range clone.Kiosk.TimeRules {
 		clone.Kiosk.TimeRules[i].Days = slices.Clone(cfg.Kiosk.TimeRules[i].Days)
 	}
+	clone.Kiosk.Rules = cloneRules(cfg.Kiosk.Rules)
 	return &clone
 }
 
@@ -428,16 +470,41 @@ func Validate(cfg *Config) error {
 	if tick := cfg.Kiosk.Scheduler.TickInterval; tick < 0 || tick > 24*time.Hour {
 		return errors.New("scheduler tick interval must be between 0 and 24 hours")
 	}
+	if mode := cfg.Kiosk.PageSwitch; mode != "" && mode != "navigate" && mode != "tabs" {
+		return errors.New("page switch mode must be navigate or tabs")
+	}
+	if cfg.Kiosk.MaxTabs < 0 || cfg.Kiosk.MaxTabs > 8 {
+		return errors.New("maximum open tabs must be between 1 and 8")
+	}
+	if err := validateRules(cfg.Kiosk); err != nil {
+		return err
+	}
+	if every := cfg.Kiosk.Maintenance.ReloadEveryMinutes; every != 0 && (every < 10 || every > 7*24*60) {
+		return errors.New("scheduled reload interval must be 0 or between 10 minutes and 7 days")
+	}
+	if at := strings.TrimSpace(cfg.Kiosk.Maintenance.ReloadAt); at != "" && !validClock(at) {
+		return errors.New("scheduled reload time must use HH:MM")
+	}
+	if cycles := cfg.Kiosk.Maintenance.ReloadAfterCycles; cycles < 0 || cycles > 10000 {
+		return errors.New("reload after rotation rounds must be between 0 and 10000")
+	}
 	for index, page := range cfg.Kiosk.Pages {
-		if strings.TrimSpace(page.URL) == "" {
-			if page.Disabled {
-				continue
+		if page.IsLocal() {
+			// The URL of a local page is derived from the admin address.
+			if err := validateLocalPage(index, page); err != nil {
+				return err
 			}
-			return fmt.Errorf("kiosk page %d URL is required", index+1)
-		}
-		parsed, err := url.Parse(strings.TrimSpace(page.URL))
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-			return fmt.Errorf("kiosk page %d URL must use http:// or https:// and include a host", index+1)
+		} else {
+			if strings.TrimSpace(page.URL) == "" {
+				if page.Disabled {
+					continue
+				}
+				return fmt.Errorf("kiosk page %d URL is required", index+1)
+			}
+			parsed, err := url.Parse(strings.TrimSpace(page.URL))
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+				return fmt.Errorf("kiosk page %d URL must use http:// or https:// and include a host", index+1)
+			}
 		}
 		if page.DurationSeconds < 0 || page.DurationSeconds > 7*24*60*60 {
 			return fmt.Errorf("kiosk page %d duration must be between 0 and 604800 seconds", index+1)
@@ -511,17 +578,6 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
-}
-
-func defaultPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "kioskmate", "config.json")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "kioskmate.json"
-	}
-	return filepath.Join(home, ".config", "kioskmate", "config.json")
 }
 
 func ConfigDir(path string) string {
@@ -658,6 +714,7 @@ func normalize(cfg *Config) {
 	}
 	migrateLegacySequence(&cfg.Kiosk)
 	normalizeKioskPages(&cfg.Kiosk)
+	normalizeLocalPages(cfg)
 	cfg.Kiosk.URLs = cfg.Kiosk.PageURLs()
 	if cfg.Kiosk.BrowserPreset == "" {
 		cfg.Kiosk.BrowserPreset = "chromium"
@@ -959,7 +1016,6 @@ func ApplyRaspberrySafeMode(cfg *Config) {
 	cfg.Watchdog.MaxRSSMB = 1200
 	cfg.Watchdog.MaxCPUPercent = 300
 	cfg.Kiosk.ExtraArgs = appendUnique(cfg.Kiosk.ExtraArgs,
-		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--disable-sync",
 		"--metrics-recording-only",
@@ -1086,17 +1142,6 @@ func pruneConfigBackups(dir string, keep int) error {
 		}
 	}
 	return nil
-}
-
-func defaultBrowserDataDir() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "kioskmate", "Browser")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "kioskmate-browser"
-	}
-	return filepath.Join(home, ".config", "kioskmate", "Browser")
 }
 
 func saveIfMissing(path string, cfg *Config) error {

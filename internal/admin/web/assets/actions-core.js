@@ -1,6 +1,11 @@
-"use strict";
+import { bindKiosk, bindScheduler, loadBrowserDiagnostics } from "./actions-kiosk.js";
+import { bindMQTT } from "./actions-mqtt.js";
+import { bindSettings } from "./actions-settings.js";
+import { bindHardware, bindLogs, bindSystem, bindSystemMaintenance, bindTerminal } from "./actions-system.js";
+import { esc, getJSON, openModal, postJSON, refreshCore, renderApp, runAction, state, t } from "./app-core.js";
+import { button } from "./renderers.js";
 
-function bindView() {
+export function bindView() {
         if (state.view === "dashboard") bindDashboard();
         if (state.view === "kiosk" || state.view === "kiosk-pages") { bindKiosk(); bindScheduler(); }
         if (state.view === "kiosk-schedule") bindScheduler();
@@ -32,7 +37,7 @@ function bindView() {
         });
       }
 
-      function bindBrowserButtons() {
+      export function bindBrowserButtons() {
         const actions = {
           "browser-start": "start",
           "browser-stop": "stop",
@@ -57,13 +62,13 @@ function bindView() {
         });
       }
 
-      function clearSnapshot() {
+      export function clearSnapshot() {
         if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
         state.snapshotURL = "";
         state.snapshotTime = "";
       }
 
-      function formatThemeStatus(status) {
+      export function formatThemeStatus(status) {
         if (!status || !status.state) return "-";
         if (status.state === "pending") return t("pending");
         if (status.state === "failed") return `${t("failed")}: ${status.error || "-"}`;
@@ -71,7 +76,7 @@ function bindView() {
         return `${t("applied")}: ${status.selected_theme || status.requested_theme || "default"} / ${mode}`;
       }
 
-      function formatSchedulerReason(reason) {
+      export function formatSchedulerReason(reason) {
         const key = {
           disabled: "disabled",
           time: "timeMode",

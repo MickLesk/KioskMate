@@ -16,20 +16,37 @@ jobs:
         with:
           go-version-file: .go-version
           cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Verify formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
+      - name: Vet for Windows
+        run: |
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=windows GOARCH=arm64 go vet ./...
       - name: Race tests
         run: go test -race ./...
       - name: Frontend syntax
         run: |
           for file in internal/admin/web/assets/*.js; do node --check "$file"; done
           node scripts/check-i18n.mjs
+      - name: Minified Admin UI
+        run: |
+          go run ./tools/minify
+          for file in internal/admin/webmin/web/assets/*.js; do node --check "$file"; done
+          go vet -tags minified ./internal/admin
+          go test -tags minified -run 'TestAsset|TestIndex' ./internal/admin
       - name: Build Linux binaries
         run: |
           GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-linux-arm64 ./cmd/kioskmate
           GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-linux-amd64 ./cmd/kioskmate
+      - name: Build Windows binaries
+        run: |
+          GOOS=windows GOARCH=amd64 go build -trimpath -o /tmp/kioskmate-windows-amd64.exe ./cmd/kioskmate
+          GOOS=windows GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-windows-arm64.exe ./cmd/kioskmate
       - name: Build Debian packages
         run: |
           python3 scripts/package-deb.py --version 0.0.0-ci --arch arm64 --arch amd64

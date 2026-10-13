@@ -1,12 +1,12 @@
+//go:build !windows
+
 package hardware
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,56 +18,31 @@ import (
 	"time"
 )
 
-type Service struct {
-	mu       sync.Mutex
-	cached   Status
-	cachedAt time.Time
+// Rediscover drops all memoized capability probes (sudo rights, ddcutil
+// features, display tool, session type) and the status cache.
+func (s *Service) Rediscover() {
+	resetProbes()
+	diskUsageMu.Lock()
+	diskUsageAt = time.Time{}
+	diskUsageMu.Unlock()
+	s.InvalidateCache()
 }
 
-type Status struct {
-	Support Support           `json:"support"`
-	Session map[string]string `json:"session"`
-	Device  map[string]any    `json:"device"`
-	Network map[string]any    `json:"network"`
-	System  map[string]any    `json:"system"`
-	Runtime map[string]any    `json:"runtime"`
-	Display map[string]any    `json:"display"`
-	Audio   map[string]any    `json:"audio"`
-}
-
-type Support struct {
-	SudoRights           bool `json:"sudo_rights"`
-	DisplayStatus        bool `json:"display_status"`
-	DisplayBrightness    bool `json:"display_brightness"`
-	AudioVolume          bool `json:"audio_volume"`
-	MicrophoneVolume     bool `json:"microphone_volume"`
-	KeyboardVisibility   bool `json:"keyboard_visibility"`
-	BatteryLevel         bool `json:"battery_level"`
-	IlluminanceLevel     bool `json:"illuminance_level"`
-	PackageUpgrades      bool `json:"package_upgrades"`
-	ProcessorTemperature bool `json:"processor_temperature"`
-}
-
-func New() *Service {
-	return &Service{}
-}
-
-func (s *Service) Status(ctx context.Context) Status {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.cachedAt.IsZero() && time.Since(s.cachedAt) < 5*time.Second {
-		return s.cached
+// refreshFastSystem returns a copy of system with the cheap /proc and /sys
+// values updated. A copy is required because earlier Status results may still
+// be read by other goroutines.
+func refreshFastSystem(system map[string]any) map[string]any {
+	next := make(map[string]any, len(system)+4)
+	for key, value := range system {
+		next[key] = value
 	}
-	status := collectStatus(ctx)
-	s.cached = status
-	s.cachedAt = time.Now()
-	return status
-}
-
-func (s *Service) InvalidateCache() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cachedAt = time.Time{}
+	next["uptime_minutes"] = uptimeMinutes()
+	next["memory_usage_percent"] = memoryUsagePercent()
+	next["processor_usage_percent"] = processorUsagePercent()
+	next["processor_temperature_c"] = processorTemperature()
+	next["battery_level"] = batteryLevel()
+	next["illuminance_level"] = illuminanceLevel()
+	return next
 }
 
 func collectStatus(ctx context.Context) Status {
@@ -102,12 +77,7 @@ func collectStatus(ctx context.Context) Status {
 			"illuminance_level":       illuminanceLevel(),
 			"package_upgrades":        packageUpgradeCount(ctx),
 		},
-		Runtime: map[string]any{
-			"go":         runtime.Version(),
-			"goos":       runtime.GOOS,
-			"goarch":     runtime.GOARCH,
-			"goroutines": runtime.NumGoroutine(),
-		},
+		Runtime: runtimeStatus(),
 		Display: map[string]any{
 			"power":      displayStatus(ctx),
 			"brightness": displayBrightness(ctx),
@@ -176,7 +146,7 @@ func (s *Service) SetBrightness(ctx context.Context, percent int) error {
 	if percent < 1 || percent > 100 {
 		return errors.New("brightness must be between 1 and 100")
 	}
-	if commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: 10") {
+	if ddcSupports(ctx, "10") {
 		err := wrapDdcutilSudoError(run(ctx, "sudo", "ddcutil", "setvcp", "0x10", strconv.Itoa(percent)))
 		if err == nil {
 			s.InvalidateCache()
@@ -245,7 +215,7 @@ func detectSupport(ctx context.Context) Support {
 	return Support{
 		SudoRights:           sudoRights(ctx),
 		DisplayStatus:        displayCommand(ctx) != "",
-		DisplayBrightness:    (backlightPath() != "" && sudoRights(ctx)) || (commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: 10")),
+		DisplayBrightness:    (backlightPath() != "" && sudoRights(ctx)) || (ddcSupports(ctx, "10")),
 		AudioVolume:          commandExists("pactl") && runText(ctx, "pactl", "get-default-sink") != "",
 		MicrophoneVolume:     commandExists("pactl") && runText(ctx, "pactl", "get-default-source") != "",
 		KeyboardVisibility:   processRuns(ctx, "squeekboard") && commandExists("dbus-send"),
@@ -258,9 +228,13 @@ func detectSupport(ctx context.Context) Support {
 
 func displayCommand(ctx context.Context) string {
 	ensureDisplayEnv()
+	return memoProbe("display-command", displayCmdTTL, func() string { return detectDisplayCommand(ctx) })
+}
+
+func detectDisplayCommand(ctx context.Context) string {
 	session := sessionType(ctx)
 	desktop := sessionDesktop()
-	if commandExists("ddcutil") && sudoRights(ctx) && strings.Contains(runText(ctx, "sudo", "ddcutil", "capabilities"), "Feature: D6") {
+	if ddcSupports(ctx, "D6") {
 		return "ddcutil"
 	}
 	if session == "wayland" || os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland" {
@@ -319,7 +293,7 @@ func displayStatus(ctx context.Context) any {
 }
 
 func displayBrightness(ctx context.Context) any {
-	if commandExists("ddcutil") && sudoRights(ctx) {
+	if ddcSupports(ctx, "10") {
 		out := runText(ctx, "sudo", "ddcutil", "getvcp", "0x10", "--brief")
 		match := regexp.MustCompile(`VCP 10 C (\d+) (\d+)`).FindStringSubmatch(out)
 		if len(match) == 3 {
@@ -402,7 +376,27 @@ func packageUpgradeCount(ctx context.Context) any {
 	return count
 }
 
+// Disk usage changes slowly; df runs at most every diskUsageTTL.
+const diskUsageTTL = 10 * time.Minute
+
+var (
+	diskUsageMu     sync.Mutex
+	diskUsageCached any
+	diskUsageAt     time.Time
+)
+
 func diskUsage(ctx context.Context) any {
+	diskUsageMu.Lock()
+	defer diskUsageMu.Unlock()
+	if !diskUsageAt.IsZero() && time.Since(diskUsageAt) < diskUsageTTL {
+		return diskUsageCached
+	}
+	diskUsageCached = readDiskUsage(ctx)
+	diskUsageAt = time.Now()
+	return diskUsageCached
+}
+
+func readDiskUsage(ctx context.Context) any {
 	out := runText(ctx, "df", "-B1", "/")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {
@@ -427,51 +421,11 @@ func diskUsage(ctx context.Context) any {
 	}
 }
 
-func networkAddresses() map[string]map[string][]string {
-	out := map[string]map[string][]string{}
-	ifaces, _ := net.Interfaces()
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-		addrs, _ := iface.Addrs()
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			family := "IPv6"
-			value := ip.String()
-			if ip4 := ip.To4(); ip4 != nil {
-				family = "IPv4"
-				value = ip4.String()
-			}
-			name := strings.ToUpper(iface.Name[:1]) + iface.Name[1:]
-			if out[name] == nil {
-				out[name] = map[string][]string{}
-			}
-			out[name][family] = append(out[name][family], value)
-		}
-	}
-	return out
-}
-
-func primaryAddress() string {
-	for _, families := range networkAddresses() {
-		if values := families["IPv4"]; len(values) > 0 {
-			return values[0]
-		}
-	}
-	return ""
-}
-
 func sessionType(ctx context.Context) string {
+	return memoProbe("session-type", sessionTTL, func() string { return detectSessionType(ctx) })
+}
+
+func detectSessionType(ctx context.Context) string {
 	if !commandExists("loginctl") {
 		return os.Getenv("XDG_SESSION_TYPE")
 	}
@@ -484,18 +438,6 @@ func sessionType(ctx context.Context) string {
 
 func sessionDesktop() string {
 	return strings.ToLower(firstNonEmpty(os.Getenv("XDG_CURRENT_DESKTOP"), os.Getenv("XDG_DESKTOP_SESSION"), os.Getenv("DESKTOP_SESSION"), "unknown"))
-}
-
-func userName() string {
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	return os.Getenv("USERNAME")
-}
-
-func hostName() string {
-	name, _ := os.Hostname()
-	return name
 }
 
 func vendor() string {
@@ -635,10 +577,6 @@ func meminfo(key string) uint64 {
 		}
 	}
 	return 0
-}
-
-func sudoRights(ctx context.Context) bool {
-	return run(ctx, "sudo", "-n", "true") == nil
 }
 
 // wrapDdcutilSudoError replaces cryptic sudo/ddcutil failures (missing
@@ -804,15 +742,6 @@ func lastFieldUpper(value string) any {
 	return strings.ToUpper(fields[len(fields)-1])
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
 func boolInt(value bool) string {
 	if value {
 		return "1"
@@ -820,11 +749,26 @@ func boolInt(value bool) string {
 	return "0"
 }
 
-func round1(value float64) float64 {
-	return float64(int(value*10+0.5)) / 10
+func sudoRights(ctx context.Context) bool {
+	return memoProbe("sudo", sudoProbeTTL, func() string {
+		if run(ctx, "sudo", "-n", "true") == nil {
+			return "yes"
+		}
+		return "no"
+	}) == "yes"
 }
 
-func MarshalStatus(status Status) []byte {
-	data, _ := json.Marshal(status)
-	return data
+// ddcCapabilities returns the cached `ddcutil capabilities` output, or "" when
+// ddcutil or passwordless sudo is unavailable.
+func ddcCapabilities(ctx context.Context) string {
+	if !commandExists("ddcutil") || !sudoRights(ctx) {
+		return ""
+	}
+	return memoProbe("ddcutil-capabilities", probeTTL, func() string {
+		return runText(ctx, "sudo", "ddcutil", "capabilities")
+	})
+}
+
+func ddcSupports(ctx context.Context, feature string) bool {
+	return strings.Contains(ddcCapabilities(ctx), "Feature: "+feature)
 }

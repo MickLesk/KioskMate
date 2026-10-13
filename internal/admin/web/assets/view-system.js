@@ -1,6 +1,8 @@
-"use strict";
+import { filteredLogs } from "./actions-system.js";
+import { esc, field, formatClock, formatValue, selectHtml, state, t } from "./app-core.js";
+import { button, kvTable, objectEntries, renderJobsHTML, renderRepair, stateBanner, statusTile, unsupportedControl } from "./renderers.js";
 
-function renderHardware() {
+export function renderHardware() {
         const hw = state.hardware || {};
         const timeCfg = state.config?.time || {};
         const support = hw.support || {};
@@ -18,7 +20,7 @@ function renderHardware() {
             </section>
             <div class="settings-columns">
               <div class="card">
-                <div class="head"><div><h3>${esc(t("displayAndInput"))}</h3><span class="section-kicker">${esc(hw.display?.command || t("unsupported"))}</span></div></div>
+                <div class="head"><div><h3>${esc(t("displayAndInput"))}</h3><span class="section-kicker">${esc(hw.display?.command || t("unsupported"))}</span></div><button data-busy="hardware-rediscover" data-action="hardware-rediscover" title="${esc(t("rediscoverHardware"))}">${esc(t("rediscoverHardware"))}</button></div>
                 <div class="body form-grid">${support.display_status ? selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]]) : unsupportedControl(t("display"))}${support.display_brightness ? field("display-brightness", t("brightness"), "number", "", hw.display?.brightness ?? 80) : unsupportedControl(t("brightness"))}${support.display_status || support.display_brightness ? `<button data-action="display-apply" class="primary span-2">${esc(t("applyDisplay"))}</button>` : ""}</div>
               </div>
               <div class="card">
@@ -48,7 +50,7 @@ function renderHardware() {
         return `${privilege.mode || "sudo"} · ${minutes} ${t("minutesLeft")}`;
       }
 
-      function renderSystemActions() {
+      export function renderSystemActions() {
         const privilege = state.privilege || {};
         const repairIssues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
         const activeJobs = state.jobs.filter((job) => !job.finished).length;
@@ -96,7 +98,7 @@ function renderHardware() {
           </div>`;
       }
 
-      function renderTerminal() {
+      export function renderTerminal() {
         return `
           <div class="page-stack">
             <div class="card">
@@ -112,7 +114,7 @@ function renderHardware() {
           </div>`;
       }
 
-      function renderLogs() {
+      export function renderLogs() {
         const sources = [
           ["combined", t("logCombined")],
           ["core", t("logCore")],

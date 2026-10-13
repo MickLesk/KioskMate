@@ -1,0 +1,39 @@
+# KioskMate first-boot settings
+#
+# Edit this file on the boot partition (the one that shows up as "bootfs" on
+# your computer) before the first start. Lines are KEY=value; leave a value
+# empty to keep the image default. Quotes are optional and only needed to keep
+# leading or trailing spaces.
+#
+# The settings are applied once on the first boot. Afterwards WIFI_PASSWORD and
+# ADMIN_PASSWORD are blanked in this file and a status line is added at the
+# end. To apply the file again: sudo rm /var/lib/kioskmate/firstboot.done
+# and reboot. Details: docs/IMAGE.md.
+
+# Wi-Fi network (WPA2/WPA3 personal). Leave WIFI_PASSWORD empty for an open
+# network. WIFI_COUNTRY is the two-letter country code (DE, GB, US, ...);
+# Wi-Fi stays off on Raspberry Pi OS until it is set.
+WIFI_SSID=
+WIFI_PASSWORD=
+WIFI_COUNTRY=
+
+# Network name of the kiosk (letters, digits and hyphens). Default: kioskmate
+HOSTNAME=
+
+# Time zone, for example Europe/Berlin or America/New_York.
+TIMEZONE=
+
+# Password for the Admin UI at http://<hostname>:33333 (at least 8
+# characters). Without it the Admin UI starts in setup mode; the setup token
+# is in the log: journalctl -u kioskmate-cage@kiosk | grep "setup token"
+ADMIN_PASSWORD=
+
+# First page shown by the kiosk (http:// or https://), for example
+# http://homeassistant.local:8123/lovelace/0
+START_URL=
+
+# yes: after applying everything above, turn on the Raspberry Pi OS overlay
+# file system and reboot. The SD card is then no longer written, but changes
+# made in the Admin UI are lost on every reboot until the overlay is turned
+# off again (sudo raspi-config nonint do_overlayfs 1).
+READ_ONLY=no

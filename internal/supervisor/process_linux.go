@@ -29,3 +29,7 @@ func terminateProcessTree(pid int) error {
 	}
 	return nil
 }
+
+// adoptProcessTree is a no-op on Linux: the process group set up by
+// processGroupAttr already covers every child of the browser.
+func adoptProcessTree(int) {}

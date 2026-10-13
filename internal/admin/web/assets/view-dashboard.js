@@ -1,6 +1,8 @@
-"use strict";
+import { formatSchedulerReason, formatThemeStatus } from "./actions-core.js";
+import { esc, formatDate, formatDuration, formatMQTTState, formatValue, state, t } from "./app-core.js";
+import { button, healthRow, normalizePages, renderActionLog, stateBanner, statusTile } from "./renderers.js";
 
-function renderDashboard() {
+export function renderDashboard() {
         const browser = state.status?.browser || {};
         const browserKnown = !!state.status?.browser;
         const cfg = state.config || {};

@@ -63,6 +63,18 @@ type Browser struct {
 	scheduler        SchedulerStatus
 	rotationIndex    int
 	rotationUntil    time.Time
+	rotationCycles   int
+	lastMaintenance  time.Time
+	lastActivity     time.Time
+	activityHandler  func()
+	rebootHandler    func(context.Context) error
+	rebootRequested  bool
+	activeTarget     string
+	tabs             map[int]string
+	tabUse           []int
+	retarget         bool
+	pendingBlank     map[string]bool
+	tabURL           map[int]string
 	devTools         bool
 	requiresControl  bool
 	readySince       time.Time
@@ -110,6 +122,7 @@ type Status struct {
 	Recovery   RecoveryStatus          `json:"recovery"`
 	Telemetry  TelemetrySummary        `json:"telemetry"`
 	Override   ManualOverride          `json:"override"`
+	OpenTabs   int                     `json:"open_tabs"`
 }
 
 type ExitStatus struct {
@@ -303,10 +316,12 @@ func (b *Browser) start(ctx context.Context) (err error) {
 		}
 		return err
 	}
+	adoptProcessTree(cmd.Process.Pid)
 	b.mu.Lock()
 	b.cmd = cmd
 	b.done = make(chan struct{})
 	done := b.done
+	b.resetTabsLocked()
 	b.started = time.Now()
 	b.generation++
 	b.startCount++
@@ -474,6 +489,13 @@ func (b *Browser) setActive(ctx context.Context, index int) error {
 	var err error
 	if !running {
 		err = b.start(ctx)
+	} else if !isolate && cfg.Kiosk.PageSwitch == "tabs" && previous != index {
+		if tabErr := b.switchTab(ctx, cfg, index); tabErr != nil {
+			b.logger.Warn("tab switch failed, navigating instead", "error", tabErr)
+			if navErr := b.navigateDevTools(ctx, target); navErr != nil {
+				err = b.restart(ctx, "page_navigation_recovery")
+			}
+		}
 	} else if !isolate || previous == index {
 		if navErr := b.navigateDevTools(ctx, target); navErr == nil {
 			err = nil
@@ -540,8 +562,9 @@ func (b *Browser) CaptureScreenshot(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("browser is not running")
 	}
 	profile := browserUserDataDir(cfg, b.active)
+	preferred := b.activeTarget
 	b.mu.Unlock()
-	return captureDevToolsScreenshot(ctx, profile)
+	return captureDevToolsScreenshot(ctx, profile, preferred)
 }
 
 func (b *Browser) TripAuthGuard(reason string) {
@@ -563,6 +586,7 @@ func (b *Browser) Status() Status {
 	defer b.mu.Unlock()
 	command, args, err := b.command()
 	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation, Exit: b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts)}
+	status.OpenTabs = len(b.tabs)
 	status.Control = ControlStatus{Required: b.requiresControl, Connected: b.devTools, Failures: b.controlFailures, LastError: b.controlError}
 	if !b.controlConnected.IsZero() {
 		connected := b.controlConnected
@@ -649,6 +673,14 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 				_ = b.SetActive(switchCtx, target)
 				cancel()
 			}
+			if b.maintenanceReloadDue(now, snap.Kiosk.Maintenance) {
+				b.logger.Info("scheduled page reload")
+				reloadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				if err := b.Reload(reloadCtx); err != nil {
+					b.logger.Warn("scheduled page reload failed", "error", err)
+				}
+				cancel()
+			}
 			wantOff := scheduleWantsDisplayOff(snap.Kiosk, target, status)
 			b.applyScheduleDisplayPower(ctx, target, status)
 			b.mu.Lock()
@@ -678,9 +710,59 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 				}
 				cancel()
 			}
-			timer.Reset(b.schedulerInterval())
+			timer.Reset(nextSchedulerWake(time.Now(), b.schedulerInterval(), status.NextSwitch))
 		}
 	}
+}
+
+// nextSchedulerWake waits for the regular tick, or less when a rotation or
+// time rule switch is due earlier, so pages change on time without a fast
+// polling tick.
+func nextSchedulerWake(now time.Time, tick time.Duration, next *time.Time) time.Duration {
+	if next == nil {
+		return tick
+	}
+	until := next.Sub(now)
+	if until < 0 {
+		return 0
+	}
+	if until < tick {
+		return until + 50*time.Millisecond
+	}
+	return tick
+}
+
+// maintenanceReloadDue reports whether a scheduled soft reload should run now
+// and records it. Reloads only count while the browser is running and the
+// display is not blanked by a schedule.
+func (b *Browser) maintenanceReloadDue(now time.Time, maintenance config.KioskMaintenance) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cmd == nil || b.cmd.Process == nil || b.idleBlanked || b.started.IsZero() {
+		return false
+	}
+	last := b.lastMaintenance
+	if last.IsZero() || last.Before(b.started) {
+		last = b.started
+	}
+	due := false
+	if every := maintenance.ReloadEveryMinutes; every > 0 && now.Sub(last) >= time.Duration(every)*time.Minute {
+		due = true
+	}
+	if cycles := maintenance.ReloadAfterCycles; cycles > 0 && b.rotationCycles >= cycles {
+		due = true
+	}
+	if at, ok := parseClock(maintenance.ReloadAt); ok {
+		target := time.Date(now.Year(), now.Month(), now.Day(), at/60, at%60, 0, 0, now.Location())
+		if !now.Before(target) && last.Before(target) {
+			due = true
+		}
+	}
+	if due {
+		b.lastMaintenance = now
+		b.rotationCycles = 0
+	}
+	return due
 }
 
 func (b *Browser) blankIdleDisplay(ctx context.Context) error {
@@ -1182,6 +1264,9 @@ func (b *Browser) rotationTarget(now time.Time, cfg config.KioskConfig, status S
 		b.rotationIndex = 0
 	} else if !now.Before(b.rotationUntil) {
 		b.rotationIndex = (b.rotationIndex + 1) % len(cfg.Rotation)
+		if b.rotationIndex == 0 {
+			b.rotationCycles++
+		}
 	}
 	if b.rotationUntil.IsZero() || !now.Before(b.rotationUntil) {
 		item := cfg.Rotation[b.rotationIndex]
@@ -1300,7 +1385,7 @@ func findBrowser(preset string) string {
 			return path
 		}
 	}
-	return ""
+	return installedBrowser(preset)
 }
 
 func browserCandidates(preset string) []string {
@@ -1319,6 +1404,10 @@ func browserCandidates(preset string) []string {
 }
 
 func browserArgs(cfg *config.Config, preset string, url string, extra []string, page int) []string {
+	return platformBrowserArgs(preset, presetBrowserArgs(cfg, preset, url, extra, page))
+}
+
+func presetBrowserArgs(cfg *config.Config, preset string, url string, extra []string, page int) []string {
 	switch preset {
 	case "firefox":
 		return append(firefoxArgs(cfg, page), append(extra, url)...)
@@ -1332,10 +1421,57 @@ func browserArgs(cfg *config.Config, preset string, url string, extra []string, 
 		return append(extra, url)
 	case "chromium-lite":
 		args := append(chromiumArgs(cfg, page), chromiumLiteArgs()...)
-		return append(args, append(extra, url)...)
+		return mergeFeatureFlags(append(args, append(extra, url)...))
 	default:
-		return append(chromiumArgs(cfg, page), append(extra, url)...)
+		return mergeFeatureFlags(append(chromiumArgs(cfg, page), append(extra, url)...))
 	}
+}
+
+// mergeFeatureFlags combines repeated --enable-features/--disable-features
+// switches into one each. Chromium only honours the last occurrence of a
+// switch, so a theme feature or a user extra argument would otherwise
+// silently drop every feature listed earlier.
+func mergeFeatureFlags(args []string) []string {
+	const enable, disable = "--enable-features=", "--disable-features="
+	var enabled, disabled []string
+	seen := map[string]bool{}
+	add := func(list *[]string, kind string, value string) {
+		for _, feature := range strings.Split(value, ",") {
+			feature = strings.TrimSpace(feature)
+			if feature == "" || seen[kind+feature] {
+				continue
+			}
+			seen[kind+feature] = true
+			*list = append(*list, feature)
+		}
+	}
+	out := make([]string, 0, len(args))
+	enableAt, disableAt := -1, -1
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, enable):
+			add(&enabled, "+", strings.TrimPrefix(arg, enable))
+			if enableAt < 0 {
+				enableAt = len(out)
+				out = append(out, "")
+			}
+		case strings.HasPrefix(arg, disable):
+			add(&disabled, "-", strings.TrimPrefix(arg, disable))
+			if disableAt < 0 {
+				disableAt = len(out)
+				out = append(out, "")
+			}
+		default:
+			out = append(out, arg)
+		}
+	}
+	if enableAt >= 0 {
+		out[enableAt] = enable + strings.Join(enabled, ",")
+	}
+	if disableAt >= 0 {
+		out[disableAt] = disable + strings.Join(disabled, ",")
+	}
+	return out
 }
 
 func chromiumArgs(cfg *config.Config, page int) []string {
@@ -1354,6 +1490,8 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,InfiniteSessionRestore",
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
+		// Native Wayland when a compositor is present instead of XWayland.
+		ozonePlatformFlag(os.Getenv("WAYLAND_DISPLAY")),
 	}
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
@@ -1365,11 +1503,21 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		args = append(args, "--force-dark-mode", "--enable-features=WebContentsForceDark")
 	}
 	args = append(args, performanceArgs(cfg.Performance.Profile)...)
+	if cfg.Admin.TLSCert != "" && cfg.Admin.TLSKey != "" && hasLocalPages(cfg) {
+		// Local pages are served by the admin server, whose certificate is
+		// usually self-signed.
+		args = append(args, "--allow-insecure-localhost")
+	}
 	if cfg.Kiosk.ZoomPercent > 0 && cfg.Kiosk.ZoomPercent != 100 {
 		args = append(args, fmt.Sprintf("--force-device-scale-factor=%.2f", float64(cfg.Kiosk.ZoomPercent)/100.0))
 	}
-	if cfg.Performance.GPUMode == "software" {
+	switch cfg.Performance.GPUMode {
+	case "software":
 		args = append(args, "--disable-gpu", "--disable-gpu-compositing")
+	case "hardware":
+		// Raspberry Pi V3D/VideoCore drivers are often on Chromium's GPU
+		// blocklist, which silently falls back to CPU rasterization.
+		args = append(args, "--ignore-gpu-blocklist", "--enable-gpu-rasterization")
 	}
 	return args
 }
@@ -1507,18 +1655,19 @@ func (b *Browser) loadAuthGuard() {
 	}
 }
 
+// Profile flags avoid Docker-only workarounds: --disable-dev-shm-usage moves
+// shared memory to /tmp, which is on the SD card on Raspberry Pi OS, and
+// --num-raster-threads=1 starves rasterization on four-core boards. Background
+// throttling stays enabled so hidden preloaded tabs cost almost nothing.
 func performanceArgs(profile string) []string {
 	switch strings.TrimSpace(strings.ToLower(profile)) {
 	case "minimal", "conservative":
 		return []string{
-			"--disable-dev-shm-usage",
 			"--disable-extensions",
 			"--disable-sync",
 			"--disable-print-preview",
 			"--disable-speech-api",
 			"--disable-notifications",
-			"--disable-background-timer-throttling",
-			"--disable-renderer-backgrounding",
 			"--renderer-process-limit=1",
 			"--process-per-site",
 		}
@@ -1537,7 +1686,6 @@ func performanceArgs(profile string) []string {
 
 func raspberryLowPowerArgs() []string {
 	return []string{
-		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--disable-sync",
 		"--disable-print-preview",
@@ -1545,15 +1693,21 @@ func raspberryLowPowerArgs() []string {
 		"--disable-notifications",
 		"--renderer-process-limit=1",
 		"--process-per-site",
-		"--num-raster-threads=1",
 	}
 }
 
 func chromiumLiteArgs() []string {
-	return append(raspberryLowPowerArgs(),
-		"--disable-background-timer-throttling",
-		"--disable-renderer-backgrounding",
-	)
+	return raspberryLowPowerArgs()
+}
+
+// ozonePlatformFlag selects native Wayland explicitly inside a Wayland
+// session (labwc, Cage, Wayfire) so Chromium never falls back to XWayland and
+// an extra copy of every frame; elsewhere Chromium picks the platform itself.
+func ozonePlatformFlag(waylandDisplay string) string {
+	if strings.TrimSpace(waylandDisplay) != "" {
+		return "--ozone-platform=wayland"
+	}
+	return "--ozone-platform-hint=auto"
 }
 
 func browserUserDataDir(cfg *config.Config, page int) string {
@@ -1592,4 +1746,13 @@ func firefoxArgs(cfg *config.Config, page int) []string {
 		args = append(args, "--profile", browserUserDataDir(cfg, page))
 	}
 	return args
+}
+
+func hasLocalPages(cfg *config.Config) bool {
+	for _, page := range cfg.Kiosk.Pages {
+		if !page.Disabled && page.IsLocal() {
+			return true
+		}
+	}
+	return false
 }

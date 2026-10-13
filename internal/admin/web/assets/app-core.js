@@ -1,8 +1,16 @@
-"use strict";
+import { bindView } from "./actions-core.js";
+import { bindScope, morph } from "./dom.js";
+import { KioskMateAPI } from "./api.js";
+import { I18N, loadLanguage } from "./i18n.js";
+import { button, stateBanner } from "./renderers.js";
+import { KioskMateUI } from "./ui-components.js";
+import { renderDashboard } from "./view-dashboard.js";
+import { renderKiosk } from "./view-kiosk.js";
+import { renderMQTT } from "./view-mqtt.js";
+import { renderSettingsAdmin, renderSettingsBrowser, renderSettingsConfig, renderSettingsMaintenance } from "./view-settings.js";
+import { renderHardware, renderLogs, renderSystemActions, renderTerminal } from "./view-system.js";
 
-      const I18N = window.KIOSKMATE_I18N || {};
-
-      const NAV = [
+const NAV = [
         { id: "dashboard", label: "dashboard", hint: "overview" },
         {
           id: "kiosk",
@@ -50,7 +58,7 @@
 
       const root = document.getElementById("root");
       const toasts = document.getElementById("toasts");
-      const modalRoot = document.getElementById("modal-root");
+      export const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
       function storedList(key, fallback = []) {
         try {
@@ -61,7 +69,7 @@
         }
       }
 
-      const state = {
+      export const state = {
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: storedTheme === "light" ? "light" : "dark",
         themeExplicit: localStorage.getItem("kioskmate.theme.explicit") === "1",
@@ -127,23 +135,23 @@
 
       document.documentElement.dataset.theme = state.theme;
 
-      function t(key) {
-        return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key;
+      export function t(key) {
+        return (I18N[state.lang] && I18N[state.lang][key]) || key;
       }
 
-      function esc(value) {
+      export function esc(value) {
         return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
       }
 
-	  const field = window.KioskMateUI.field;
-	  const selectHtml = window.KioskMateUI.selectHtml;
-	  const switchHtml = window.KioskMateUI.switchHtml;
+	  export const field = KioskMateUI.field;
+	  export const selectHtml = KioskMateUI.selectHtml;
+	  export const switchHtml = KioskMateUI.switchHtml;
 
-      function val(id) {
+      export function val(id) {
         return document.getElementById(id)?.value ?? "";
       }
 
-      function checked(id) {
+      export function checked(id) {
         return !!document.getElementById(id)?.checked;
       }
 
@@ -165,7 +173,7 @@
         if (!on) updateDirtyUI();
       }
 
-      function toast(title, message = "", type = "ok") {
+      export function toast(title, message = "", type = "ok") {
         const item = document.createElement("div");
         item.className = "toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "");
         item.setAttribute("role", type === "error" ? "alert" : "status");
@@ -177,7 +185,7 @@
 
       let modalKeyHandler = null;
 
-      function openModal(html) {
+      export function openModal(html) {
         modalRoot.innerHTML = `<div class="modal-backdrop" data-modal-backdrop>${html}</div>`;
         modalRoot.querySelectorAll("[data-modal-close]").forEach((button) => button.addEventListener("click", closeModal));
         modalRoot.querySelector("[data-modal-backdrop]")?.addEventListener("click", (event) => {
@@ -190,13 +198,13 @@
         requestAnimationFrame(() => modalRoot.querySelector("[data-modal-close], button, input, select, textarea")?.focus());
       }
 
-      function closeModal() {
+      export function closeModal() {
         if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
         modalKeyHandler = null;
         modalRoot.innerHTML = "";
       }
 
-      function openMQTTTestDialog() {
+      export function openMQTTTestDialog() {
         openModal(`
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mqtt-live-title">
             <div class="modal-head">
@@ -216,7 +224,7 @@
           </div>`);
       }
 
-      function appendMQTTEvent(event) {
+      export function appendMQTTEvent(event) {
         const log = document.getElementById("mqtt-live-log");
         const summary = document.getElementById("mqtt-live-summary");
         if (!log) return;
@@ -236,11 +244,11 @@
         if (summary) summary.textContent = event.message || "";
       }
 
-      async function streamJSONLines(path, body, onEvent, signal) {
-		return window.KioskMateAPI.streamJSONLines(path, body, { onEvent, signal, csrf: state.auth?.csrf });
+      export async function streamJSONLines(path, body, onEvent, signal) {
+		return KioskMateAPI.streamJSONLines(path, body, { onEvent, signal, csrf: state.auth?.csrf });
       }
 
-      function formatValue(value, suffix = "") {
+      export function formatValue(value, suffix = "") {
         if (value === null || value === undefined || value === "") return "-";
         if (typeof value === "number") {
           const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
@@ -252,13 +260,13 @@
         return String(value);
       }
 
-      function formatDate(value) {
+      export function formatDate(value) {
         if (!value) return t("never");
         const date = new Date(value);
         return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
       }
 
-      function formatMQTTState(value) {
+      export function formatMQTTState(value) {
         const key = {
           connected: "connected",
           connecting: "connecting",
@@ -270,7 +278,7 @@
         return t(key || "notConnected");
       }
 
-      function formatClock(value) {
+      export function formatClock(value) {
         const date = value ? new Date(value) : new Date();
         return Number.isNaN(date.getTime()) ? "--:--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       }
@@ -286,45 +294,45 @@
         }, 1000);
       }
 
-      function secondsToDuration(value, fallback = 0) {
+      export function secondsToDuration(value, fallback = 0) {
         const n = Number(value);
         if (!Number.isFinite(n) || n <= 0) return fallback;
         return Math.round(n / 1_000_000_000);
       }
 
-      function formatDuration(seconds) {
+      export function formatDuration(seconds) {
         const total = Number(seconds || 0);
         if (total >= 3600 && total % 3600 === 0) return `${total / 3600} h`;
         if (total >= 60 && total % 60 === 0) return `${total / 60} min`;
         return `${total} s`;
       }
 
-      function durationToNs(seconds) {
+      export function durationToNs(seconds) {
         return Math.max(0, Number(seconds || 0)) * 1_000_000_000;
       }
 
-      function sleep(ms) {
+      export function sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
       }
 
-      function cloneConfig() {
+      export function cloneConfig() {
         return JSON.parse(JSON.stringify(state.config || {}));
       }
 
-      async function request(path, options = {}) {
+      export async function request(path, options = {}) {
 		try {
-		  return await window.KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
+		  return await KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
 		} catch (error) {
 		  if (error?.name === "AbortError") throw new Error(t("requestTimeout"));
 		  throw error;
 		}
       }
 
-      const getJSON = (path, options = {}) => request(path, options);
-      const postJSON = (path, body = {}) => request(path, { method: "POST", body: JSON.stringify(body) });
-      const deleteJSON = (path) => request(path, { method: "DELETE" });
+      export const getJSON = (path, options = {}) => request(path, options);
+      export const postJSON = (path, body = {}) => request(path, { method: "POST", body: JSON.stringify(body) });
+      export const deleteJSON = (path) => request(path, { method: "DELETE" });
 
-      async function runAction(name, fn, success = t("actionDone")) {
+      export async function runAction(name, fn, success = t("actionDone")) {
         setBusy(name, true);
         recordAction(t("actionStarted"), name, "warn");
         try {
@@ -342,17 +350,17 @@
         }
       }
 
-      function markDirty(view = state.view) {
+      export function markDirty(view = state.view) {
         state.dirtyViews.add(view);
         updateDirtyUI();
       }
 
-      function clearDirty(view = state.view) {
+      export function clearDirty(view = state.view) {
         state.dirtyViews.delete(view);
         updateDirtyUI();
       }
 
-      function isDirty(view = state.view) {
+      export function isDirty(view = state.view) {
         return state.dirtyViews.has(view);
       }
 
@@ -398,7 +406,7 @@
         event.returnValue = "";
       });
 
-      function recordAction(title, detail = "", type = "ok") {
+      export function recordAction(title, detail = "", type = "ok") {
         state.actionLog.unshift({ title, detail, type, at: new Date().toISOString() });
         state.actionLog = state.actionLog.slice(0, 8);
       }
@@ -425,7 +433,7 @@
           </div>`);
       }
 
-      async function boot() {
+      export async function boot() {
         try {
           state.auth = await getJSON("/api/auth/status");
           if (!state.auth.authenticated) {
@@ -436,6 +444,7 @@
 		  else await refreshCore(true);
           renderApp();
           startUpdateStatusPolling();
+          startLiveUpdates();
 		  refreshCore(false).then(() => {
 			if (state.auth?.authenticated) renderAppIfIdle();
 		  }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
@@ -444,7 +453,7 @@
         }
       }
 
-	  async function refreshCore(fast = false) {
+	  export async function refreshCore(fast = false) {
 		if (fast) {
 		  const cfg = await getJSON("/api/config");
 		  applyCoreState({ cfg });
@@ -454,20 +463,68 @@
 		  const quick = await getJSON("/api/status?fast=1", { timeout: 8000 });
 		  applyCoreState({ status: quick });
 		} catch (_) {}
+		// Only what every view needs; the rest is loaded by ensureViewData when
+		// a view that shows it is opened.
 		const requests = await Promise.allSettled([
 		  getJSON("/api/config"), getJSON("/api/status", { timeout: 20000 }), getJSON("/api/privilege"),
-		  getJSON("/api/time"), getJSON("/api/time/zones"), getJSON("/api/jobs?limit=25"),
-		  getJSON("/api/update/history"),
-		  getJSON("/api/browser/operations"),
-		  getJSON("/api/events?limit=200"),
+		  getJSON("/api/time"),
 		]);
 		const value = (index) => requests[index].status === "fulfilled" ? requests[index].value : undefined;
-		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3), zones: value(4), jobs: value(5), updateHistory: value(6), operations: value(7), events: value(8) });
+		applyCoreState({ cfg: value(0), status: value(1), privilege: value(2), timeInfo: value(3) });
 		const failed = requests.filter((item) => item.status === "rejected");
 		if (failed.length === requests.length) throw failed[0].reason;
+		ensureViewData(state.view);
       }
 
-	  function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
+	  // Saves the whole config and shows the conflicts the server found
+	  // (overlapping time rules, workflows sharing a trigger) as warnings.
+	  export async function saveConfig(cfg) {
+		const result = await postJSON("/api/config", cfg);
+		for (const conflict of (result?.conflicts || []).slice(0, 3)) {
+		  toast(t("configConflict"), t(`conflict_${conflict.kind}`).replace("{a}", conflict.first).replace("{b}", conflict.second), "warn");
+		}
+		return result;
+	  }
+
+	  const VIEW_DATA = {
+		dashboard: ["operations", "events"],
+		system: ["jobs"],
+		"system-maintenance": ["jobs"],
+		"system-device": ["zones", "jobs"],
+		"settings-updates": ["updateHistory"],
+	  };
+	  const VIEW_DATA_SOURCES = {
+		operations: ["/api/browser/operations", (value) => ({ operations: value })],
+		events: ["/api/events?limit=200", (value) => ({ events: value })],
+		jobs: ["/api/jobs?limit=25", (value) => ({ jobs: value })],
+		zones: ["/api/time/zones", (value) => ({ zones: value })],
+		updateHistory: ["/api/update/history", (value) => ({ updateHistory: value })],
+	  };
+	  const viewDataLoadedAt = new Map();
+
+	  // Loads data only some views show (journal, jobs, time zones, update
+	  // history) when such a view opens, and again when it is older than a
+	  // minute. The time zone list never changes while the Admin is open.
+	  export async function ensureViewData(view = state.view) {
+		const now = Date.now();
+		const keys = (VIEW_DATA[view] || []).filter((key) => {
+		  const loaded = viewDataLoadedAt.get(key);
+		  return loaded === undefined || (key !== "zones" && now - loaded > 60000);
+		});
+		if (!keys.length) return;
+		keys.forEach((key) => viewDataLoadedAt.set(key, now));
+		const results = await Promise.allSettled(keys.map((key) => getJSON(VIEW_DATA_SOURCES[key][0])));
+		const patch = {};
+		results.forEach((result, index) => {
+		  if (result.status === "fulfilled") Object.assign(patch, VIEW_DATA_SOURCES[keys[index]][1](result.value));
+		  else viewDataLoadedAt.delete(keys[index]);
+		});
+		if (!Object.keys(patch).length) return;
+		applyCoreState(patch);
+		if (state.view === view && state.auth?.authenticated) renderApp({ background: true });
+	  }
+
+	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -495,7 +552,8 @@
 		</section></main>`;
 		document.querySelector('[data-action="fatal-retry"]')?.addEventListener("click", () => boot());
 		document.querySelector('[data-action="fatal-login"]')?.addEventListener("click", async () => {
-		  try { await postJSON("/api/auth/logout"); } catch (_) {}
+		  try { stopLiveUpdates();
+          await postJSON("/api/auth/logout"); } catch (_) {}
 		  state.auth = { authenticated: false, setupRequired: false };
 		  renderLogin();
 		});
@@ -546,6 +604,7 @@
       }
 
       function renderLogin() {
+		stopLiveUpdates();
 		if (authCountdownTimer) clearInterval(authCountdownTimer);
 		authCountdownTimer = null;
         const setup = !!state.auth?.setupRequired;
@@ -589,6 +648,7 @@
 			renderApp();
 			toast(t("signedIn"), "", "ok");
 			startUpdateStatusPolling();
+          startLiveUpdates();
 			refreshCore(false).then(() => { if (state.auth?.authenticated) renderAppIfIdle(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
 		  } catch (error) {
 			const currentError = document.getElementById("auth-error");
@@ -642,13 +702,18 @@
 		authCountdownTimer = setInterval(update, 1000);
 	  }
 
-      function renderApp() {
+      // renderApp morphs the page to the current state. A background render
+      // (live updates) keeps the value of the focused field and, while the
+      // user is editing or a view has unsaved changes, leaves the content
+      // area untouched and only refreshes the shell (status chips, nav).
+      export function renderApp({ background = false } = {}) {
 		if (authCountdownTimer) clearInterval(authCountdownTimer);
 		authCountdownTimer = null;
         const browser = state.status?.browser || {};
         const mqtt = state.status?.mqtt || {};
         const timeInfo = state.time || {};
-        root.innerHTML = `
+        if (!root.querySelector(":scope > .layout")) root.innerHTML = "";
+        const html = `
           <div class="layout">
             <aside class="sidebar ${state.mobileNavOpen ? "mobile-open" : ""}">
               <div class="brand">
@@ -693,19 +758,77 @@
               </section>
             </main>
           </div>`;
-        bindShell();
-        bindView();
-        bindDirtyTracking();
+        morph(root, html, {
+          preserveFocused: background,
+          preserveEdited: background,
+          preserveExternal: background,
+        });
+        bindScope(() => {
+          bindShell();
+          bindView();
+          bindDirtyTracking();
+        });
         startHeaderClock();
+        if (!background) ensureViewData(state.view);
       }
 
-	  function renderAppIfIdle() {
-		const active = document.activeElement;
-		const editing = active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
-		if (state.dirtyViews.size || editing) return false;
-		renderApp();
+	  // Background refreshes (loaded data, live updates) never discard input.
+	  export function renderAppIfIdle() {
+		renderApp({ background: true });
 		return true;
 	  }
+
+      let liveSource = null;
+      let liveRenderTimer = null;
+
+      // Live updates over Server-Sent Events while the Admin tab is visible.
+      // The server samples nothing for the stream when no tab is connected.
+      export function startLiveUpdates() {
+        stopLiveUpdates();
+        if (typeof EventSource === "undefined" || document.hidden || !state.auth?.authenticated) return;
+        liveSource = new EventSource("/api/stream");
+        liveSource.addEventListener("status", (event) => {
+          try {
+            applyCoreState({ status: JSON.parse(event.data) });
+          } catch {
+            return;
+          }
+          scheduleLiveRender();
+        });
+        liveSource.addEventListener("events", (event) => {
+          try {
+            const fresh = JSON.parse(event.data) || [];
+            const known = new Set((state.events || []).map((item) => item.id));
+            state.events = [...(state.events || []), ...fresh.filter((item) => !known.has(item.id))].slice(-200);
+          } catch {
+            return;
+          }
+          scheduleLiveRender();
+        });
+        liveSource.addEventListener("auth", () => {
+          stopLiveUpdates();
+          state.auth = null;
+          boot();
+        });
+      }
+
+      export function stopLiveUpdates() {
+        if (liveSource) liveSource.close();
+        liveSource = null;
+      }
+
+      function scheduleLiveRender() {
+        if (liveRenderTimer || !state.auth?.authenticated) return;
+        liveRenderTimer = setTimeout(() => {
+          liveRenderTimer = null;
+          if (state.auth?.authenticated) renderApp({ background: true });
+        }, 100);
+      }
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stopLiveUpdates();
+        else if (state.auth?.authenticated) startLiveUpdates();
+      });
 
       function renderNav() {
         return NAV.map((item) => {
@@ -804,6 +927,7 @@
         document.getElementById("theme")?.addEventListener("change", (event) => setTheme(event.target.value));
         document.querySelector('[data-action="logout"]')?.addEventListener("click", async () => {
           if (!confirmDiscard()) return;
+          stopLiveUpdates();
           await postJSON("/api/auth/logout");
           state.auth = null;
           await boot();
@@ -813,13 +937,18 @@
         });
       }
 
-      function setLanguage(lang) {
+      async function setLanguage(lang) {
         if (!confirmDiscard()) {
           const select = document.getElementById("lang");
           if (select) select.value = state.lang;
           return;
         }
-        state.lang = lang === "de" ? "de" : "en";
+        try {
+          state.lang = await loadLanguage(lang === "de" ? "de" : "en");
+        } catch (error) {
+          toast(t("actionFailed"), error.message, "error");
+          return;
+        }
         localStorage.setItem("kioskmate.lang", state.lang);
         document.documentElement.lang = state.lang;
         state.auth?.authenticated ? renderApp() : renderLogin();

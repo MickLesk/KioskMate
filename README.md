@@ -11,6 +11,12 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Embedded Admin UI with setup token, password login and session protection.
 - Visual kiosk sequence management with Storybook cards, a flow graph, a guided page wizard, rotation, fixed schedules and MQTT triggers.
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
+- Optional tab mode (`kiosk.page_switch: "tabs"`) that keeps recent pages open and switches without reloading.
+- Workflows: rules that react to an MQTT message, a time of day or a webhook and show a page for a while, switch the display, set brightness, reload, show a banner or run a script.
+- Local pages without an extra server: a clock, an image slideshow from a folder, or your own HTML.
+- Scheduled maintenance reloads (every N minutes, at a fixed time or after N rotation rounds) and preloaded pages in tab mode.
+- Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
+- Ready-to-flash Raspberry Pi OS Lite image with Cage, Chromium and first-boot setup from `kioskmate.txt`, see [docs/IMAGE.md](docs/IMAGE.md).
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.
@@ -25,6 +31,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - GitHub release updater with Debian package download and digest verification.
 - Debian packages for `arm64` and `amd64`.
 - JSON config at `~/.config/kioskmate/config.json`.
+- Experimental Windows 10/11 support with Microsoft Edge or Google Chrome, see [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Status
 
@@ -185,6 +192,49 @@ Diagnostic entities also expose the Home Assistant authentication guard, Chromiu
 
 If entities become stale after page renames, use **MQTT -> Reset discovery** in the Admin UI. It clears known KioskMate discovery topics and republishes the current set.
 
+## Workflows
+
+Workflows are rules on top of the page sequence. Create them under **Kiosk -> Pages and workflow -> Workflows**; they are stored in `kiosk.rules`.
+
+```json
+{
+  "id": "doorbell",
+  "name": "Doorbell",
+  "trigger": { "type": "mqtt", "topic": "home/doorbell", "payload": "ring" },
+  "conditions": { "start": "07:00", "end": "22:00" },
+  "actions": [
+    { "type": "display", "value": "ON" },
+    { "type": "show_page", "page_id": "camera", "duration_seconds": 30 },
+    { "type": "overlay", "value": "Someone is at the door", "duration_seconds": 10 }
+  ],
+  "cooldown_seconds": 30
+}
+```
+
+- Triggers: `mqtt` (exact topic, optional payload; Home Assistant entity states and presence sensors arrive this way), `time` (`at` as HH:MM, optional `days`), `webhook` (per-rule `token`, at least 16 characters), `touch` (any touch, click, key or wheel input on the kiosk page) and `idle` (no input for `idle_seconds`; fires once, the next input re-arms it).
+- Conditions (optional, all must hold): `days`, a `start`/`end` window and `active_page_id`.
+- Actions run in order: `show_page` (for `duration_seconds`, 0 means one hour, or with `until_resume` until a `resume_playlist` action), `resume_playlist`, `display` (`ON`/`OFF`, with `duration_seconds` it switches back afterwards), `brightness` (1-100), `reload`, `overlay`, `script` (JavaScript in the current page), `click` and `scroll` (CSS selector, also inside Home Assistant's shadow DOM; scroll also takes pixels) and `sound` (audio URL, or empty for a chime).
+- Priority is fixed: a manual override from the Admin UI or Home Assistant beats workflows, workflows beat time rules, time rules beat the rotation. A workflow never replaces or ends a manual override.
+- Saving reports likely mistakes as warnings: overlapping time rules, workflows with the same trigger, and workflows sharing a page's MQTT topic.
+- A webhook rule is fired with `curl -X POST "http://<kiosk-ip>:33333/api/rules/<id>/trigger?token=<token>"` or the `X-KioskMate-Token` header. It needs no Admin login, so treat the URL like a password; wrong tokens count against the login throttle.
+- **Test** in the Admin UI runs the saved actions immediately; the last 50 runs are listed under **Recent runs** and in the event journal.
+
+## Local Pages
+
+Besides web addresses and Home Assistant dashboards, a page can be rendered by KioskMate itself (`source_type` plus a `local` block). The page wizard sets them up; the browser opens them at `http://127.0.0.1:<admin port>/local/<page_id>`, and the URL is filled in automatically.
+
+```json
+{ "name": "Clock", "source_type": "clock", "local": { "title": "Lobby", "show_seconds": true } }
+{ "name": "Photos", "source_type": "slideshow", "local": { "folder": "/home/pi/Pictures", "interval_seconds": 10, "fit": "contain", "shuffle": true } }
+{ "name": "Notice", "source_type": "html", "local": { "html": "<h1>Welcome</h1>" } }
+```
+
+- `clock`: time and date in the browser's language; `hour12`, `show_seconds` and `hide_date` change the layout. It shifts slightly every minute against burn-in unless reduced motion is on.
+- `slideshow`: JPG, PNG, WebP, GIF, AVIF and BMP files from an absolute folder, sorted by name or shuffled, cross-faded every `interval_seconds` (2-86400). New files appear after one pass. Chromium decodes every image at full size, so images close to the screen resolution keep memory low on a Raspberry Pi.
+- `html`: up to 256 KB of your own HTML, pasted or loaded from a file in the wizard.
+- Local pages need no login but are only served to the device itself (and to a signed-in admin for a preview). They run in a sandbox with their own origin, so their scripts cannot use the Admin API, cookies or local storage.
+- With admin TLS the browser gets `--allow-insecure-localhost` so a self-signed certificate is accepted for these pages.
+
 ## Home Assistant 403 / White Page Troubleshooting
 
 If Home Assistant returns `403 Forbidden`, KioskMate trips its authentication guard and stops Chromium to prevent a reconnect loop. Remove the kiosk IP from `ip_bans.yaml`, restart Home Assistant, then use **Dashboard -> Reset HA session** exactly once. The reset waits for all Chromium processes, backs up the old session under `~/.config/kioskmate/Browser/SessionBackups`, clears current Chromium authentication and saved login storage, and starts a clean session. KioskMate never stores or automatically resubmits the Home Assistant password; Home Assistant keeps the authenticated session in its browser storage after the successful manual login.
@@ -218,6 +268,8 @@ The shell command is a compatibility wrapper around the canonical, cross-platfor
 ```bash
 python scripts/package-deb.py --version 0.8.0 --arch arm64 --arch amd64
 ```
+
+Packages embed a minified Admin UI: the builder runs `go run ./tools/minify` (esbuild, only at build time) and builds with `-tags minified`. Plain `go build` keeps embedding the readable sources.
 
 The package installs:
 

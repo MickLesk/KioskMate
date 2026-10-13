@@ -3,12 +3,12 @@ package admin
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -41,9 +41,6 @@ import (
 	"github.com/MickLesk/KioskMate/internal/updater"
 	"golang.org/x/crypto/argon2"
 )
-
-//go:embed web/index.html web/assets/*
-var content embed.FS
 
 const sessionCookieName = "kioskmate_session"
 
@@ -82,6 +79,10 @@ type operationBrowser interface {
 	Operations() []supervisor.Operation
 }
 
+type gpuBrowser interface {
+	GPUInfo(context.Context) (supervisor.GPUInfo, error)
+}
+
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
@@ -95,6 +96,7 @@ type Server struct {
 	updater  *updater.Service
 	actions  *actions.Service
 	hardware *hardware.Service
+	workflow WorkflowEngine
 	logger   *slog.Logger
 	version  string
 	journal  *events.Journal
@@ -231,6 +233,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/assets/", s.asset)
+	mux.HandleFunc("/local/", s.localPage)
 	mux.HandleFunc("/api/auth/status", s.authStatus)
 	mux.HandleFunc("/api/auth/setup", s.authSetup)
 	mux.HandleFunc("/api/auth/login", s.authLogin)
@@ -243,6 +246,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
 	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
+	mux.HandleFunc("/api/stream", s.auth(s.stream))
+	mux.HandleFunc("/api/rules/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/trigger") {
+			s.ruleWebhook(w, r)
+			return
+		}
+		s.auth(s.ruleAction)(w, r)
+	})
 	mux.HandleFunc("/api/logs/download", s.auth(s.logsDownload))
 	mux.HandleFunc("/api/diagnostics/export", s.auth(s.diagnosticsExport))
 	mux.HandleFunc("/api/terminal/run", s.auth(s.terminalRun))
@@ -416,6 +427,9 @@ func (s *Server) hardwareStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	if r.URL.Query().Get("rediscover") == "1" {
+		s.hardware.Rediscover()
+	}
 	writeJSON(w, http.StatusOK, s.hardware.Status(ctx))
 }
 
@@ -521,15 +535,51 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	case ".js":
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	case ".json":
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	w.Header().Set("Cache-Control", "no-store, max-age=0")
-	w.Header().Set("Pragma", "no-cache")
+	// Embedded assets only change with the binary: revalidate by version so a
+	// reload costs a 304 instead of re-sending every module.
+	etag := `"` + url.QueryEscape(s.version) + "-" + name + `"`
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Accept-Encoding")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if compressed := gzipAsset(path, data); compressed != nil {
+			w.Header().Set("Content-Encoding", "gzip")
+			data = compressed
+		}
+	}
 	if r.Method == http.MethodHead {
 		return
 	}
 	_, _ = w.Write(data)
+}
+
+var gzipAssets sync.Map
+
+// gzipAsset compresses an embedded asset once per process and caches it.
+func gzipAsset(path string, data []byte) []byte {
+	if cached, ok := gzipAssets.Load(path); ok {
+		return cached.([]byte)
+	}
+	var buf bytes.Buffer
+	writer, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil
+	}
+	if _, err := writer.Write(data); err != nil || writer.Close() != nil {
+		return nil
+	}
+	compressed := buf.Bytes()
+	gzipAssets.Store(path, compressed)
+	return compressed
 }
 
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
@@ -1281,7 +1331,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit("config_save", "ok", "configuration saved", nil)
-		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "conflicts": next.Kiosk.Conflicts()})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1891,10 +1941,24 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	if status.Running {
 		add("browser_running", "ok", "Browser is running.", status.PID)
+		if gpu, ok := s.browser.(gpuBrowser); ok {
+			if info, err := gpu.GPUInfo(ctx); err != nil {
+				add("gpu", "warn", "GPU report is unavailable.", err.Error())
+			} else if info.SoftwareRaster {
+				add("gpu", "warn", "Chromium rasterizes in software. This costs a lot of CPU on small boards; try GPU mode \"hardware\" and compare with scripts/benchmark.sh.", info)
+			} else {
+				add("gpu", "ok", "Chromium uses GPU rasterization.", info)
+			}
+		}
 	} else if status.LastError != "" {
 		add("browser_running", "error", "Browser is stopped with a last error.", status.LastError)
 	} else {
 		add("browser_running", "warn", "Browser is currently stopped.", "")
+	}
+	for _, arg := range s.cfg.Snapshot().Kiosk.ExtraArgs {
+		if strings.TrimSpace(arg) == "--disable-dev-shm-usage" {
+			add("extra_args", "warn", "--disable-dev-shm-usage moves Chromium shared memory to /tmp (SD card on Raspberry Pi OS). Remove it from extra arguments unless KioskMate runs in a container.", arg)
+		}
 	}
 	if status.URL == "" {
 		add("active_page", "warn", "No active kiosk URL is available.", "")

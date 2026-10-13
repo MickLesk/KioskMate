@@ -23,8 +23,25 @@ func TestAssetServesEmbeddedJavaScript(t *testing.T) {
 	if rec.Body.Len() == 0 {
 		t.Fatal("expected embedded asset body")
 	}
-	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-store") {
-		t.Fatalf("cache-control = %q", got)
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" || rec.Header().Get("ETag") == "" {
+		t.Fatalf("cache-control = %q, etag = %q", got, rec.Header().Get("ETag"))
+	}
+
+	again := httptest.NewRequest(http.MethodGet, "/assets/app-core.js", nil)
+	again.Header.Set("If-None-Match", rec.Header().Get("ETag"))
+	again.Header.Set("Accept-Encoding", "gzip")
+	revalidated := httptest.NewRecorder()
+	server.asset(revalidated, again)
+	if revalidated.Code != http.StatusNotModified {
+		t.Fatalf("revalidation status = %d", revalidated.Code)
+	}
+
+	zipped := httptest.NewRequest(http.MethodGet, "/assets/app-core.js", nil)
+	zipped.Header.Set("Accept-Encoding", "gzip, br")
+	compressed := httptest.NewRecorder()
+	server.asset(compressed, zipped)
+	if compressed.Header().Get("Content-Encoding") != "gzip" || compressed.Body.Len() >= rec.Body.Len() {
+		t.Fatalf("gzip encoding = %q, size %d vs %d", compressed.Header().Get("Content-Encoding"), compressed.Body.Len(), rec.Body.Len())
 	}
 }
 
@@ -39,22 +56,27 @@ func TestIndexUsesVersionedAssetsAndVisibleBootstrap(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, "app-core.js?v=0.7.1") {
-		t.Fatalf("index does not contain versioned assets: %s", body)
+	if strings.Contains(body, "__KIOSKMATE_ASSET_VERSION__") || !strings.Contains(body, `<script type="module" src="/assets/main.js?v=0.7.1">`) {
+		t.Fatalf("index does not load the versioned module entry point: %s", body)
 	}
-	if !strings.Contains(body, "api.js?v=0.7.1") {
-		t.Fatal("index is missing the versioned API module")
+	// The stylesheets are cascade layers and must load in this order.
+	last := -1
+	for _, name := range []string{"tokens.css", "layout.css", "components.css", "views.css"} {
+		link := `<link rel="stylesheet" href="/assets/` + name + `?v=0.7.1" />`
+		at := strings.Index(body, link)
+		if at < 0 {
+			t.Fatalf("index is missing the versioned stylesheet %s", name)
+		}
+		if at < last {
+			t.Fatalf("stylesheet %s is loaded out of order", name)
+		}
+		last = at
+		if _, err := content.ReadFile("web/assets/" + name); err != nil {
+			t.Fatalf("stylesheet %s is not embedded: %v", name, err)
+		}
 	}
-	if !strings.Contains(body, "ui-components.js?v=0.7.1") {
-		t.Fatal("index is missing the versioned UI component module")
-	}
-	coreIndex := strings.Index(body, "app-core.js?v=0.7.1")
-	viewIndex := strings.Index(body, "view-dashboard.js?v=0.7.1")
-	actionIndex := strings.Index(body, "actions-core.js?v=0.7.1")
-	renderIndex := strings.Index(body, "renderers.js?v=0.7.1")
-	bootstrapIndex := strings.Index(body, "app-bootstrap.js?v=0.7.1")
-	if coreIndex < 0 || viewIndex < coreIndex || actionIndex < viewIndex || renderIndex < actionIndex || bootstrapIndex < renderIndex {
-		t.Fatal("Admin frontend modules are missing or loaded in the wrong order")
+	if strings.Contains(body, "app.css") {
+		t.Fatal("index still references the removed app.css")
 	}
 	if !strings.Contains(body, "Loading control panel") {
 		t.Fatal("index is missing visible bootstrap state")
@@ -80,7 +102,7 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 	var app strings.Builder
 	for _, name := range []string{
 		"app-core.js", "view-dashboard.js", "view-kiosk.js", "view-mqtt.js", "view-system.js", "view-settings.js",
-		"actions-core.js", "actions-kiosk.js", "actions-mqtt.js", "actions-system.js", "actions-settings.js", "renderers.js", "app-bootstrap.js",
+		"actions-core.js", "actions-kiosk.js", "actions-mqtt.js", "actions-system.js", "actions-settings.js", "renderers.js", "main.js", "workflows.js",
 	} {
 		asset, err := content.ReadFile("web/assets/" + name)
 		if err != nil {
@@ -88,19 +110,19 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 		}
 		app.Write(asset)
 	}
-	i18n, err := content.ReadFile("web/assets/i18n.js")
+	i18n, err := content.ReadFile("web/assets/i18n-de.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "formatEvents", "nav-mobile-toggle", "state.auth.config", "Promise.allSettled", "renderFatal", "auth-error"} {
+	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "formatEvents", "nav-mobile-toggle", "state.auth.config", "Promise.allSettled", "renderFatal", "auth-error", "renderWorkflows", "/api/rules/"} {
 		if !strings.Contains(app.String(), marker) {
 			t.Errorf("embedded Admin assets missing %q", marker)
 		}
 	}
 	for _, marker := range []string{"allChangesSaved", "validationPageUrl", "dayShort_mon", "kioskSequence", "finishAndStart", "mqttReadiness", "noJobsYet", "logEvents", "navigationMenu"} {
 		if !strings.Contains(string(i18n), marker) {
-			t.Errorf("embedded i18n.js missing %q", marker)
+			t.Errorf("embedded i18n-de.json missing %q", marker)
 		}
 	}
 }

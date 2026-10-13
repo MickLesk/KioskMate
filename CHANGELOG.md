@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Lower resource use on small hardware
+- Cached slow hardware probes (sudo rights, display command, session type, DDC/CI) instead of re-running them on every status request; **System -> Rediscover hardware** forces a fresh scan.
+- Limited Chromium network monitoring for the Home Assistant auth guard to five minutes after each navigation, with capped DevTools buffers and large WebSocket frames dropped before decoding (`perf.auth_monitor: "always"` keeps the old behaviour).
+- Reused process memory (PSS) samples for a minute and built the process tree in one pass.
+- Merged Chromium `--enable-features` flags, enabled GPU rasterization in hardware GPU mode, stopped adding `--disable-dev-shm-usage` and reported the GPU feature status in the Doctor.
+
+### Kiosk
+- Added a renderer heartbeat: a page that stops responding is reloaded, then the browser restarts, and optionally the system reboots when restarts stop helping.
+- Added workflows: rules triggered by MQTT, a time of day, a webhook, touch input or inactivity that show a page, switch the display, set brightness, reload, show a banner, click, scroll, play a sound or run a script, with conditions, cooldown, fixed priority below manual overrides, conflict warnings, a test button and run history.
+- Added local pages that KioskMate renders itself: a clock, an image slideshow from a folder and custom HTML, sandboxed and only served to the device.
+- Added an optional tab mode that keeps recent pages open and switches without reloading, with per-page preloading.
+- Added scheduled maintenance reloads every N minutes, at a fixed time or after N rotation rounds.
+- Added an optional desktop-free mode with the Cage compositor.
+- Added a ready-made Raspberry Pi OS Lite image (pi-gen, `image/build.sh`, manual workflow) with Cage, Chromium and first-boot setup from `kioskmate.txt`, plus `--set-admin-password-stdin` and `--set-start-url` command-line flags.
+
+### Windows
+- Added experimental Windows 10/11 support: Edge or Chrome discovery, job-object process handling, configuration in `%APPDATA%\KioskMate`, browser profiles in `%LOCALAPPDATA%\KioskMate`, WMI monitor brightness, a Task Scheduler installer (`install.ps1`) and `windows_amd64`/`windows_arm64` zip packages; Linux-only hardware controls and system actions report "unsupported on Windows" ([docs/WINDOWS.md](docs/WINDOWS.md)).
+
+### Admin UI
+- Converted the Admin UI to ES modules with per-language translation files loaded on demand.
+- Added live updates over Server-Sent Events and DOM morphing so open forms keep focus and input.
+- Startup loads only what every view needs; journal, jobs, time zones and update history load with their view.
+- Served assets with ETag revalidation and gzip.
+- Split the stylesheet into tokens, layout, components and views and removed unused rules.
+- Release packages embed a minified Admin UI (about 25% smaller, 12% after gzip).
+- Live updates keep running while a form has unsaved changes; edited fields and action results stay as they are.
+
 ## v0.8.0
 
 ### Runtime reliability and diagnostics

@@ -1,6 +1,8 @@
-"use strict";
+import { applySafeMode, loadBrowserDiagnostics } from "./actions-kiosk.js";
+import { boot, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, getJSON, openModal, postJSON, refreshCore, renderApp, renderAppIfIdle, request, runAction, saveConfig, sleep, state, t, toast, val } from "./app-core.js";
+import { button, lines, metric, renderUpdatePreflight } from "./renderers.js";
 
-function bindSettings() {
+export function bindSettings() {
         document.querySelector('[data-action="admin-save"]')?.addEventListener("click", saveAdminSettings);
         document.querySelector('[data-action="password-save"]')?.addEventListener("click", savePassword);
         document.querySelector('[data-action="browser-settings-save"]')?.addEventListener("click", () => saveBrowserSettings(false));
@@ -71,7 +73,7 @@ function bindSettings() {
           cfg.admin = cfg.admin || {};
           cfg.admin.bind = val("admin-bind");
           cfg.admin.port = Number(val("admin-port") || 33333);
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           await refreshCore();
           clearDirty("settings-admin");
           renderApp();
@@ -96,12 +98,21 @@ function bindSettings() {
           cfg.performance.profile = val("perf-profile");
           cfg.performance.gpu_mode = val("perf-gpu");
           cfg.performance.reduce_motion = checked("perf-reduce");
+          cfg.performance.auth_monitor = val("perf-auth-monitor") === "always" ? "always" : "";
+          cfg.kiosk.page_switch = val("kiosk-page-switch") === "tabs" ? "tabs" : "";
+          cfg.kiosk.max_tabs = Math.min(8, Math.max(1, Number(val("kiosk-max-tabs") || 3)));
+          cfg.kiosk.maintenance = {
+            reload_every_minutes: Number(val("kiosk-reload-every") || 0),
+            reload_at: val("kiosk-reload-at"),
+            reload_after_cycles: Math.max(0, Number(val("kiosk-reload-cycles") || 0)),
+          };
           cfg.watchdog.enabled = checked("watchdog-enabled");
           cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
           cfg.watchdog.max_cpu_percent = Number(val("watchdog-cpu") || 300);
           cfg.watchdog.cpu_grace = durationToNs(val("watchdog-grace"));
           cfg.watchdog.check_interval = durationToNs(val("watchdog-interval"));
-          await postJSON("/api/config", cfg);
+          cfg.watchdog.reboot_on_hang = checked("watchdog-reboot-hang");
+          await saveConfig(cfg);
           if (restart) await postJSON("/api/browser/restart");
           await refreshCore();
           state.config = cfg;
@@ -135,7 +146,7 @@ function bindSettings() {
       async function saveRawConfig() {
         await runAction("config-raw-save", async () => {
           const cfg = JSON.parse(val("config-raw"));
-          await postJSON("/api/config", cfg);
+          await saveConfig(cfg);
           await refreshCore();
           clearDirty("settings-config");
           renderApp();
@@ -195,14 +206,14 @@ function bindSettings() {
 		});
 	  }
 
-      async function checkRepair() {
+      export async function checkRepair() {
         await runAction("repair-check", async () => {
           state.repair = await getJSON("/api/repair");
           renderApp();
         }, t("diagnostics"));
       }
 
-      async function runRepair() {
+      export async function runRepair() {
         await runAction("repair-run", async () => {
           state.repair = await postJSON("/api/repair", {});
           await refreshCore();

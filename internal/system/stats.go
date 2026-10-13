@@ -10,4 +10,5 @@ type ProcessTreeStats struct {
 	UpdatedAt  *time.Time `json:"updated,omitempty"`
 
 	totalTicks uint64
+	pssAt      time.Time
 }

@@ -128,7 +128,7 @@ func (b *Browser) recover(ctx context.Context, reason string, forceRestart bool)
 		b.recovery.State, b.recovery.Stage, b.recovery.BackoffUntil = "backoff", "restart_budget", &until
 		b.mu.Unlock()
 		b.persistRuntimeState()
-		return fmt.Errorf("automatic recovery budget exhausted until %s", until.Format(time.RFC3339))
+		return fmt.Errorf("%w until %s", errRecoveryBudget, until.Format(time.RFC3339))
 	}
 	b.recoveryRuns = append(b.recoveryRuns, now)
 	running := b.cmd != nil && b.cmd.Process != nil

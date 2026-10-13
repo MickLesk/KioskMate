@@ -31,6 +31,8 @@ def main() -> int:
     dist = root / "dist"
     dist.mkdir(parents=True, exist_ok=True)
 
+    # Release packages embed a minified Admin UI (go build -tags minified).
+    subprocess.run(["go", "run", "./tools/minify"], cwd=root, check=True)
     for arch in args.arch:
         build_package(root, dist, args.version, arch)
 
@@ -47,6 +49,8 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
         pkg / "usr/bin",
         pkg / "usr/share/doc/kioskmate",
         pkg / "usr/lib/systemd/user",
+        pkg / "usr/lib/systemd/system",
+        pkg / "usr/share/kioskmate/cage",
     ]
     for path in paths:
         path.mkdir(parents=True, exist_ok=True)
@@ -60,6 +64,7 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
             "go",
             "build",
             "-trimpath",
+            "-tags=minified",
             f"-ldflags=-s -w -X main.version={version}",
             "-o",
             str(pkg / "usr/bin/kioskmate"),
@@ -72,6 +77,12 @@ def build_package(root: Path, dist: Path, version: str, arch: str) -> None:
 
     shutil.copy2(root / "README.md", pkg / "usr/share/doc/kioskmate/README.md")
     shutil.copy2(root / "packaging/systemd/kioskmate.service", pkg / "usr/lib/systemd/user/kioskmate.service")
+    # Optional desktop-free mode; inactive until setup-cage.sh enables it.
+    shutil.copy2(root / "packaging/cage/kioskmate-cage@.service", pkg / "usr/lib/systemd/system/kioskmate-cage@.service")
+    shutil.copy2(root / "packaging/cage/pam-kioskmate-cage", pkg / "usr/share/kioskmate/cage/pam-kioskmate-cage")
+    shutil.copy2(root / "packaging/cage/setup-cage.sh", pkg / "usr/share/kioskmate/cage/setup-cage.sh")
+    os.chmod(pkg / "usr/share/kioskmate/cage/setup-cage.sh", 0o755)
+    shutil.copy2(root / "docs/HEADLESS-CAGE.md", pkg / "usr/share/doc/kioskmate/HEADLESS-CAGE.md")
 
     write_text(pkg / "DEBIAN/control", control_file(version, arch))
     write_text(pkg / "DEBIAN/preinst", maintainer_preinst())
@@ -107,7 +118,7 @@ Architecture: {arch}
 Maintainer: MickLesk
 Depends: chromium | chromium-browser | google-chrome-stable, fonts-noto-color-emoji
 Recommends: wlopm, pipewire-pulse | pulseaudio
-Suggests: kscreen
+Suggests: kscreen, cage, wlr-randr
 Description: KioskMate browser supervisor for Home Assistant kiosks
  Go-based supervisor, Admin API and watchdog for an external kiosk browser.
 """
@@ -262,7 +273,7 @@ def add_file(tar: tarfile.TarFile, path: Path, name: str, rel: str) -> None:
     info.uid = info.gid = 0
     info.uname = info.gname = "root"
     info.mtime = 0
-    if rel in ("preinst", "postinst", "prerm", "postrm") or rel == "bin/kioskmate":
+    if rel in ("preinst", "postinst", "prerm", "postrm") or rel in ("bin/kioskmate", "share/kioskmate/cage/setup-cage.sh"):
         info.mode = 0o755
     else:
         info.mode = 0o644

@@ -51,6 +51,7 @@ type runtimeBrowser interface {
 
 type MQTTService struct {
 	cfg              *config.Config
+	workflow         WorkflowRules
 	browser          Browser
 	hardware         *hardware.Service
 	updater          *updater.Service
@@ -113,6 +114,26 @@ type pageHealth struct {
 	StatusCode   int
 	Error        string
 	Checked      time.Time
+}
+
+// WorkflowRules receives MQTT messages for workflow rule triggers.
+type WorkflowRules interface {
+	Topics() []string
+	HandleMQTT(ctx context.Context, topic, payload string) bool
+}
+
+// SetWorkflow attaches the workflow engine; its trigger topics are
+// subscribed on the command connection.
+func (s *MQTTService) SetWorkflow(rules WorkflowRules) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workflow = rules
+}
+
+func (s *MQTTService) workflowRules() WorkflowRules {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workflow
 }
 
 func NewMQTTService(cfg *config.Config, browser Browser, hw *hardware.Service, updates *updater.Service, actionService *actions.Service, version string, logger *slog.Logger, journals ...*events.Journal) *MQTTService {
@@ -342,6 +363,11 @@ func (s *MQTTService) connectionKey() string {
 		pageSig.WriteString(strings.TrimSpace(page.Trigger.Payload))
 		pageSig.WriteByte('|')
 	}
+	for _, rule := range cfg.Kiosk.Rules {
+		if !rule.Disabled && rule.Trigger.Type == "mqtt" {
+			pageSig.WriteString("rule:" + strings.TrimSpace(rule.Trigger.Topic) + "|")
+		}
+	}
 	return strings.Join([]string{
 		cfg.MQTT.URL,
 		cfg.MQTT.Username,
@@ -474,6 +500,9 @@ func (s *MQTTService) commands(ctx context.Context) {
 			topics = append(topics, strings.TrimSpace(page.Trigger.Topic))
 		}
 	}
+	if rules := s.workflowRules(); rules != nil {
+		topics = append(topics, rules.Topics()...)
+	}
 	for {
 		err := client.Subscribe(topics, func(topic string, payload []byte) {
 			s.handleCommand(ctx, topic, strings.TrimSpace(string(payload)))
@@ -495,6 +524,11 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	defer s.commandMu.Unlock()
 	actionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	if rules := s.workflowRules(); rules != nil && rules.HandleMQTT(ctx, topic, command) {
+		// Workflow rule topics are never KioskMate commands.
+		s.recordCommand(topic, nil)
+		return
+	}
 	if page, matched, topicIsTrigger := s.triggeredPage(topic, command); matched {
 		err := s.activatePage(actionCtx, page, "mqtt-trigger")
 		if err != nil {
@@ -815,7 +849,7 @@ func (s *MQTTService) publishAll() error {
 	hwCtx, hwCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	hw := s.hardware.Status(hwCtx)
 	hwCancel()
-	timeStatus := systemtime.Read(context.Background(), cfg.Time.NTPServer)
+	timeStatus := systemtime.ReadCached(context.Background(), cfg.Time.NTPServer, 5*time.Minute)
 	status := s.browser.Status()
 	pages := s.pageEntities()
 	s.refreshOnePageHealth(pages)

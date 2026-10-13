@@ -1,4 +1,6 @@
-"use strict";
+import { formatSchedulerReason } from "./actions-core.js";
+import { checked, esc, field, formatDate, formatDuration, formatValue, secondsToDuration, selectHtml, state, t, val } from "./app-core.js";
+import { KioskMateUI } from "./ui-components.js";
 
 function renderPages(pages) {
         if (!pages.length) {
@@ -42,7 +44,7 @@ function renderPages(pages) {
           </div>`;
       }
 
-      function renderActionLog() {
+      export function renderActionLog() {
 		const persisted = (state.operations || []).slice(-4).reverse().map((item) => ({
 		  title: item.action || "browser",
 		  detail: item.error || item.state || "",
@@ -66,7 +68,7 @@ function renderPages(pages) {
           </div>`;
       }
 
-      function renderRotation(items) {
+      export function renderRotation(items) {
         const pages = normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls);
         if (!items.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return items.map((item, index) => `
@@ -77,7 +79,7 @@ function renderPages(pages) {
           </div>`).join("");
       }
 
-      function renderRules(items) {
+      export function renderRules(items) {
         const pages = normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls);
         if (!items.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return items.map((item, index) => `
@@ -141,17 +143,17 @@ function renderPages(pages) {
           </div>`;
       }
 
-      function renderSessions() {
+      export function renderSessions() {
         if (!state.sessions.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return table([t("device"), t("start"), t("lastExit")], state.sessions.map((s) => [s.remote || "-", formatDate(s.created), formatDate(s.last_seen)]));
       }
 
-      function renderBackups() {
+      export function renderBackups() {
         if (!state.backups.length) return `<div class="empty">${esc(t("noData"))}</div>`;
         return table([t("configFile"), t("lastExit"), ""], state.backups.map((b) => [b.name || b.path, formatDate(b.modified), `<button data-restore="${esc(b.path)}">${esc(t("restore"))}</button>`]), true);
       }
 
-      function renderRepair() {
+      export function renderRepair() {
         const issues = (state.repair?.issues || []).filter((issue) => issue.id !== "ok");
         if (!issues.length) return `<div class="empty">${esc(t("noConfigIssues"))}</div>`;
         return table([t("diagnostics"), t("status")], issues.map((issue) => [
@@ -168,17 +170,17 @@ function renderPages(pages) {
         }).join("\n\n");
       }
 
-      function renderJobsHTML() {
+      export function renderJobsHTML() {
         if (!state.jobs.length) return `<div class="empty empty-action"><strong>${esc(t("noJobsYet"))}</strong><span>${esc(t("noJobsYetHint"))}</span></div>`;
         return renderJobList(state.jobs);
       }
 
-      function renderUpdateJobsHTML() {
+      export function renderUpdateJobsHTML() {
         if (!state.updateJobs.length) return `<div class="empty">${esc(t("noUpdateJobs"))}</div>`;
         return renderJobList(state.updateJobs, true);
       }
 
-      function renderUpdatePreflight() {
+      export function renderUpdatePreflight() {
         const report = state.updatePreflight;
         if (!report) return "";
         return `<div class="preflight ${report.ok ? "ok" : "bad"}">
@@ -206,7 +208,7 @@ function renderPages(pages) {
         return `${Math.ceil(bytes / (1 << 20))} MiB`;
       }
 
-      function renderUpdateHistory() {
+      export function renderUpdateHistory() {
         const entries = state.updateHistory?.entries || [];
         if (!entries.length) return `<div class="empty">${esc(t("noUpdateHistory"))}</div>`;
         return `<div class="history-list">${entries.map((entry) => `<article>
@@ -228,7 +230,7 @@ function renderPages(pages) {
         }).join("");
       }
 
-      function validationError(id, message) {
+      export function validationError(id, message) {
         const input = document.getElementById(id);
         if (input) {
           input.setCustomValidity(message);
@@ -239,12 +241,13 @@ function renderPages(pages) {
         throw new Error(message);
       }
 
-      function validatePages(pages) {
+      export function validatePages(pages) {
         const enabled = pages.filter((page) => !page.disabled);
         if (!enabled.length) throw new Error(t("validationEnabledPage"));
         pages.forEach((page, index) => {
           if (page.disabled && !page.name && !page.url) return;
           if (!page.name.trim()) validationError(`page-name-${index}`, t("validationPageName"));
+          if (isLocalSource(page.source_type)) return;
           if (!page.url.trim()) validationError(`page-url-${index}`, t("validationPageUrl"));
           try {
             const parsed = new URL(page.url);
@@ -258,7 +261,7 @@ function renderPages(pages) {
         });
       }
 
-      function validateScheduler(kiosk) {
+      export function validateScheduler(kiosk) {
         const pages = normalizePages(kiosk.pages, kiosk.urls);
         const mode = kiosk.scheduler?.mode || "rotation";
         const rotation = kiosk.rotation || [];
@@ -288,7 +291,7 @@ function renderPages(pages) {
         }
       }
 
-      function validateMQTT(mqtt) {
+      export function validateMQTT(mqtt) {
         if (!mqtt.enabled) return;
         try {
           const parsed = new URL(mqtt.url);
@@ -307,7 +310,7 @@ function renderPages(pages) {
 		}
       }
 
-      function collectPages() {
+      export function collectPages() {
         const existing = normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls);
         if (!document.getElementById("page-name-0")) return existing.map((page) => ({ ...page }));
         return existing.map((_, index) => ({
@@ -318,13 +321,13 @@ function renderPages(pages) {
         })).filter((page) => page.name || page.url);
       }
 
-      function collectRotation() {
+      export function collectRotation() {
         const items = state.config?.kiosk?.rotation || [];
         if (!document.getElementById("rotation-page-0")) return items.map((item) => ({ ...item }));
         return items.map((_, index) => ({ page: Number(val(`rotation-page-${index}`) || 0), duration_seconds: Number(val(`rotation-duration-${index}`) || 3600) }));
       }
 
-      function collectRules() {
+      export function collectRules() {
         const items = state.config?.kiosk?.time_rules || [];
         if (!document.getElementById("rule-name-0")) return items.map((item) => ({ ...item, days: [...(item.days || [])] }));
         const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -338,7 +341,7 @@ function renderPages(pages) {
         }));
       }
 
-      function normalizePages(pages, urls) {
+      export function normalizePages(pages, urls) {
         if (Array.isArray(pages) && pages.length) return pages.map((p, i) => ({
           ...p,
           page_id: p.page_id || `page_${i + 1}`,
@@ -361,17 +364,17 @@ function renderPages(pages) {
         return (urls || []).map((url, i) => ({ page_id: `page_${i + 1}`, name: `Page ${i + 1}`, url, source_type: String(url).includes(":8123") ? "home_assistant" : "url", display_mode: "duration", duration_seconds: 3600, schedule: { start: "08:00", end: "18:00", days: [] }, trigger: { topic: "", payload: "ON" }, display_options: { brightness: 100 }, disabled: false }));
       }
 
-      function lines(id) {
+      export function lines(id) {
         return val(id).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       }
 
-      function commandTopic() {
+      export function commandTopic() {
         const base = String(val("mqtt-base-topic") || state.config?.mqtt?.base_topic || "kioskmate").replace(/^\/+|\/+$/g, "");
         const node = String(val("mqtt-node") || state.config?.mqtt?.node || "kioskmate").replace(/^\/+|\/+$/g, "");
         return `${base}/${node}/command`;
       }
 
-      function browserPresetOptions() {
+      export function browserPresetOptions() {
         return [
           ["chromium", t("chromium")],
           ["chromium-lite", t("chromiumLite")],
@@ -383,19 +386,19 @@ function renderPages(pages) {
         ];
       }
 
-      function objectEntries(obj) {
+      export function objectEntries(obj) {
         return Object.entries(obj || {}).map(([key, value]) => [key.replaceAll("_", " "), formatValue(value)]);
       }
 
-      function metric(title, value, hint = "") {
+      export function metric(title, value, hint = "") {
         return `<div class="metric"><span class="muted">${esc(title)}</span><strong>${esc(value)}</strong><span class="hint">${esc(hint)}</span></div>`;
       }
 
-      function statusTile(title, value, stateClass = "", meta = "") {
+      export function statusTile(title, value, stateClass = "", meta = "") {
         return `<div class="status-tile ${esc(stateClass)}"><span>${esc(title)}</span><strong>${esc(value)}</strong><small>${esc(meta)}</small></div>`;
       }
 
-	  function renderTelemetryChart(samples) {
+	  export function renderTelemetryChart(samples) {
 		const points = (samples || []).slice(-48);
 		if (!points.length) return `<div class="telemetry-empty">${esc(t("telemetryCollecting"))}</div>`;
 		const cpuMax = Math.max(1, ...points.map((item) => Number(item.cpu_percent || 0)));
@@ -406,7 +409,7 @@ function renderPages(pages) {
 		}).join("")}</div>`;
 	  }
 
-      function stateBanner(tone, title, message, action = "") {
+      export function stateBanner(tone, title, message, action = "") {
         return `<section class="state-banner ${esc(tone)}" role="status">
           <div class="state-indicator" aria-hidden="true"></div>
           <div><strong>${esc(title)}</strong><span>${esc(message)}</span></div>
@@ -414,18 +417,18 @@ function renderPages(pages) {
         </section>`;
       }
 
-      function readinessItem(label, ready, detail) {
+      export function readinessItem(label, ready, detail) {
         return `<div class="readiness-item ${ready ? "ok" : "warn"}">
           <span class="readiness-mark" aria-hidden="true">${ready ? "✓" : "!"}</span>
           <div><strong>${esc(label)}</strong><span>${esc(detail)}</span></div>
         </div>`;
       }
 
-      function healthRow(title, value, stateClass = "") {
+      export function healthRow(title, value, stateClass = "") {
         return `<div class="health-row"><span>${esc(title)}</span><strong class="status-text ${esc(stateClass)}">${esc(value)}</strong></div>`;
       }
 
-      function kvTable(rows) {
+      export function kvTable(rows) {
         return table(["", ""], rows.map(([a, b]) => [a, formatValue(b)]));
       }
 
@@ -435,14 +438,28 @@ function renderPages(pages) {
           .join("")}</tbody></table></div>`;
       }
 
-      function unsupportedControl(label) {
+      export function unsupportedControl(label) {
         return `<div class="unsupported-control"><label>${esc(label)}</label><span>${esc(t("notSupportedOnDevice"))}</span></div>`;
       }
 
-      function textarea(id, label, value = "") {
+      export const LOCAL_SOURCES = ["clock", "slideshow", "html"];
+
+      export function isLocalSource(type) {
+        return LOCAL_SOURCES.includes(type);
+      }
+
+      export function sourceMark(type) {
+        return { home_assistant: "HA", clock: "CLK", slideshow: "IMG", html: "HTML" }[type] || "WEB";
+      }
+
+      export function sourceLabel(type) {
+        return t({ home_assistant: "homeAssistantDashboard", clock: "sourceClock", slideshow: "sourceSlideshow", html: "sourceHtml" }[type] || "webAddress");
+      }
+
+      export function textarea(id, label, value = "") {
         return `<div><label for="${esc(id)}">${esc(label)}</label><textarea id="${esc(id)}">${esc(value)}</textarea></div>`;
       }
 
-      function button(labelKey, action, cls = "") {
-		return window.KioskMateUI.button(labelKey, action, cls, t);
+      export function button(labelKey, action, cls = "") {
+		return KioskMateUI.button(labelKey, action, cls, t);
       }
