@@ -31,6 +31,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - GitHub release updater with Debian package download and digest verification.
 - Debian packages for `arm64` and `amd64`.
 - JSON config at `~/.config/kioskmate/config.json`.
+- Experimental Windows 10/11 support with Microsoft Edge or Google Chrome, see [docs/WINDOWS.md](docs/WINDOWS.md).
 
 ## Status
 

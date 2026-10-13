@@ -580,17 +580,6 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmpPath, path)
 }
 
-func defaultPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "kioskmate", "config.json")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "kioskmate.json"
-	}
-	return filepath.Join(home, ".config", "kioskmate", "config.json")
-}
-
 func ConfigDir(path string) string {
 	if path == "" {
 		path = defaultPath()
@@ -1153,17 +1142,6 @@ func pruneConfigBackups(dir string, keep int) error {
 		}
 	}
 	return nil
-}
-
-func defaultBrowserDataDir() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "kioskmate", "Browser")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "kioskmate-browser"
-	}
-	return filepath.Join(home, ".config", "kioskmate", "Browser")
 }
 
 func saveIfMissing(path string, cfg *Config) error {

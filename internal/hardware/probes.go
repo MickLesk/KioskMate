@@ -1,8 +1,6 @@
 package hardware
 
 import (
-	"context"
-	"strings"
 	"sync"
 	"time"
 )
@@ -56,28 +54,4 @@ func resetProbes() {
 	probeMu.Lock()
 	probeCache = map[string]probeEntry{}
 	probeMu.Unlock()
-}
-
-func sudoRights(ctx context.Context) bool {
-	return memoProbe("sudo", sudoProbeTTL, func() string {
-		if run(ctx, "sudo", "-n", "true") == nil {
-			return "yes"
-		}
-		return "no"
-	}) == "yes"
-}
-
-// ddcCapabilities returns the cached `ddcutil capabilities` output, or "" when
-// ddcutil or passwordless sudo is unavailable.
-func ddcCapabilities(ctx context.Context) string {
-	if !commandExists("ddcutil") || !sudoRights(ctx) {
-		return ""
-	}
-	return memoProbe("ddcutil-capabilities", probeTTL, func() string {
-		return runText(ctx, "sudo", "ddcutil", "capabilities")
-	})
-}
-
-func ddcSupports(ctx context.Context, feature string) bool {
-	return strings.Contains(ddcCapabilities(ctx), "Feature: "+feature)
 }

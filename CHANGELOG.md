@@ -17,6 +17,9 @@
 - Added an optional desktop-free mode with the Cage compositor.
 - Added a ready-made Raspberry Pi OS Lite image (pi-gen, `image/build.sh`, manual workflow) with Cage, Chromium and first-boot setup from `kioskmate.txt`, plus `--set-admin-password-stdin` and `--set-start-url` command-line flags.
 
+### Windows
+- Added experimental Windows 10/11 support: Edge or Chrome discovery, job-object process handling, configuration in `%APPDATA%\KioskMate`, browser profiles in `%LOCALAPPDATA%\KioskMate`, WMI monitor brightness, a Task Scheduler installer (`install.ps1`) and `windows_amd64`/`windows_arm64` zip packages; Linux-only hardware controls and system actions report "unsupported on Windows" ([docs/WINDOWS.md](docs/WINDOWS.md)).
+
 ### Admin UI
 - Converted the Admin UI to ES modules with per-language translation files loaded on demand.
 - Added live updates over Server-Sent Events and DOM morphing so open forms keep focus and input.

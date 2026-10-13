@@ -316,6 +316,7 @@ func (b *Browser) start(ctx context.Context) (err error) {
 		}
 		return err
 	}
+	adoptProcessTree(cmd.Process.Pid)
 	b.mu.Lock()
 	b.cmd = cmd
 	b.done = make(chan struct{})
@@ -1384,7 +1385,7 @@ func findBrowser(preset string) string {
 			return path
 		}
 	}
-	return ""
+	return installedBrowser(preset)
 }
 
 func browserCandidates(preset string) []string {
@@ -1403,6 +1404,10 @@ func browserCandidates(preset string) []string {
 }
 
 func browserArgs(cfg *config.Config, preset string, url string, extra []string, page int) []string {
+	return platformBrowserArgs(preset, presetBrowserArgs(cfg, preset, url, extra, page))
+}
+
+func presetBrowserArgs(cfg *config.Config, preset string, url string, extra []string, page int) []string {
 	switch preset {
 	case "firefox":
 		return append(firefoxArgs(cfg, page), append(extra, url)...)
