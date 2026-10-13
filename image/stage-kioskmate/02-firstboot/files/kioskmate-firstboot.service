@@ -1,0 +1,20 @@
+# Applies /boot/firmware/kioskmate.txt once, before the kiosk starts.
+[Unit]
+Description=Apply KioskMate first-boot settings from kioskmate.txt
+ConditionPathExists=/boot/firmware/kioskmate.txt
+ConditionPathExists=!/var/lib/kioskmate/firstboot.done
+RequiresMountsFor=/boot/firmware /var/lib
+Wants=NetworkManager.service
+After=local-fs.target dbus.service NetworkManager.service
+Before=kioskmate-cage@kiosk.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/kioskmate-firstboot
+TimeoutStartSec=10min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

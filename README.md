@@ -15,6 +15,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Workflows: rules that react to an MQTT message, a time of day or a webhook and show a page for a while, switch the display, set brightness, reload, show a banner or run a script.
 - Scheduled maintenance reloads (every N minutes, at a fixed time or after N rotation rounds) and preloaded pages in tab mode.
 - Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
+- Ready-to-flash Raspberry Pi OS Lite image with Cage, Chromium and first-boot setup from `kioskmate.txt`, see [docs/IMAGE.md](docs/IMAGE.md).
 - Kiosk theme handling with native `dark` mode and optional Chromium `force-dark` mode.
 - Browser watchdog for memory/CPU runaway protection.
 - Browser start, stop, restart, refresh and active-page controls.

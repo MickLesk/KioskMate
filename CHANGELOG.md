@@ -14,6 +14,7 @@
 - Added an optional tab mode that keeps recent pages open and switches without reloading, with per-page preloading.
 - Added scheduled maintenance reloads every N minutes, at a fixed time or after N rotation rounds.
 - Added an optional desktop-free mode with the Cage compositor.
+- Added a ready-made Raspberry Pi OS Lite image (pi-gen, `image/build.sh`, manual workflow) with Cage, Chromium and first-boot setup from `kioskmate.txt`, plus `--set-admin-password-stdin` and `--set-start-url` command-line flags.
 
 ### Admin UI
 - Converted the Admin UI to ES modules with per-language translation files loaded on demand.
