@@ -390,6 +390,80 @@ function renderPages(pages) {
         return Object.entries(obj || {}).map(([key, value]) => [key.replaceAll("_", " "), formatValue(value)]);
       }
 
+      // Chromium CPU is summed over all cores (171 % on a Pi 4 = 43 % of the
+      // board). Shown as a share of the whole device plus the cores in use.
+      export function cpuCores() {
+        return Number(state.hardware?.system?.processor_count || 0);
+      }
+
+      export function cpuShareValue(percent) {
+        const cores = cpuCores();
+        const value = Number(percent);
+        if (percent === null || percent === undefined || !Number.isFinite(value)) return null;
+        return Math.round(cores ? value / cores : value);
+      }
+
+      export function cpuShare(percent) {
+        return formatValue(cpuShareValue(percent), " %");
+      }
+
+      export function cpuCoresUsed(percent) {
+        const cores = cpuCores();
+        const value = Number(percent);
+        if (!cores || !Number.isFinite(value)) return t("cpuCoresHint");
+        return `${formatValue(value / 100)} / ${cores} ${t("cpuCoresUnit")}`;
+      }
+
+      // A weak supply throttles the board and drops USB devices (touch!), and
+      // is otherwise only visible in dmesg.
+      export function powerBanner() {
+        const power = state.hardware?.system?.power;
+        if (!power) return "";
+        if (power.undervoltage_now) return stateBanner("bad", t("undervoltageNow"), t("undervoltageHint"));
+        if (power.undervoltage_since_boot) return stateBanner("warn", t("undervoltageSinceBoot"), t("undervoltageHint"));
+        return "";
+      }
+
+      function powerText(power) {
+        if (!power) return "-";
+        if (power.undervoltage_now) return t("undervoltageNow");
+        if (power.undervoltage_since_boot) return t("undervoltageSinceBoot");
+        return t("powerOk");
+      }
+
+      function hardwareValue(key, value) {
+        switch (key) {
+          case "disk_usage":
+            return value ? `${formatValue(value.used_gb)} / ${formatValue(value.total_gb, " GB")} (${formatValue(value.percent, " %")})` : "-";
+          case "power":
+            return powerText(value);
+          case "touch_devices":
+            return Array.isArray(value) && value.length ? value.join(", ") : t("noTouchDevice");
+          case "uptime_minutes":
+            if (value == null) return "-";
+            return Number(value) < 1440 ? `${formatValue(Number(value) / 60)} h` : `${formatValue(Number(value) / 1440)} ${t("days")}`;
+          case "memory_size_gib":
+            return formatValue(value, " GiB");
+          case "memory_usage_percent":
+          case "processor_usage_percent":
+          case "battery_level":
+            return formatValue(value, " %");
+          case "processor_temperature_c":
+            return formatValue(value, " °C");
+          default:
+            return formatValue(value);
+        }
+      }
+
+      // Hardware tables: translated labels and readable values instead of raw
+      // snake_case keys and JSON.
+      export function hardwareEntries(obj) {
+        return Object.entries(obj || {}).map(([key, value]) => {
+          const label = t(`hw_${key}`);
+          return [label === `hw_${key}` ? key.replaceAll("_", " ") : label, hardwareValue(key, value)];
+        });
+      }
+
       export function metric(title, value, hint = "") {
         return `<div class="metric"><span class="muted">${esc(title)}</span><strong>${esc(value)}</strong><span class="hint">${esc(hint)}</span></div>`;
       }
@@ -405,7 +479,7 @@ function renderPages(pages) {
 		const rssMax = Math.max(1, ...points.map((item) => Number(item.rss_mb || 0)));
 		return `<div class="telemetry-chart" role="img" aria-label="${esc(t("runtimeTelemetry"))}">${points.map((item) => {
 		  const level = Math.max(4, Math.round(Math.max(Number(item.cpu_percent || 0) / cpuMax, Number(item.rss_mb || 0) / rssMax) * 100));
-		  return `<i style="height:${level}%" title="${esc(`${formatDate(item.at)} · ${formatValue(item.cpu_percent, "% CPU")} · ${formatValue(item.rss_mb, " MB")}`)}"></i>`;
+		  return `<i style="height:${level}%" title="${esc(`${formatDate(item.at)} · ${cpuShare(item.cpu_percent)} CPU · ${formatValue(item.rss_mb, " MB")}`)}"></i>`;
 		}).join("")}</div>`;
 	  }
 

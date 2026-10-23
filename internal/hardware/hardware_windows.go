@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -69,6 +70,7 @@ func collectStatus(ctx context.Context) Status {
 		"memory_size_gib":         memorySizeGiB(),
 		"memory_usage_percent":    memoryUsagePercent(),
 		"processor_usage_percent": nil,
+		"processor_count":         runtime.NumCPU(),
 		"processor_temperature_c": nil,
 		"disk_usage":              diskUsage(),
 		"battery_level":           battery,

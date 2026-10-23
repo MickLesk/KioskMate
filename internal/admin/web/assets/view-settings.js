@@ -1,5 +1,5 @@
 import { checked, esc, field, formatDate, formatValue, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
-import { browserPresetOptions, button, kvTable, objectEntries, renderBackups, renderSessions, renderTelemetryChart, renderUpdateHistory, renderUpdateJobsHTML, renderUpdatePreflight, statusTile, textarea } from "./renderers.js";
+import { browserPresetOptions, button, cpuCoresUsed, cpuShare, cpuShareValue, kvTable, objectEntries, renderBackups, renderSessions, renderTelemetryChart, renderUpdateHistory, renderUpdateJobsHTML, renderUpdatePreflight, statusTile, textarea } from "./renderers.js";
 
 export function renderSettingsAdmin() {
         const cfg = state.config || {};
@@ -90,7 +90,7 @@ export function renderSettingsAdmin() {
 			<div class="card">
 			  <div class="head"><div><h3>${esc(t("runtimeTelemetry"))}</h3><span class="section-kicker">${esc(t("last24Hours"))}</span></div><button data-action="telemetry-reset">${esc(t("resetTelemetry"))}</button></div>
 			  <div class="body telemetry-panel">
-				${statusTile(t("averageCpu"), formatValue(telemetry.cpu_average, "%"), telemetry.cpu_average >= 200 ? "warn" : "", `${t("maximum")}: ${formatValue(telemetry.cpu_maximum, "%")} · ${t("cpuCoresHint")}`)}
+				${statusTile(t("averageCpu"), cpuShare(telemetry.cpu_average), Number(cpuShareValue(telemetry.cpu_average) || 0) >= 50 ? "warn" : "", `${t("maximum")}: ${cpuShare(telemetry.cpu_maximum)} · ${cpuCoresUsed(telemetry.cpu_average)}`)}
 				${statusTile(t("averageMemory"), formatValue(telemetry.rss_average_mb, " MB"), telemetry.rss_average_mb >= 1200 ? "warn" : "", `${t("maximum")}: ${formatValue(telemetry.rss_maximum_mb, " MB")} · ${t("memoryPssHint")}`)}
 				${statusTile(t("samples"), telemetry.samples || 0, "", `${t("processes")}: ${telemetry.process_maximum || 0}`)}
 				${renderTelemetryChart(state.telemetry?.samples || [])}
