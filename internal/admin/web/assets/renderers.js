@@ -136,7 +136,7 @@ function renderPages(pages) {
           [t("resetSession"), t("resetSessionHint")],
           [t("restartBrowser"), t("restartBrowserHint")],
         ];
-        if (browser?.last_error) hints.unshift([t("lastError"), browser.last_error]);
+        if (browser?.last_error) hints.unshift([t("lastError"), humanizeMessage(browser.last_error)]);
         return `
           <div class="recovery-list">
             ${hints.map(([title, text]) => `<div class="recovery-step"><strong>${esc(title)}</strong><span class="hint">${esc(text)}</span></div>`).join("")}
@@ -507,7 +507,8 @@ function renderPages(pages) {
       }
 
       function table(headers, rows, raw = false) {
-        return `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows
+        const head = headers.some(Boolean) ? `<thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>` : "";
+        return `<div class="table-wrap"><table>${head}<tbody>${rows
           .map((row) => `<tr>${row.map((cell) => `<td>${raw ? cell : esc(cell)}</td>`).join("")}</tr>`)
           .join("")}</tbody></table></div>`;
       }
@@ -536,4 +537,48 @@ function renderPages(pages) {
 
       export function button(labelKey, action, cls = "") {
 		return KioskMateUI.button(labelKey, action, cls, t);
+      }
+
+      // Go durations ("10m0s", "2ms", "1h30m0s") as "10 min", "2 ms", "1 h 30 min".
+      export function humanizeGoDuration(value) {
+        const text = String(value || "").trim();
+        if (/^\d+(\.\d+)?(ms|µs|us|ns)$/.test(text)) return text.replace(/(\d)(ms|µs|us|ns)$/, "$1 $2");
+        const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$/.exec(text);
+        if (!match || !text) return text;
+        const [, hours, minutes, seconds] = match;
+        const parts = [];
+        if (Number(hours)) parts.push(`${hours} h`);
+        if (Number(minutes)) parts.push(`${minutes} min`);
+        if (Number(seconds) && !Number(hours)) parts.push(`${Math.round(Number(seconds))} s`);
+        return parts.join(" ") || "0 s";
+      }
+
+      // Status messages from the browser supervisor are English and terse;
+      // the known ones get a readable translation, anything else stays as is.
+      const MESSAGE_PATTERNS = [
+        [/^browser exited after (\S+) without error$/, "msgBrowserExitedClean"],
+        [/^browser exited after (\S+): (.+)$/, "msgBrowserExited"],
+        [/^restart scheduled after (\S+)$/, "msgRestartScheduled"],
+        [/^browser stopped normally$/, "msgBrowserStopped"],
+        [/^page control connected$/, "msgPageControlConnected"],
+        [/^browser process started; connecting page control$/, "msgBrowserStarting"],
+        [/^kiosk page stopped responding$/, "msgPageNotResponding"],
+        [/^automatic recovery budget exhausted$/, "msgRecoveryExhausted"],
+        [/^Chromium control disconnected$/, "msgControlDisconnected"],
+        [/^no supported browser found$/, "msgNoBrowser"],
+        [/^browser start failed$/, "msgBrowserStartFailed"],
+        [/^browser is not running$/, "msgBrowserNotRunning"],
+        [/^rss (\d+)MB > (\d+)MB$/, "msgMemoryLimit"],
+        [/^cpu ([\d.]+)% > ([\d.]+)%$/, "msgCPULimit"],
+        [/Missing X server/i, "msgMissingXServer"],
+      ];
+
+      export function humanizeMessage(message) {
+        const text = String(message || "").trim();
+        for (const [pattern, key] of MESSAGE_PATTERNS) {
+          const match = pattern.exec(text);
+          if (!match) continue;
+          return t(key).replace("{1}", humanizeGoDuration(match[1] || "")).replace("{2}", match[2] || "").replace("{raw}", text);
+        }
+        return text;
       }

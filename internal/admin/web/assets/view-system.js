@@ -18,7 +18,7 @@ export function renderHardware() {
               ${statusTile(t("systemLoad"), formatValue(load), cores && Number(load || 0) > cores ? "warn" : "", `${cores ? `${cores} ${t("cpuCoresUnit")} · ` : ""}${t("temperature")} ${formatValue(hw.system?.processor_temperature_c, " °C")}`)}
               ${statusTile("RAM", formatValue(hw.system?.memory_usage_percent, "%"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
               ${statusTile(t("storage"), formatValue(hw.system?.disk_usage?.percent, "%"), "", formatValue(hw.system?.disk_usage?.available_gb, " GB " + t("available")))}
-              ${statusTile(t("display"), formatValue(hw.display?.power), String(hw.display?.power || "").toUpperCase() === "ON" ? "ok" : "", `${t("brightness")} ${formatValue(hw.display?.brightness, "%")}`)}
+              ${support.display_status ? statusTile(t("display"), String(hw.display?.power || "").toUpperCase() === "OFF" ? t("off") : t("on"), String(hw.display?.power || "").toUpperCase() === "OFF" ? "" : "ok", support.display_brightness ? `${t("brightness")} ${formatValue(hw.display?.brightness, "%")}` : t("brightnessNotControllable")) : statusTile(t("display"), t("notControllable"), "", t("displayControlHint"))}
               ${statusTile(t("time"), formatClock(timeInfo.current_time), timeInfo.synchronized ? "ok" : "warn", timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}
             </section>
             <div class="settings-columns">

@@ -6,11 +6,6 @@ import { absolutePageIndexFromEnabled, displayModeLabel, enabledPageIndexFromAbs
 
 export function bindKiosk() {
         bindBrowserButtons();
-        document.querySelectorAll("[data-kiosk-mode]").forEach((button) => button.addEventListener("click", () => {
-          state.kioskEditorMode = button.dataset.kioskMode === "flow" ? "flow" : "storybook";
-          localStorage.setItem("kioskmate.kioskEditorMode", state.kioskEditorMode);
-          renderApp();
-        }));
         document.querySelectorAll("[data-page-select]").forEach((item) => item.addEventListener("click", (event) => {
           if (event.target.closest("[data-page-edit],[data-page-remove],[data-page-move]")) return;
           state.kioskSelectedPageIndex = Number(item.dataset.pageSelect);
@@ -527,6 +522,21 @@ export function bindKiosk() {
           renderApp();
         });
       }
+
+	  // Shows a page for a while and then hands back to the programme. The
+	  // server counts enabled pages of the saved config, so the page is looked
+	  // up there by id: unsaved reordering does not change what is shown.
+	  export async function showPageNow(pageID, minutes = 60, busyKey = "page-show") {
+		await runAction(busyKey, async () => {
+		  const saved = normalizePages(state.persistedConfig?.kiosk?.pages, state.persistedConfig?.kiosk?.urls).filter((page) => !page.disabled && page.url);
+		  const page = saved.findIndex((item) => item.page_id === pageID);
+		  if (page < 0) throw new Error(t("showNowSaveFirst"));
+		  await postJSON("/api/browser/override", { page, duration_seconds: Math.max(1, Math.min(1440, minutes)) * 60, source: "admin-activate" });
+		  clearSnapshot();
+		  await refreshCore();
+		  renderApp();
+		}, t("overrideApplied"));
+	  }
 
 	  async function applyPageOverride() {
 		const pages = collectPages();

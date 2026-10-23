@@ -874,11 +874,13 @@ func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
 	snap := s.cfg.Snapshot()
 	kiosk := snap.Kiosk
 	minutes := 60
+	wholeDay := false
 	if r.Method == http.MethodPost {
 		var body struct {
 			Pages   []config.KioskPage  `json:"pages"`
 			Inserts []config.PageInsert `json:"inserts"`
 			Minutes int                 `json:"minutes"`
+			Day     bool                `json:"day"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -891,11 +893,15 @@ func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
 		if body.Minutes > 0 {
 			minutes = body.Minutes
 		}
+		wholeDay = body.Day
 	} else if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
-	} else if value, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && value > 0 {
-		minutes = value
+	} else {
+		if value, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && value > 0 {
+			minutes = value
+		}
+		wholeDay = r.URL.Query().Get("day") == "1"
 	}
 	minutes = min(minutes, 24*60)
 	now := time.Now()
@@ -903,20 +909,31 @@ func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
 		now = now.In(loc)
 	}
 	from := now.Truncate(time.Minute)
+	// day=1 asks for today from midnight, for the overview's day bar.
+	if wholeDay {
+		from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		minutes = 24 * 60
+	}
 	upcoming := []config.ProgramSegment{}
-	for _, segment := range kiosk.ProgramTimeline(now, now.Add(24*time.Hour)) {
-		if segment.InsertID != "" {
+	// next holds each insert's next run within two days, also for inserts
+	// that run rarely and do not make it into the first eight upcoming runs.
+	next := map[string]time.Time{}
+	for _, segment := range kiosk.ProgramTimeline(now, now.Add(48*time.Hour)) {
+		if segment.InsertID == "" {
+			continue
+		}
+		if len(upcoming) < 8 && segment.Start.Before(now.Add(24*time.Hour)) {
 			upcoming = append(upcoming, segment)
 		}
-		if len(upcoming) == 8 {
-			break
+		if _, ok := next[segment.InsertID]; !ok {
+			next[segment.InsertID] = segment.Start
 		}
 	}
 	segments := kiosk.ProgramTimeline(from, from.Add(time.Duration(minutes)*time.Minute))
 	if segments == nil {
 		segments = []config.ProgramSegment{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"now": now, "from": from, "minutes": minutes, "segments": segments, "upcoming": upcoming})
+	writeJSON(w, http.StatusOK, map[string]any{"now": now, "from": from, "minutes": minutes, "segments": segments, "upcoming": upcoming, "next": next})
 }
 
 func (s *Server) timeStatus(w http.ResponseWriter, r *http.Request) {

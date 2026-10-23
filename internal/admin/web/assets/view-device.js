@@ -2,7 +2,7 @@
 // memory) with a fix for every warning, above the hardware controls.
 import { loadBrowserDoctor } from "./actions-core.js";
 import { esc, formatValue, getJSON, formatMQTTState, renderApp, runAction, state, t } from "./app-core.js";
-import { cpuCoresUsed, cpuShare, cpuShareValue } from "./renderers.js";
+import { cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage } from "./renderers.js";
 import { renderHardware } from "./view-system.js";
 
 function check(level, title, detail, fix = "", value = "") {
@@ -28,12 +28,12 @@ export function healthChecks() {
   }
   if (state.status?.browser) {
     const share = cpuShareValue(browser.stats?.cpu_percent);
-    const detail = browser.ready ? t("checkBrowserReady").replace("{page}", browser.page_name || "-") : browser.running ? t("displayConnecting") : (browser.last_error || t("displayStoppedHint"));
+    const detail = browser.ready ? t("checkBrowserReady").replace("{page}", browser.page_name || "-") : browser.running ? t("displayConnecting") : (humanizeMessage(browser.last_error) || t("displayStoppedHint"));
     checks.push(check(browser.ready ? (Number(share || 0) > 75 ? "warn" : "ok") : browser.running ? "warn" : "bad", t("checkBrowser"), detail, Number(share || 0) > 75 ? t("checkBrowserLoadHint") : "", browser.running ? `${cpuShare(browser.stats?.cpu_percent)} · ${cpuCoresUsed(browser.stats?.cpu_percent)}` : ""));
   }
   if (browser.auth_guard?.tripped) checks.push(check("bad", t("authGuard"), browser.auth_guard.reason || t("blocked"), t("checkAuthGuardHint")));
   const recovery = browser.recovery || {};
-  if (recovery.state && !["healthy", "idle"].includes(recovery.state)) checks.push(check(recovery.state === "failed" ? "bad" : "warn", t("recoveryState"), recovery.last_result || recovery.reason || recovery.state));
+  if (recovery.state && !["healthy", "idle"].includes(recovery.state)) checks.push(check(recovery.state === "failed" ? "bad" : "warn", t("recoveryState"), humanizeMessage(recovery.last_result || recovery.reason || recovery.state)));
   if (state.config?.mqtt?.enabled) {
     checks.push(mqtt.connected ? check("ok", "MQTT", formatMQTTState(mqtt.state)) : check("bad", "MQTT", mqtt.last_error || formatMQTTState(mqtt.state), t("checkMQTTHint")));
   }

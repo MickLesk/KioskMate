@@ -76,6 +76,15 @@ const NAV = [
       const toasts = document.getElementById("toasts");
       export const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
+      function storedNumber(key, fallback) {
+        try {
+          const value = Number(localStorage.getItem(key));
+          return Number.isFinite(value) && value > 0 ? value : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
       export const state = {
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: storedTheme === "light" ? "light" : "dark",
@@ -98,8 +107,12 @@ const NAV = [
         diagnostics: null,
         repair: null,
         timeline: null,
+        timelineToday: null,
+        programRange: storedNumber("kioskmate.programRange", 60),
+        overrideMinutes: storedNumber("kioskmate.overrideMinutes", 60),
+        snapshotAuto: localStorage.getItem("kioskmate.snapshotAuto") !== "0",
         pageFilter: "",
-        kioskEditorMode: localStorage.getItem("kioskmate.kioskEditorMode") === "flow" ? "flow" : "storybook",
+        pageKind: "all",
         kioskSelectedPageIndex: null,
         pageWizard: null,
         actionLog: [],
@@ -504,7 +517,7 @@ const NAV = [
 	  }
 
 	  const VIEW_DATA = {
-		dashboard: ["operations", "events", "timeline"],
+		dashboard: ["operations", "events", "timeline", "today"],
 		program: ["timeline"],
 		device: ["zones", "jobs"],
 		"device-maintenance": ["jobs", "updateHistory"],
@@ -515,7 +528,8 @@ const NAV = [
 		jobs: ["/api/jobs?limit=25", (value) => ({ jobs: value })],
 		zones: ["/api/time/zones", (value) => ({ zones: value })],
 		updateHistory: ["/api/update/history", (value) => ({ updateHistory: value })],
-		timeline: ["/api/program/timeline?minutes=60", (value) => ({ timeline: value })],
+		timeline: [() => `/api/program/timeline?minutes=${Number(state.programRange || 60)}`, (value) => ({ timeline: value })],
+		today: ["/api/program/timeline?day=1", (value) => ({ timelineToday: value })],
 	  };
 	  const viewDataLoadedAt = new Map();
 
@@ -526,11 +540,11 @@ const NAV = [
 		const now = Date.now();
 		const keys = (VIEW_DATA[view] || []).filter((key) => {
 		  const loaded = viewDataLoadedAt.get(key);
-		  return loaded === undefined || (key !== "zones" && now - loaded > 60000);
+		  return loaded === undefined || (key !== "zones" && now - loaded > (key === "timeline" ? 30000 : 60000));
 		});
 		if (!keys.length) return;
 		keys.forEach((key) => viewDataLoadedAt.set(key, now));
-		const results = await Promise.allSettled(keys.map((key) => getJSON(VIEW_DATA_SOURCES[key][0])));
+		const results = await Promise.allSettled(keys.map((key) => getJSON(typeof VIEW_DATA_SOURCES[key][0] === "function" ? VIEW_DATA_SOURCES[key][0]() : VIEW_DATA_SOURCES[key][0])));
 		const patch = {};
 		results.forEach((result, index) => {
 		  if (result.status === "fulfilled") Object.assign(patch, VIEW_DATA_SOURCES[keys[index]][1](result.value));
@@ -541,7 +555,7 @@ const NAV = [
 		if (state.view === view && state.auth?.authenticated) renderApp({ background: true });
 	  }
 
-	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events, timeline }) {
+	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events, timeline, timelineToday }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -560,6 +574,7 @@ const NAV = [
 		if (operations) state.operations = operations;
 		if (events) state.events = events.events || [];
 		if (timeline) state.timeline = timeline;
+		if (timelineToday) state.timelineToday = timelineToday;
 		syncThemeFromConfig();
 	  }
 
@@ -829,6 +844,9 @@ const NAV = [
           } catch {
             return;
           }
+          // Keeps "up next" and the timeline current; a draft timeline of
+          // unsaved programme changes is not replaced.
+          if (["dashboard", "program"].includes(state.view) && !isDirty()) ensureViewData(state.view);
           scheduleLiveRender();
         });
         liveSource.addEventListener("events", (event) => {

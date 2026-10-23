@@ -2,14 +2,12 @@
 // every day, and today's programme at a glance. Troubleshooting tools stay
 // one click away in a disclosure.
 import { formatThemeStatus } from "./actions-core.js";
-import { esc, formatDate, formatDuration, formatMQTTState, formatValue, selectHtml, state, t } from "./app-core.js";
-import { button, cpuCoresUsed, cpuShare, cpuShareValue, normalizePages, powerBanner, stateBanner, statusTile } from "./renderers.js";
+import { esc, formatMQTTState, formatValue, selectHtml, state, t } from "./app-core.js";
+import { icon } from "./icons.js";
+import { button, cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage, normalizePages, powerBanner, stateBanner, statusTile } from "./renderers.js";
+import { baseRuns, clock, insertTone, renderTimeline, visibleInserts } from "./timeline.js";
 import { healthChecks } from "./view-device.js";
-
-function clock(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+import { describeInsert } from "./view-program.js";
 
 function reasonText(scheduler) {
   const reason = scheduler?.reason;
@@ -19,11 +17,6 @@ function reasonText(scheduler) {
   if (reason === "manual override") return t("temporaryOverride");
   if (reason === "no active time rule") return t("noActiveRule");
   return t("manualPageControl");
-}
-
-function insertTone(id) {
-  const index = (state.config?.kiosk?.inserts || []).findIndex((item) => item.id === id);
-  return `tone-${(index < 0 ? 0 : index) % 4}`;
 }
 
 export function renderDashboard() {
@@ -42,23 +35,25 @@ export function renderDashboard() {
   const schedulerReasonKey = String(browser.scheduler?.reason || "").toLowerCase();
   const hasTimeRules = (cfg.kiosk?.time_rules || []).length > 0;
   const schedulerNeedsAttention = schedulerReasonKey === "disabled" && hasTimeRules;
-  const problems = healthChecks().filter((item) => item.level !== "ok" && item.title !== t("checkPower"));
+  const recoveryBanner = recovery.state && !["healthy", "idle"].includes(recovery.state);
+  const problems = healthChecks().filter((item) => item.level !== "ok" && item.title !== t("checkPower") && !(recoveryBanner && item.title === t("recoveryState")));
   const displayPower = String(hw.display?.power || "").toUpperCase();
   return `
     <div class="page-stack overview">
       ${renderUpdateNotice()}
       ${powerBanner()}
-      ${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
+      ${recoveryBanner ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), humanizeMessage(recovery.last_result || recovery.reason || recovery.state), button("recoverNow", "browser-auto-recover", "primary")) : ""}
       ${schedulerNeedsAttention ? stateBanner("warn", t("scheduler"), t("schedulerDisabledWithRulesHint"), `<button data-view="program">${esc(t("openProgram"))}</button>`) : ""}
-      ${problems.length ? stateBanner(problems.some((item) => item.level === "bad") ? "bad" : "warn", t("healthProblems").replace("{count}", problems.length), problems.map((item) => `${item.title}: ${item.detail}`).join(" · "), `<button data-view="device">${esc(t("openDevice"))}</button>`) : ""}
+      ${problems.length ? stateBanner(problems.some((item) => item.level === "bad") ? "bad" : "warn", t("healthProblems").replace("{count}", problems.length), problems.map((item) => String(item.detail).toLowerCase().includes(String(item.title).toLowerCase()) ? item.detail : `${item.title}: ${item.detail}`).join(" · "), `<button data-view="device">${esc(t("openDevice"))}</button>`) : ""}
 
       <section class="overview-hero">
         <div class="card live-card">
           <div class="preview-shell">
-            ${state.snapshotURL ? `<img id="snapshot-image" class="snapshot-image" src="${esc(state.snapshotURL)}" alt="${esc(t("liveView"))}" />` : `<div id="snapshot-empty" class="empty">${esc(browser.running ? t("snapshotOnDemand") : t("liveViewStopped"))}</div>`}
+            ${state.snapshotURL ? `<img id="snapshot-image" class="snapshot-image" src="${esc(state.snapshotURL)}" alt="${esc(t("liveView"))}" />` : `<div id="snapshot-empty" class="empty">${icon("camera", 28)}<span>${esc(browser.running ? (state.snapshotAuto && browser.devtools ? t("snapshotLoading") : t("snapshotOnDemand")) : t("liveViewStopped"))}</span></div>`}
           </div>
           <div class="preview-meta">
-            <span>${esc(state.snapshotTime ? formatDate(state.snapshotTime) : t("liveView"))}</span>
+            <span>${esc(state.snapshotTime ? t("snapshotTakenAt").replace("{time}", clock(state.snapshotTime)) : t("liveView"))}</span>
+            <label class="inline-check" title="${esc(t("snapshotAutoHint"))}"><input type="checkbox" id="snapshot-auto" data-no-dirty ${state.snapshotAuto ? "checked" : ""}><span>${esc(t("snapshotAuto"))}</span></label>
             <div class="actions">${button("refreshSnapshot", "dashboard-snapshot-refresh")}${button("openPreview", "dashboard-preview-open")}</div>
           </div>
         </div>
@@ -67,8 +62,10 @@ export function renderDashboard() {
             <span class="eyebrow">${esc(t("nowOnScreen"))}</span>
             <span class="chip ${runningTone}"><span class="dot" aria-hidden="true"></span>${esc(runningLabel)}</span>
           </div>
-          <strong class="now-title">${esc(browser.page_name || activePage.name || (browserKnown ? "-" : t("loading")))}</strong>
-          <span class="now-reason">${esc(reasonText(browser.scheduler))}${browser.scheduler?.next_switch ? ` · ${esc(t("nextSwitch"))} ${esc(clock(browser.scheduler.next_switch))}` : ""}</span>
+          <strong class="now-title">${esc(!browserKnown ? t("loading") : browser.running ? (browser.page_name || activePage.name || "-") : t("displayStopped"))}</strong>
+          <span class="now-reason">${browser.running || !browserKnown
+            ? `${esc(reasonText(browser.scheduler))}${browser.scheduler?.next_switch ? ` · ${esc(t("nextSwitch"))} ${esc(clock(browser.scheduler.next_switch))}` : ""}`
+            : esc(t("plannedNow").replace("{page}", browser.page_name || activePage.name || "-"))}</span>
           <div class="now-actions">
             <div class="page-picker">
               ${selectHtml("overview-page", t("choosePage"), Number(browser.active || 0), enabledPages.map((page, index) => [index, page.name || page.url]))}
@@ -112,63 +109,56 @@ export function renderDashboard() {
           <dl class="mini-facts">
             <div><dt>${esc(t("haThemeSync"))}</dt><dd>${esc(formatThemeStatus(browser.theme_status))}</dd></div>
             <div><dt>${esc(t("browserGeneration"))}</dt><dd>${esc(String(browser.generation || 0))}</dd></div>
-            ${browser.last_error ? `<div><dt>${esc(t("lastError"))}</dt><dd>${esc(browser.last_error)}</dd></div>` : ""}
+            ${browser.last_error ? `<div><dt>${esc(t("lastError"))}</dt><dd>${esc(humanizeMessage(browser.last_error))}</dd></div>` : ""}
           </dl>
         </div>
       </details>
     </div>`;
 }
 
+// Up next: each insert once with its next run and rhythm, plus the next
+// change of the base programme (another time window, display off).
 function renderUpNext(browser) {
-  const upcoming = (state.timeline?.upcoming || []).slice(0, 4);
+  const kiosk = state.config?.kiosk || {};
+  const pages = normalizePages(kiosk.pages, kiosk.urls);
+  const timeline = state.timelineToday || state.timeline;
   const now = Date.now();
-  const rows = upcoming.map((segment) => {
-    const running = new Date(segment.start).getTime() <= now;
-    const seconds = Math.round((new Date(segment.end) - new Date(segment.start)) / 1000);
-    return `<li class="${insertTone(segment.insert_id)}"><time>${esc(running ? t("now") : clock(segment.start))}</time><i aria-hidden="true"></i><span>${esc(segment.name || t("insert"))}</span><small>${esc(formatDuration(seconds))}</small></li>`;
-  });
-  if (!rows.length && browser.scheduler?.next_switch) rows.push(`<li><time>${esc(clock(browser.scheduler.next_switch))}</time><i aria-hidden="true"></i><span>${esc(t("nextSwitch"))}</span><small></small></li>`);
+  const from = Math.floor(now / 60000) * 60000;
+  const runs = baseRuns(kiosk, from, 24 * 60);
+  const shown = visibleInserts(timeline?.upcoming || [], runs);
+  const rows = [];
+  const seen = new Set();
+  for (const segment of shown) {
+    if (seen.has(segment.insert_id)) continue;
+    seen.add(segment.insert_id);
+    const insert = (kiosk.inserts || []).find((item) => item.id === segment.insert_id) || {};
+    const start = new Date(segment.start).getTime();
+    rows.push({ at: start, html: `<li class="${insertTone(segment.insert_id)}"><time>${esc(start <= now ? t("now") : clock(start))}</time><i aria-hidden="true"></i><span>${esc(segment.name || insert.name || pages.find((page) => page.page_id === segment.page_id)?.name || t("insert"))}<small>${esc(insert.id ? describeInsert(insert).split(" · ")[0] : "")}</small></span></li>` });
+  }
+  const change = runs[1];
+  if (change && kiosk.scheduler?.enabled) {
+    const label = change.kind === "off" ? t("displayOffPeriod") : change.kind === "rotation" ? t("rotationMode") : change.name;
+    rows.push({ at: change.start, html: `<li class="base-change ${change.kind}"><time>${esc(clock(change.start))}</time><i aria-hidden="true"></i><span>${esc(label)}<small>${esc(t("baseChange"))}</small></span></li>` });
+  } else if (!rows.length && browser.scheduler?.next_switch) {
+    rows.push({ at: 0, html: `<li><time>${esc(clock(browser.scheduler.next_switch))}</time><i aria-hidden="true"></i><span>${esc(t("nextSwitch"))}</span></li>` });
+  }
+  rows.sort((a, b) => a.at - b.at);
   return `<div class="up-next">
     <div class="up-next-head"><strong>${esc(t("upNext"))}</strong><button class="link-button" data-view="program">${esc(t("openProgram"))}</button></div>
-    ${rows.length ? `<ul>${rows.join("")}</ul>` : `<p class="hint">${esc(t("upNextEmpty"))}</p>`}
+    ${rows.length ? `<ul>${rows.slice(0, 5).map((row) => row.html).join("")}</ul>` : `<p class="hint">${esc(t("upNextEmpty"))}</p>`}
   </div>`;
 }
 
-// Today's base programme as a 24-hour bar: time windows from the pages, the
-// current time, and a line per insert rhythm.
+// Today from midnight: base programme and inserts, with the current time.
 function renderToday() {
   const kiosk = state.config?.kiosk || {};
   const pages = normalizePages(kiosk.pages, kiosk.urls);
-  const today = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
-  const minutes = (value) => {
-    const [h, m] = String(value || "").split(":").map(Number);
-    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
-  };
-  const windows = [];
-  pages.forEach((page) => {
-    if (page.disabled || page.display_mode !== "schedule") return;
-    const days = page.schedule?.days || [];
-    if (days.length && !days.includes(today)) return;
-    const start = minutes(page.schedule?.start);
-    const end = minutes(page.schedule?.end);
-    if (start === null || end === null) return;
-    if (start < end) windows.push([start, end, page.name]);
-    else { windows.push([start, 1440, page.name]); windows.push([0, end, page.name]); }
-  });
-  const rotation = pages.filter((page) => !page.disabled && page.url && page.display_mode === "duration");
-  const now = new Date();
-  const nowPct = ((now.getHours() * 60 + now.getMinutes()) / 1440) * 100;
-  const inserts = (kiosk.inserts || []).filter((insert) => !insert.disabled);
-  const blocks = windows.length
-    ? windows.map(([start, end, name]) => `<span class="day-window" data-left="${(start / 1440 * 100).toFixed(2)}" data-width="${((end - start) / 1440 * 100).toFixed(2)}" title="${esc(name)}"><em>${esc(name)}</em></span>`).join("")
-    : (rotation.length ? `<span class="day-window rotation" data-left="0" data-width="100"><em>${esc(rotation.map((page) => page.name).join(" · "))}</em></span>` : "");
+  const pageName = (id) => pages.find((page) => page.page_id === id)?.name || id;
+  const timeline = state.timelineToday;
+  const today = timeline ? renderTimeline({ timeline, kiosk, pageName }) : null;
   return `<section class="card today-card" aria-labelledby="today-title">
-    <div class="head"><div><h3 id="today-title">${esc(t("today"))}</h3><span class="section-kicker">${esc(windows.length ? t("todayWindowsHint") : t("todayRotationHint"))}</span></div><button data-view="program">${esc(t("openProgram"))}</button></div>
-    <div class="body">
-      <div class="day-track">${blocks}<span class="day-now" data-left="${nowPct.toFixed(2)}" title="${esc(clock(now))}"></span></div>
-      <div class="day-ticks" aria-hidden="true">${[0, 6, 12, 18, 24].map((hour) => `<span data-left="${(hour / 24 * 100).toFixed(2)}">${String(hour).padStart(2, "0")}:00</span>`).join("")}</div>
-      ${inserts.length ? `<div class="today-inserts">${inserts.map((insert) => `<span class="legend-item ${insertTone(insert.id)}"><i></i>${esc(insert.name || t("insert"))}</span>`).join("")}</div>` : ""}
-    </div>
+    <div class="head"><div><h3 id="today-title">${esc(t("today"))}</h3><span class="section-kicker">${esc(today ? t("todayHint").replace("{percent}", Math.round((1 - today.share) * 100)) : t("loading"))}</span></div><button data-view="program">${esc(t("openProgram"))}</button></div>
+    <div class="body">${today ? today.html : ""}</div>
   </section>`;
 }
 

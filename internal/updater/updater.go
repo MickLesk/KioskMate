@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -771,11 +772,13 @@ func compareVersion(left, right string) int {
 	}
 	// 1.0.0-pre comes before 1.0.0, so a pre-release is offered the final
 	// release as an update.
-	switch left, right := isPrerelease(left), isPrerelease(right); {
-	case left && !right:
+	switch leftPre, rightPre := isPrerelease(left), isPrerelease(right); {
+	case leftPre && !rightPre:
 		return -1
-	case right && !left:
+	case rightPre && !leftPre:
 		return 1
+	case leftPre && rightPre:
+		return comparePrerelease(prereleaseOf(left), prereleaseOf(right))
 	}
 	return 0
 }
@@ -784,8 +787,60 @@ func isPrerelease(version string) bool {
 	return strings.ContainsAny(strings.TrimPrefix(version, "v"), "-~")
 }
 
+func prereleaseOf(version string) string {
+	version = strings.TrimPrefix(version, "v")
+	if i := strings.IndexAny(version, "-~"); i >= 0 {
+		return version[i+1:]
+	}
+	return ""
+}
+
+// comparePrerelease orders pre-release labels like SemVer: dot-separated
+// identifiers, numbers numerically, fewer identifiers first, so
+// pre < pre.2 < pre.10 < rc.1. A trailing number glued to a word
+// (pre2) counts as its own identifier.
+func comparePrerelease(left, right string) int {
+	a, b := prereleaseIdentifiers(left), prereleaseIdentifiers(right)
+	for i := 0; i < len(a) && i < len(b); i++ {
+		an, aErr := strconv.Atoi(a[i])
+		bn, bErr := strconv.Atoi(b[i])
+		switch {
+		case aErr == nil && bErr == nil:
+			if an != bn {
+				return an - bn
+			}
+		case aErr == nil:
+			return -1
+		case bErr == nil:
+			return 1
+		default:
+			if c := strings.Compare(a[i], b[i]); c != 0 {
+				return c
+			}
+		}
+	}
+	return len(a) - len(b)
+}
+
+func prereleaseIdentifiers(label string) []string {
+	var out []string
+	for _, field := range strings.FieldsFunc(label, func(r rune) bool { return r == '.' || r == '-' }) {
+		split := strings.IndexFunc(field, func(r rune) bool { return r >= '0' && r <= '9' })
+		if split > 0 && strings.Trim(field[split:], "0123456789") == "" {
+			out = append(out, strings.ToLower(field[:split]), field[split:])
+			continue
+		}
+		out = append(out, strings.ToLower(field))
+	}
+	return out
+}
+
 func versionParts(version string) []int {
-	fields := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	version = strings.TrimPrefix(version, "v")
+	if i := strings.IndexAny(version, "-~"); i >= 0 {
+		version = version[:i]
+	}
+	fields := strings.Split(version, ".")
 	out := make([]int, 0, len(fields))
 	for _, field := range fields {
 		var value int

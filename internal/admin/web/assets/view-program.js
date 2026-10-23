@@ -1,16 +1,16 @@
 // Programme: the base programme (page sequence with durations and time
 // windows) plus inserts that interleave other pages on a fixed rhythm, an
 // hour preview and the order that decides overlaps.
-import { synchronizeKioskWorkflow } from "./actions-kiosk.js";
-import { checked, cloneConfig, closeModal, esc, field, formatDate, formatDuration, isDirty, markDirty, openModal, postJSON, renderApp, renderAppIfIdle, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { showPageNow, synchronizeKioskWorkflow } from "./actions-kiosk.js";
+import { checked, cloneConfig, closeModal, esc, field, formatDuration, isDirty, markDirty, openModal, postJSON, renderApp, renderAppIfIdle, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { icon } from "./icons.js";
-import { button, collectPages, normalizePages, stateBanner, validationError } from "./renderers.js";
-import { renderKioskStorybook, selectedKioskPageIndex } from "./view-kiosk.js";
+import { button, collectPages, isLocalSource, normalizePages, sourceMark, stateBanner, validationError } from "./renderers.js";
+import { clock, insertTone as toneOf, renderTimeline } from "./timeline.js";
+import { displayModeLabel, localPageSummary } from "./view-kiosk.js";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const INTERVALS = [2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120];
 const DURATIONS = [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600];
-const INSERT_COLORS = 4;
 
 function inserts() {
   return state.config?.kiosk?.inserts || [];
@@ -25,10 +25,8 @@ function pageName(pageID) {
   return page ? page.name || page.url : t("pageMissing");
 }
 
-// Each insert keeps its colour in the cards, the hour view and the legend.
 function insertTone(id) {
-  const index = inserts().findIndex((item) => item.id === id);
-  return `tone-${(index < 0 ? 0 : index) % INSERT_COLORS}`;
+  return toneOf(id, inserts());
 }
 
 function dayList(days) {
@@ -60,29 +58,80 @@ function priorityLabel(priority) {
   return t(["priorityNormal", "priorityHigh", "priorityHighest"][Math.max(0, Math.min(2, Number(priority || 0)))]);
 }
 
-function clock(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const OVERRIDE_MINUTES = [15, 30, 60, 120, 240, 480];
+const RANGES = [[60, "range1h"], [360, "range6h"], [1440, "range24h"]];
+
+// Pages that make up the base programme: rotation pages and time windows.
+// Insert-only and trigger pages are listed separately.
+function isBasePage(page) {
+  return !page.disabled && page.url && ["duration", "schedule"].includes(page.display_mode || "duration");
+}
+
+function pageHost(page) {
+  if (isLocalSource(page.source_type)) return localPageSummary(page);
+  try {
+    const parsed = new URL(page.url);
+    return `${parsed.host}${parsed.pathname === "/" ? "" : parsed.pathname}`;
+  } catch {
+    return page.url || t("notConfigured");
+  }
+}
+
+function minutesOf(value) {
+  const [hour, minute] = String(value || "").split(":").map(Number);
+  return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : 0;
+}
+
+// A 24-hour strip with the page's time window, for schedule pages.
+function windowStrip(page) {
+  const start = minutesOf(page.schedule?.start);
+  const end = minutesOf(page.schedule?.end);
+  const parts = start <= end ? [[start, end]] : [[start, 1440], [0, end]];
+  return `<span class="window-strip" aria-hidden="true">${parts.map(([a, b]) => `<i data-left="${(a / 14.4).toFixed(2)}" data-width="${((b - a) / 14.4).toFixed(2)}"></i>`).join("")}</span>`;
+}
+
+function baseModeLabel(page) {
+  if (page.display_mode === "schedule") {
+    const days = page.schedule?.days?.length ? ` · ${dayList(page.schedule.days)}` : "";
+    return `${t("timeWindow")} ${page.schedule?.start || "--:--"}–${page.schedule?.end || "--:--"}${days}`;
+  }
+  return `${t("rotationShort")} · ${formatDuration(Number(page.duration_seconds || 3600))}`;
+}
+
+function nextRunOf(insertID) {
+  const value = state.timeline?.next?.[insertID];
+  if (!value) return "";
+  const at = new Date(value);
+  if (at.getTime() <= Date.now() + 1000) return t("now");
+  const tomorrow = at.toDateString() !== new Date().toDateString();
+  return tomorrow ? `${t("tomorrow")} ${clock(at)}` : clock(at);
 }
 
 export function renderProgram() {
   const kiosk = state.config?.kiosk || {};
   const browser = state.status?.browser || {};
   const list = pages();
-  const selected = selectedKioskPageIndex(list);
-  const current = list[selected] || {};
   const override = browser.override || {};
   const items = inserts();
+  const base = list.map((page, index) => ({ page, index })).filter(({ page }) => isBasePage(page));
+  const others = list.map((page, index) => ({ page, index })).filter(({ page }) => !isBasePage(page));
+  const activeID = browser.running ? (state.persistedConfig?.kiosk?.pages || []).filter((page) => !page.disabled && page.url)[Number(browser.active ?? -1)]?.page_id : "";
+  const range = Number(state.programRange || 60);
+  const draftTimeline = renderTimeline({ timeline: state.timeline, kiosk, pageName });
   return `
     <div class="page-stack program-view">
       ${!kiosk.scheduler?.enabled && (kiosk.time_rules || []).length ? stateBanner("warn", t("scheduler"), t("scheduleNeedsEnable"), "") : ""}
       <section class="program-hero">
-        <div>
+        <div class="program-hero-now">
           <span class="eyebrow">${esc(t("nowOnScreen"))}</span>
-          <strong>${esc(browser.page_name || "-")}</strong>
+          <strong>${esc(browser.running ? browser.page_name || "-" : t("displayStopped"))}</strong>
           <span>${esc(programReason(browser.scheduler))}${browser.scheduler?.next_switch ? ` · ${esc(t("nextSwitch"))} ${esc(clock(browser.scheduler.next_switch))}` : ""}</span>
+          ${override.active ? `<div class="override-note">${icon("clock", 14)}<span>${esc(t("overrideUntil").replace("{time}", clock(override.until)))}</span><button class="link-button" data-busy="override-clear" data-action="override-clear">${esc(t("backToProgramme"))}</button></div>` : ""}
         </div>
-        ${switchHtml("scheduler-enabled", t("runAutomatically"), !!kiosk.scheduler?.enabled)}
+        <div class="program-hero-controls">
+          ${switchHtml("scheduler-enabled", t("runAutomatically"), !!kiosk.scheduler?.enabled)}
+          <label class="inline-select"><span>${esc(t("showNowFor"))}</span><select id="override-minutes" data-no-dirty>${OVERRIDE_MINUTES.map((value) => `<option value="${value}" ${Number(state.overrideMinutes || 60) === value ? "selected" : ""}>${esc(formatDuration(value * 60))}</option>`).join("")}</select></label>
+        </div>
       </section>
 
       <section class="card program-base" aria-labelledby="program-base-title">
@@ -91,23 +140,40 @@ export function renderProgram() {
           <button class="primary" data-action="page-wizard-new">${icon("plus", 16)} ${esc(t("newPage"))}</button>
         </div>
         <div class="body">
-          ${renderKioskStorybook(list, selected)}
-          <div class="selected-page-bar">
-            <div>
-              <span>${esc(t("selectedPage"))}</span>
-              <strong>${esc(current.name || t("noPagesConfigured"))}</strong>
-            </div>
-            <div class="actions">
-              <button data-action="page-activate" ${list.length ? "" : "disabled"} title="${esc(t("activatePageHint"))}">${esc(t("activatePage"))}</button>
-              <button data-action="page-wizard-edit" ${list.length ? "" : "disabled"}>${esc(t("editPage"))}</button>
-            </div>
-          </div>
-          <div class="override-bar">
-            <div><strong>${esc(t("temporaryOverride"))}</strong><span>${esc(override.active ? `${list[override.page]?.name || override.page + 1} · ${formatDate(override.until)}` : t("temporaryOverrideHint"))}</span></div>
-            <label><span>${esc(t("durationMinutes"))}</span><input id="override-duration" type="number" min="1" max="1440" value="60"></label>
-            <button data-action="override-apply" ${list.length ? "" : "disabled"}>${esc(t("showSelectedTemporarily"))}</button>
-            ${override.active ? `<button data-action="override-clear">${esc(t("endOverride"))}</button>` : ""}
-          </div>
+          ${base.length ? `<ol class="base-list">${base.map(({ page, index }, position) => `
+            <li class="base-row ${page.display_mode === "schedule" ? "is-window" : "is-rotation"} ${page.page_id === activeID ? "on-screen" : ""}" draggable="true" data-sequence-index="${index}">
+              <span class="drag-handle" title="${esc(t("dragToReorder"))}" aria-hidden="true">${icon("grip", 16)}</span>
+              <span class="step-number">${position + 1}</span>
+              <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
+              <div class="base-copy">
+                <strong>${esc(page.name || page.url)}${page.page_id === activeID ? ` <span class="live-badge">${esc(t("onScreenNow"))}</span>` : ""}</strong>
+                <span>${esc(pageHost(page))}</span>
+              </div>
+              <div class="base-mode">
+                <span class="mode-chip ${page.display_mode === "schedule" ? "window" : "rotation"}">${esc(baseModeLabel(page))}</span>
+                ${page.display_mode === "schedule" ? windowStrip(page) : ""}
+              </div>
+              <div class="base-actions">
+                <button data-page-show-id="${esc(page.page_id)}" data-busy="page-show-${esc(page.page_id)}">${esc(t("showNow"))}</button>
+                <button data-page-edit="${index}">${esc(t("edit"))}</button>
+                <button class="icon-button" data-base-move="${index}" data-direction="-1" ${position === 0 ? "disabled" : ""} title="${esc(t("moveUp"))}" aria-label="${esc(t("moveUp"))}">${icon("up", 16)}</button>
+                <button class="icon-button" data-base-move="${index}" data-direction="1" ${position === base.length - 1 ? "disabled" : ""} title="${esc(t("moveDown"))}" aria-label="${esc(t("moveDown"))}">${icon("down", 16)}</button>
+                <button class="icon-button danger-ghost" data-page-remove="${index}" title="${esc(t("remove"))}" aria-label="${esc(t("remove"))}">${icon("close", 16)}</button>
+              </div>
+            </li>`).join("")}</ol>` : `<div class="empty"><strong>${esc(t("baseEmpty"))}</strong><span>${esc(t("baseEmptyHint"))}</span></div>`}
+          <p class="base-explainer">${esc(t("baseExplainer"))}</p>
+          ${others.length ? `<div class="other-pages">
+            <h4>${esc(t("otherPages"))}</h4>
+            <ul>${others.map(({ page, index }) => `<li>
+              <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
+              <div><strong>${esc(page.name || page.url)}</strong><span>${esc(page.disabled ? t("disabled") : displayModeLabel(page.display_mode))}${usedByInserts(page.page_id)}</span></div>
+              <div class="actions">
+                ${page.disabled ? "" : `<button data-page-show-id="${esc(page.page_id)}" data-busy="page-show-${esc(page.page_id)}">${esc(t("showNow"))}</button>`}
+                <button data-page-tobase="${index}">${esc(t("addToBase"))}</button>
+                <button data-page-edit="${index}">${esc(t("edit"))}</button>
+              </div>
+            </li>`).join("")}</ul>
+          </div>` : ""}
         </div>
       </section>
 
@@ -117,7 +183,9 @@ export function renderProgram() {
           <button class="primary" data-action="insert-new" ${list.length ? "" : "disabled"}>${icon("plus", 16)} ${esc(t("newInsert"))}</button>
         </div>
         <div class="body">
-          ${items.length ? `<div class="insert-list">${items.map((insert, index) => `
+          ${items.length ? `<div class="insert-list">${items.map((insert, index) => {
+            const next = insert.disabled ? "" : nextRunOf(insert.id);
+            return `
             <article class="insert-card ${insertTone(insert.id)} ${insert.disabled ? "disabled" : ""}">
               <span class="insert-swatch" aria-hidden="true"></span>
               <div class="insert-copy">
@@ -125,26 +193,45 @@ export function renderProgram() {
                 <span>${esc(describeInsert(insert))}</span>
                 <small>${esc(t("insertShows").replace("{page}", pageName(insert.page_id)))}${Number(insert.priority || 0) > 0 ? ` · <span class="priority-badge">${esc(priorityLabel(insert.priority))}</span>` : ""}</small>
               </div>
+              ${next ? `<span class="insert-next"><small>${esc(t("nextRun"))}</small><strong>${esc(next)}</strong></span>` : ""}
               <div class="actions">
                 <label class="inline-check"><input type="checkbox" data-insert-toggle="${index}" ${insert.disabled ? "" : "checked"}><span>${esc(t("active"))}</span></label>
                 <button data-insert-edit="${index}">${esc(t("edit"))}</button>
+                <button data-insert-duplicate="${index}" title="${esc(t("duplicate"))}">${esc(t("duplicate"))}</button>
                 <button class="danger-ghost" data-insert-remove="${index}" title="${esc(t("remove"))}" aria-label="${esc(t("remove"))}">${icon("close", 16)}</button>
               </div>
-            </article>`).join("")}</div>` : `<div class="empty insert-empty"><strong>${esc(t("noInserts"))}</strong><span>${esc(t("noInsertsHint"))}</span></div>`}
+            </article>`;
+          }).join("")}</div>` : `<div class="insert-templates">
+            <p class="hint">${esc(t("noInsertsHint"))}</p>
+            <div class="template-grid">
+              ${[["interval", "templateEvery5", "templateEvery5Hint"], ["hourly", "templateHourly", "templateHourlyHint"], ["times", "templateTimes", "templateTimesHint"]].map(([repeat, title, hint]) => `<button class="template-tile" data-insert-template="${repeat}" ${list.length ? "" : "disabled"}>${icon(repeat === "times" ? "clock" : "repeat", 20)}<strong>${esc(t(title))}</strong><small>${esc(t(hint))}</small></button>`).join("")}
+            </div>
+          </div>`}
         </div>
       </section>
 
-      ${renderHourView()}
-
-      <section class="card priority-card" aria-labelledby="priority-title">
-        <div class="head"><div><h3 id="priority-title">${esc(t("priorityTitle"))}</h3><span class="section-kicker">${esc(t("priorityHint"))}</span></div></div>
-        <ol class="priority-ladder">
-          <li><strong>${esc(t("priorityStep1"))}</strong><span>${esc(t("priorityStep1Hint"))}</span></li>
-          <li><strong>${esc(t("priorityStep2"))}</strong><span>${esc(t("priorityStep2Hint"))}</span></li>
-          <li><strong>${esc(t("priorityStep3"))}</strong><span>${esc(t("priorityStep3Hint"))}</span></li>
-          <li><strong>${esc(t("priorityStep4"))}</strong><span>${esc(t("priorityStep4Hint"))}</span></li>
-        </ol>
+      <section class="card timeline-card" aria-labelledby="timeline-title">
+        <div class="head">
+          <div><h3 id="timeline-title">${esc(t("programmeFlow"))}</h3><span class="section-kicker">${esc(state.timeline ? t("flowHint").replace("{percent}", Math.round((1 - draftTimeline.share) * 100)) : t("loading"))}</span></div>
+          <div class="segmented compact" role="radiogroup" aria-label="${esc(t("programmeFlow"))}">
+            ${RANGES.map(([value, label]) => `<button role="radio" aria-checked="${range === value}" class="${range === value ? "active" : ""}" data-program-range="${value}">${esc(t(label))}</button>`).join("")}
+          </div>
+        </div>
+        <div class="body">${draftTimeline.html}</div>
       </section>
+
+      <details class="card disclosure priority-card">
+        <summary>${esc(t("priorityTitle"))}</summary>
+        <div class="disclosure-body">
+          <p class="hint">${esc(t("priorityHint"))}</p>
+          <ol class="priority-ladder">
+            <li><strong>${esc(t("priorityStep1"))}</strong><span>${esc(t("priorityStep1Hint"))}</span></li>
+            <li><strong>${esc(t("priorityStep2"))}</strong><span>${esc(t("priorityStep2Hint"))}</span></li>
+            <li><strong>${esc(t("priorityStep3"))}</strong><span>${esc(t("priorityStep3Hint"))}</span></li>
+            <li><strong>${esc(t("priorityStep4"))}</strong><span>${esc(t("priorityStep4Hint"))}</span></li>
+          </ol>
+        </div>
+      </details>
 
       <details class="card disclosure advanced-settings">
         <summary>${esc(t("sequenceAdvanced"))}</summary>
@@ -156,7 +243,7 @@ export function renderProgram() {
             ${button("renderCheck", "render-check")}
             ${button("checkPage", "page-check")}
           </div>
-          <div id="page-check-output" class="action-feedback">${esc(current.url || "-")}</div>
+          <div id="page-check-output" class="action-feedback"></div>
         </div>
       </details>
       <div class="save-bar">
@@ -164,6 +251,12 @@ export function renderProgram() {
         <div class="actions">${button("save", "kiosk-save")}${button("saveStartKiosk", "kiosk-save-restart", "primary")}</div>
       </div>
     </div>`;
+}
+
+function usedByInserts(pageID) {
+  const count = inserts().filter((insert) => insert.page_id === pageID && !insert.disabled).length;
+  if (!count) return "";
+  return ` · ${count === 1 ? t("usedByOneInsert") : t("usedByInserts").replace("{count}", count)}`;
 }
 
 function programReason(scheduler) {
@@ -177,46 +270,11 @@ function programReason(scheduler) {
   return scheduler.reason;
 }
 
-function renderHourView() {
-  const timeline = state.timeline;
-  const segments = timeline?.segments || [];
-  const minutes = Number(timeline?.minutes || 60);
-  const from = new Date(timeline?.from || Date.now()).getTime();
-  const span = minutes * 60000;
-  const blocks = segments.filter((segment) => segment.insert_id).map((segment) => {
-    const left = Math.max(0, (new Date(segment.start).getTime() - from) / span * 100);
-    const width = Math.max(0.6, (new Date(segment.end).getTime() - new Date(segment.start).getTime()) / span * 100);
-    const label = `${clock(segment.start)}–${clock(segment.end)} ${segment.name || pageName(segment.page_id)}`;
-    return `<span class="hour-block ${insertTone(segment.insert_id)}" data-left="${left.toFixed(2)}" data-width="${width.toFixed(2)}" title="${esc(label)}"></span>`;
-  }).join("");
-  const ticks = [0, 10, 20, 30, 40, 50, 60].filter((m) => m <= minutes).map((m) => `<span data-left="${(m / minutes * 100).toFixed(2)}">${esc(clock(from + m * 60000))}</span>`).join("");
-  const used = [...new Set(segments.filter((segment) => segment.insert_id).map((segment) => segment.insert_id))];
-  const share = segments.filter((segment) => segment.insert_id).reduce((sum, segment) => sum + (new Date(segment.end) - new Date(segment.start)), 0) / span;
-  return `<section class="card hour-view" aria-labelledby="hour-title">
-    <div class="head">
-      <div><h3 id="hour-title">${esc(t("nextHour"))}</h3><span class="section-kicker">${esc(timeline ? t("nextHourHint").replace("{percent}", Math.round((1 - share) * 100)) : t("loading"))}</span></div>
-    </div>
-    <div class="body">
-      <div class="hour-track" role="img" aria-label="${esc(t("nextHour"))}">
-        ${blocks}
-      </div>
-      <div class="hour-ticks" aria-hidden="true">${ticks}</div>
-      <div class="hour-legend">
-        <span class="legend-item"><i class="hour-legend-base"></i>${esc(t("baseProgramme"))}</span>
-        ${used.map((id) => {
-          const insert = inserts().find((item) => item.id === id) || {};
-          return `<span class="legend-item ${insertTone(id)}"><i></i>${esc(insert.name || pageName(insert.page_id))}</span>`;
-        }).join("")}
-      </div>
-    </div>
-  </section>`;
-}
-
-// Recomputes the hour view from the unsaved inserts and pages.
+// Recomputes the timeline from the unsaved inserts and pages.
 export async function refreshDraftTimeline() {
   try {
     const kiosk = state.config?.kiosk || {};
-    state.timeline = await postJSON("/api/program/timeline", { pages: kiosk.pages || [], inserts: kiosk.inserts || [], minutes: 60 });
+    state.timeline = await postJSON("/api/program/timeline", { pages: kiosk.pages || [], inserts: kiosk.inserts || [], minutes: Number(state.programRange || 60) });
     renderAppIfIdle();
   } catch (error) {
     toast(t("failed"), error.message, "warn");
@@ -242,8 +300,59 @@ function updateInserts(change) {
   refreshDraftTimeline();
 }
 
+function updatePages(change) {
+  const cfg = cloneConfig();
+  cfg.kiosk = cfg.kiosk || {};
+  cfg.kiosk.pages = collectPages();
+  change(cfg.kiosk);
+  synchronizeKioskWorkflow(cfg.kiosk);
+  state.config = cfg;
+  markDirty();
+  renderApp();
+  refreshDraftTimeline();
+}
+
 export function bindProgram() {
   document.querySelector('[data-action="insert-new"]')?.addEventListener("click", () => openInsertDialog(null));
+  document.querySelectorAll("[data-insert-template]").forEach((button) => button.addEventListener("click", () => openInsertDialog(null, button.dataset.insertTemplate)));
+  document.querySelectorAll("[data-insert-duplicate]").forEach((button) => button.addEventListener("click", () => {
+    const source = inserts()[Number(button.dataset.insertDuplicate)];
+    if (!source) return;
+    updateInserts((kiosk) => kiosk.inserts.splice(Number(button.dataset.insertDuplicate) + 1, 0, { ...source, id: newInsertID(), name: source.name ? `${source.name} ${t("copy")}` : "", disabled: true }));
+  }));
+  document.querySelectorAll("[data-page-show-id]").forEach((button) => button.addEventListener("click", () => showPageNow(button.dataset.pageShowId, Number(state.overrideMinutes || 60), `page-show-${button.dataset.pageShowId}`)));
+  document.getElementById("override-minutes")?.addEventListener("change", (event) => {
+    state.overrideMinutes = Number(event.target.value) || 60;
+    try { localStorage.setItem("kioskmate.overrideMinutes", String(state.overrideMinutes)); } catch {}
+  });
+  document.querySelectorAll("[data-program-range]").forEach((button) => button.addEventListener("click", () => {
+    state.programRange = Number(button.dataset.programRange) || 60;
+    try { localStorage.setItem("kioskmate.programRange", String(state.programRange)); } catch {}
+    refreshDraftTimeline();
+  }));
+  // Arrows move a page past its neighbour in the base programme; pages that
+  // are not part of it keep their place.
+  document.querySelectorAll("[data-base-move]").forEach((button) => button.addEventListener("click", () => {
+    const from = Number(button.dataset.baseMove);
+    const direction = Number(button.dataset.direction);
+    updatePages((kiosk) => {
+      const base = kiosk.pages.map((page, index) => (isBasePage(page) ? index : -1)).filter((index) => index >= 0);
+      const target = base[base.indexOf(from) + direction];
+      if (target === undefined) return;
+      const [page] = kiosk.pages.splice(from, 1);
+      kiosk.pages.splice(target, 0, page);
+    });
+  }));
+  document.querySelectorAll("[data-page-tobase]").forEach((button) => button.addEventListener("click", () => {
+    const index = Number(button.dataset.pageTobase);
+    updatePages((kiosk) => {
+      const page = kiosk.pages[index];
+      if (!page) return;
+      page.disabled = false;
+      page.display_mode = "duration";
+      page.duration_seconds = Number(page.duration_seconds || 300);
+    });
+  }));
   document.querySelectorAll("[data-insert-edit]").forEach((button) => button.addEventListener("click", () => openInsertDialog(Number(button.dataset.insertEdit))));
   document.querySelectorAll("[data-insert-remove]").forEach((button) => button.addEventListener("click", () => {
     if (!confirm(t("confirmRemoveInsert"))) return;
@@ -262,11 +371,17 @@ function optionList(values, current, format) {
   return list.sort((a, b) => a - b).map((value) => [value, format(value)]);
 }
 
-function openInsertDialog(index) {
+const TEMPLATES = {
+  interval: { repeat: "interval", every_minutes: 5, duration_seconds: 30 },
+  hourly: { repeat: "hourly", minute: 0, duration_seconds: 60 },
+  times: { repeat: "times", times: ["08:00", "12:00", "18:00"], duration_seconds: 120 },
+};
+
+function openInsertDialog(index, template = "interval") {
   const list = pages().filter((page) => !page.disabled && page.url);
   const editing = index !== null ? inserts()[index] : null;
   const fallbackPage = list.find((page) => page.display_mode === "insert") || list[1] || list[0] || {};
-  const insert = editing ? { ...editing } : { id: newInsertID(), page_id: fallbackPage.page_id, repeat: "interval", every_minutes: 5, minute: 0, times: [], duration_seconds: 30, start: "", end: "", days: [], priority: 0 };
+  const insert = editing ? { ...editing } : { id: newInsertID(), page_id: fallbackPage.page_id, repeat: "interval", every_minutes: 5, minute: 0, times: [], duration_seconds: 30, start: "", end: "", days: [], priority: 0, ...(TEMPLATES[template] || {}) };
   const page = list.find((item) => item.page_id === insert.page_id) || fallbackPage;
   const onlyInsert = editing ? page.display_mode === "insert" : suggestOnlyInsert(list, page);
   const repeat = insert.repeat || "interval";

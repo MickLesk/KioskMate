@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/MickLesk/KioskMate/internal/config"
 )
@@ -47,5 +48,28 @@ func TestProgramTimelinePreviewsDraftInserts(t *testing.T) {
 	}
 	if len(result.Upcoming) == 0 || result.Upcoming[0].Name != "Wetter" {
 		t.Fatalf("upcoming = %#v", result.Upcoming)
+	}
+}
+
+func TestProgramTimelineWholeDayStartsAtMidnight(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(cfg, &fakeActionBrowser{}, nil, nil, nil, nil, "test", slog.Default())
+	rec := httptest.NewRecorder()
+	server.programTimeline(rec, httptest.NewRequest(http.MethodGet, "/api/program/timeline?day=1&minutes=60", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		From    time.Time `json:"from"`
+		Minutes int       `json:"minutes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Minutes != 24*60 || result.From.Hour() != 0 || result.From.Minute() != 0 {
+		t.Fatalf("from = %s, minutes = %d", result.From, result.Minutes)
 	}
 }
