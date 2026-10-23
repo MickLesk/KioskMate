@@ -39,10 +39,59 @@ func refreshFastSystem(system map[string]any) map[string]any {
 	next["uptime_minutes"] = uptimeMinutes()
 	next["memory_usage_percent"] = memoryUsagePercent()
 	next["processor_usage_percent"] = processorUsagePercent()
+	next["load_average"] = loadAverage()
 	next["processor_temperature_c"] = processorTemperature()
 	next["battery_level"] = batteryLevel()
 	next["illuminance_level"] = illuminanceLevel()
+	next["touch_devices"] = touchDeviceNames()
+	throttled := ""
+	if power, ok := system["power"].(map[string]any); ok {
+		if flags, ok := power["throttled"].(string); ok {
+			throttled = "throttled=" + flags
+		}
+	}
+	next["power"] = powerStatus(undervoltageAlarm(), throttled)
 	return next
+}
+
+func touchDeviceNames() []string {
+	file, err := os.Open("/proc/bus/input/devices")
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	return touchDevices(file, kernelWordBits())
+}
+
+// kernelWordBits is the kernel's long size. It can differ from this binary's
+// (armhf user space on a 64-bit Raspberry Pi kernel).
+func kernelWordBits() uint {
+	arch := readFirst([]string{"/proc/sys/kernel/arch"}, runtime.GOARCH)
+	if strings.Contains(arch, "64") {
+		return 64
+	}
+	return 32
+}
+
+// undervoltageAlarm reads the Raspberry Pi firmware voltage sensor
+// (raspberrypi-hwmon, named "rpi_volt"); "" when the board has none.
+func undervoltageAlarm() string {
+	dirs, _ := filepath.Glob("/sys/class/hwmon/hwmon*")
+	for _, dir := range dirs {
+		if readFirst([]string{filepath.Join(dir, "name")}, "") == "rpi_volt" {
+			return readFirst([]string{filepath.Join(dir, "in0_lcrit_alarm")}, "")
+		}
+	}
+	return ""
+}
+
+// throttledFlags asks the firmware for the since-boot undervoltage and
+// throttling bits; only in the slow status because it spawns vcgencmd.
+func throttledFlags(ctx context.Context) string {
+	if !commandExists("vcgencmd") {
+		return ""
+	}
+	return runText(ctx, "vcgencmd", "get_throttled")
 }
 
 func collectStatus(ctx context.Context) Status {
@@ -71,11 +120,15 @@ func collectStatus(ctx context.Context) Status {
 			"memory_size_gib":         memorySizeGiB(),
 			"memory_usage_percent":    memoryUsagePercent(),
 			"processor_usage_percent": processorUsagePercent(),
+			"processor_count":         runtime.NumCPU(),
+			"load_average":            loadAverage(),
 			"processor_temperature_c": processorTemperature(),
 			"disk_usage":              diskUsage(ctx),
 			"battery_level":           batteryLevel(),
 			"illuminance_level":       illuminanceLevel(),
 			"package_upgrades":        packageUpgradeCount(ctx),
+			"touch_devices":           touchDeviceNames(),
+			"power":                   powerStatus(undervoltageAlarm(), throttledFlags(ctx)),
 		},
 		Runtime: runtimeStatus(),
 		Display: map[string]any{
@@ -490,14 +543,27 @@ func memoryUsagePercent() any {
 	return float64(total-available) / float64(total) * 100
 }
 
+// processorUsagePercent is the one-minute load average per core. It exceeds
+// 100 % when processes wait, including on swap I/O, so the Admin UI shows the
+// load average next to the core count instead.
 func processorUsagePercent() any {
-	load := readFirst([]string{"/proc/loadavg"}, "")
-	fields := strings.Fields(load)
+	load, ok := loadAverage().(float64)
+	if !ok {
+		return nil
+	}
+	return load / float64(runtime.NumCPU()) * 100
+}
+
+func loadAverage() any {
+	fields := strings.Fields(readFirst([]string{"/proc/loadavg"}, ""))
 	if len(fields) == 0 {
 		return nil
 	}
-	value, _ := strconv.ParseFloat(fields[0], 64)
-	return value / float64(runtime.NumCPU()) * 100
+	value, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return nil
+	}
+	return value
 }
 
 func processorTemperature() any {

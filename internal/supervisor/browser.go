@@ -1490,8 +1490,9 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,InfiniteSessionRestore",
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
-		// Native Wayland when a compositor is present instead of XWayland.
-		ozonePlatformFlag(os.Getenv("WAYLAND_DISPLAY")),
+	}
+	if flag := ozonePlatformFlag(cfg.Kiosk.DisplayBackend, cfg.Kiosk.ExtraArgs, os.Getenv("WAYLAND_DISPLAY")); flag != "" {
+		args = append(args, flag)
 	}
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
 		args = append(args, "--disable-smooth-scrolling")
@@ -1700,10 +1701,24 @@ func chromiumLiteArgs() []string {
 	return raspberryLowPowerArgs()
 }
 
-// ozonePlatformFlag selects native Wayland explicitly inside a Wayland
-// session (labwc, Cage, Wayfire) so Chromium never falls back to XWayland and
-// an extra copy of every frame; elsewhere Chromium picks the platform itself.
-func ozonePlatformFlag(waylandDisplay string) string {
+// ozonePlatformFlag returns the Ozone switch for the configured display
+// backend. "auto" (default) selects native Wayland inside a Wayland session
+// (labwc, Cage, Wayfire): DISPLAY=:0 from the service unit does not mean an
+// X server exists, and Raspberry Pi OS Trixie runs labwc without Xwayland.
+// "x11" forces XWayland for setups that need it. A switch the user set in
+// extra_args always wins.
+func ozonePlatformFlag(backend string, extra []string, waylandDisplay string) string {
+	for _, arg := range extra {
+		if strings.HasPrefix(strings.TrimSpace(arg), "--ozone-platform") {
+			return ""
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "wayland":
+		return "--ozone-platform=wayland"
+	case "x11":
+		return "--ozone-platform=x11"
+	}
 	if strings.TrimSpace(waylandDisplay) != "" {
 		return "--ozone-platform=wayland"
 	}

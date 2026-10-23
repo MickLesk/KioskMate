@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Hardware
+- Reported undervoltage on Raspberry Pi boards (live from the firmware voltage sensor, since boot from `vcgencmd get_throttled`) as a banner on the dashboard and on Device and Time, and in the Doctor. A weak supply throttles the CPU and can drop USB touch controllers.
+- Reported registered touch input devices under Display and Input and in the Doctor, so a touchscreen the kernel never saw is visible without `libinput debug-events`.
+
+### Admin UI
+- Showed browser CPU as a share of the whole device plus the cores in use (for example "43 %, 1.7 / 4 cores" instead of "171 %"), and the system tile as load average next to the core count.
+- Translated the hardware tables and replaced raw values such as the disk usage JSON with readable text.
+
+### Kiosk
+- Added `kiosk.display_backend` (`auto`, `wayland`, `x11`; Settings -> Performance) to choose Chromium's display backend. `auto` keeps native Wayland in a Wayland session; `x11` forces XWayland where a setup needs it. An `--ozone-platform` switch in the extra browser arguments always wins.
+
 ## v0.9.0
 
 ### Lower resource use on small hardware

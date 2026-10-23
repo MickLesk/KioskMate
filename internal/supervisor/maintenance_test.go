@@ -100,11 +100,21 @@ func TestMaintenanceReloadAfterRotationCycles(t *testing.T) {
 }
 
 func TestOzonePlatformFlag(t *testing.T) {
-	if got := ozonePlatformFlag("wayland-0"); got != "--ozone-platform=wayland" {
-		t.Fatalf("wayland session flag = %q", got)
+	cases := []struct {
+		name, backend, wayland, want string
+		extra                        []string
+	}{
+		{name: "wayland session", wayland: "wayland-0", want: "--ozone-platform=wayland"},
+		{name: "no wayland", want: "--ozone-platform-hint=auto"},
+		{name: "auto", backend: "auto", wayland: "wayland-0", want: "--ozone-platform=wayland"},
+		{name: "forced x11", backend: "x11", wayland: "wayland-0", want: "--ozone-platform=x11"},
+		{name: "forced wayland", backend: "wayland", want: "--ozone-platform=wayland"},
+		{name: "extra args win", backend: "wayland", wayland: "wayland-0", extra: []string{"--ozone-platform=x11"}, want: ""},
 	}
-	if got := ozonePlatformFlag(""); got != "--ozone-platform-hint=auto" {
-		t.Fatalf("default flag = %q", got)
+	for _, tc := range cases {
+		if got := ozonePlatformFlag(tc.backend, tc.extra, tc.wayland); got != tc.want {
+			t.Errorf("%s: flag = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

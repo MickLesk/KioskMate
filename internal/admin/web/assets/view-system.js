@@ -1,6 +1,6 @@
 import { filteredLogs } from "./actions-system.js";
 import { esc, field, formatClock, formatValue, selectHtml, state, t } from "./app-core.js";
-import { button, kvTable, objectEntries, renderJobsHTML, renderRepair, stateBanner, statusTile, unsupportedControl } from "./renderers.js";
+import { button, hardwareEntries, kvTable, powerBanner, renderJobsHTML, renderRepair, stateBanner, statusTile, unsupportedControl } from "./renderers.js";
 
 export function renderHardware() {
         const hw = state.hardware || {};
@@ -9,10 +9,14 @@ export function renderHardware() {
         const timeInfo = state.time || {};
         const zone = timeInfo.timezone || timeCfg.timezone || "Europe/Berlin";
         const zoneOptions = (state.timezones.length ? state.timezones : ["UTC", "Europe/Berlin"]).map((item) => [item, item]);
+        const cores = Number(hw.system?.processor_count || 0);
+        const load = hw.system?.load_average;
+        const touch = hw.system?.touch_devices;
         return `
           <div class="page-stack">
+            ${powerBanner()}
             <section class="status-strip">
-              ${statusTile("CPU", formatValue(hw.system?.processor_usage_percent, "%"), Number(hw.system?.processor_usage_percent || 0) > 250 ? "warn" : "", `${t("temperature")} ${formatValue(hw.system?.processor_temperature_c, " C")}`)}
+              ${statusTile(t("systemLoad"), formatValue(load), cores && Number(load || 0) > cores ? "warn" : "", `${cores ? `${cores} ${t("cpuCoresUnit")} · ` : ""}${t("temperature")} ${formatValue(hw.system?.processor_temperature_c, " °C")}`)}
               ${statusTile("RAM", formatValue(hw.system?.memory_usage_percent, "%"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
               ${statusTile(t("storage"), formatValue(hw.system?.disk_usage?.percent, "%"), "", formatValue(hw.system?.disk_usage?.available_gb, " GB " + t("available")))}
               ${statusTile(t("display"), formatValue(hw.display?.power), String(hw.display?.power || "").toUpperCase() === "ON" ? "ok" : "", `${t("brightness")} ${formatValue(hw.display?.brightness, "%")}`)}
@@ -21,7 +25,7 @@ export function renderHardware() {
             <div class="settings-columns">
               <div class="card">
                 <div class="head"><div><h3>${esc(t("displayAndInput"))}</h3><span class="section-kicker">${esc(hw.display?.command || t("unsupported"))}</span></div><button data-busy="hardware-rediscover" data-action="hardware-rediscover" title="${esc(t("rediscoverHardware"))}">${esc(t("rediscoverHardware"))}</button></div>
-                <div class="body form-grid">${support.display_status ? selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]]) : unsupportedControl(t("display"))}${support.display_brightness ? field("display-brightness", t("brightness"), "number", "", hw.display?.brightness ?? 80) : unsupportedControl(t("brightness"))}${support.display_status || support.display_brightness ? `<button data-action="display-apply" class="primary span-2">${esc(t("applyDisplay"))}</button>` : ""}</div>
+                <div class="body form-grid">${support.display_status ? selectHtml("display-power", t("display"), String(hw.display?.power || "ON").toUpperCase(), [["ON", t("on")], ["OFF", t("off")]]) : unsupportedControl(t("display"))}${support.display_brightness ? field("display-brightness", t("brightness"), "number", "", hw.display?.brightness ?? 80) : unsupportedControl(t("brightness"))}${support.display_status || support.display_brightness ? `<button data-action="display-apply" class="primary span-2">${esc(t("applyDisplay"))}</button>` : ""}${Array.isArray(touch) ? `<p class="hint span-2">${esc(t("touchInput"))}: ${esc(touch.length ? touch.join(", ") : t("noTouchDeviceHint"))}</p>` : ""}</div>
               </div>
               <div class="card">
                 <div class="head"><div><h3>${esc(t("audio"))}</h3><span class="section-kicker">${esc(t("volumeAndMicrophone"))}</span></div></div>
@@ -37,9 +41,9 @@ export function renderHardware() {
                   <button data-action="time-save" class="primary span-2">${esc(t("applyTimeSettings"))}</button>
                 </div>
               </div>
-              <div class="card"><div class="head"><h3>${esc(t("device"))}</h3></div><div class="body">${kvTable(objectEntries(hw.device))}</div></div>
+              <div class="card"><div class="head"><h3>${esc(t("device"))}</h3></div><div class="body">${kvTable(hardwareEntries(hw.device))}</div></div>
             </div>
-            <details class="card disclosure"><summary>${esc(t("technicalDetails"))}</summary><div class="disclosure-body settings-columns"><div>${kvTable(objectEntries(hw.system))}</div><div>${kvTable(objectEntries(hw.support))}</div></div></details>
+            <details class="card disclosure"><summary>${esc(t("technicalDetails"))}</summary><div class="disclosure-body settings-columns"><div>${kvTable(hardwareEntries(hw.system))}</div><div>${kvTable(hardwareEntries(hw.support))}</div></div></details>
           </div>`;
       }
 

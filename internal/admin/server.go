@@ -1891,6 +1891,9 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	add := func(id string, level string, message string, detail any) {
 		checks = append(checks, map[string]any{"id": id, "level": level, "message": message, "detail": detail})
 	}
+	if s.hardware != nil {
+		hardwareDoctorChecks(s.hardware.Status(ctx), add)
+	}
 	command := status.Command
 	if command == "" {
 		add("browser_command", "error", "Browser command is empty.", "")
@@ -2557,6 +2560,28 @@ func hasDoctorLevel(checks []map[string]any, level string) bool {
 	return false
 }
 
+// hardwareDoctorChecks reports the power supply and touch input, which fail
+// below the browser and are otherwise only visible in dmesg.
+func hardwareDoctorChecks(status hardware.Status, add func(id, level, message string, detail any)) {
+	if power, ok := status.System["power"].(map[string]any); ok && power != nil {
+		switch {
+		case power["undervoltage_now"] == true:
+			add("power_supply", "error", "Undervoltage right now: the power supply is too weak. The board throttles and USB devices such as touch controllers can drop out.", power)
+		case power["undervoltage_since_boot"] == true:
+			add("power_supply", "warn", "Undervoltage occurred since boot. Use a 5.1 V / 3 A supply with a short cable; a weak supply throttles the CPU and can disconnect USB touch controllers.", power)
+		default:
+			add("power_supply", "ok", "No undervoltage reported.", power)
+		}
+	}
+	if devices, ok := status.System["touch_devices"].([]string); ok {
+		if len(devices) == 0 {
+			add("touch_input", "warn", "No touch input device is registered with the kernel. If the screen should react to touch, check its USB cable and the power supply (see sudo libinput debug-events).", "")
+		} else {
+			add("touch_input", "ok", "Touch input device found.", devices)
+		}
+	}
+}
+
 func doctorAdvice(checks []map[string]any) []string {
 	var advice []string
 	for _, check := range checks {
@@ -2578,6 +2603,8 @@ func doctorAdvice(checks []map[string]any) []string {
 			advice = append(advice, "Check the Home Assistant URL, network route and ip_bans.yaml on the HA host.")
 		case "browser_running":
 			advice = append(advice, "Use the browser log tail in this report; if it exits immediately, try Safe Mode or a fresh browser profile.")
+		case "power_supply":
+			advice = append(advice, "Replace the power supply (Raspberry Pi 4: 5.1 V / 3 A) and check with: vcgencmd get_throttled (0x0 after a reboot means fine).")
 		}
 	}
 	if len(advice) == 0 {

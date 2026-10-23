@@ -1,6 +1,6 @@
 import { formatSchedulerReason, formatThemeStatus } from "./actions-core.js";
 import { esc, formatDate, formatDuration, formatMQTTState, formatValue, state, t } from "./app-core.js";
-import { button, healthRow, normalizePages, renderActionLog, stateBanner, statusTile } from "./renderers.js";
+import { button, cpuCoresUsed, cpuShare, cpuShareValue, healthRow, normalizePages, powerBanner, renderActionLog, stateBanner, statusTile } from "./renderers.js";
 
 export function renderDashboard() {
         const browser = state.status?.browser || {};
@@ -33,6 +33,7 @@ export function renderDashboard() {
         return `
           <div class="page-stack">
             ${renderUpdateNotice()}
+            ${powerBanner()}
 			${recovery.state && !["healthy", "idle"].includes(recovery.state) ? stateBanner(recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : "warn", t("recoveryNeedsAttention"), recovery.last_result || recovery.reason || recovery.state, button("recoverNow", "browser-auto-recover", "primary")) : ""}
             ${schedulerNeedsAttention ? stateBanner("warn", t("scheduler"), schedulerReasonKey === "disabled" ? t("schedulerDisabledWithRulesHint") : t("schedulerNoActiveRuleHint"), `<button data-view="kiosk-pages">${esc(t("manageFlow"))}</button>`) : ""}
             ${stateBanner(browserKnown ? (browser.ready ? "ok" : browser.running ? "warn" : "bad") : "warn", browserKnown ? (browser.ready ? t("displayReady") : browser.running ? t("displayConnecting") : t("displayNeedsAttention")) : t("loading"), browserMessage, browser.running
@@ -41,7 +42,7 @@ export function renderDashboard() {
             <section class="status-strip" aria-label="${esc(t("status"))}">
               ${statusTile(t("displayStatus"), runningLabel, runningTone, browser.pid ? `PID ${browser.pid}` : (browserKnown ? t("noProcess") : t("loading")))}
               ${statusTile(t("currentPage"), browser.page_name || activePage.name || "-", "", `${activeIndex + 1} / ${Math.max(1, pages.length)}`)}
-			  ${statusTile(t("processorLoad"), formatValue(stats.cpu_percent, "%"), Number(stats.cpu_percent || 0) > 250 ? "warn" : "", `${formatValue(stats.rss_mb, " MB RAM")} · ${(stats.pids || []).length} ${t("processes")}`)}
+			  ${statusTile(t("processorLoad"), cpuShare(stats.cpu_percent), Number(cpuShareValue(stats.cpu_percent) || 0) > 75 ? "warn" : "", `${cpuCoresUsed(stats.cpu_percent)} · ${formatValue(stats.rss_mb, " MB RAM")} · ${(stats.pids || []).length} ${t("processes")}`)}
               ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.version ? `MQTT ${cfg.mqtt.version}` : "-"))}
             </section>
             <div class="dashboard-layout">
@@ -95,7 +96,7 @@ export function renderDashboard() {
 					${healthRow(t("recoveryState"), recovery.state || t("idle"), recovery.state === "failed" || recovery.state === "auth_blocked" ? "bad" : recovery.state === "backoff" ? "warn" : "ok")}
 					${recovery.backoff_until ? healthRow(t("backoffUntil"), formatDate(recovery.backoff_until), "warn") : ""}
                     ${healthRow(t("watchdog"), watchdog.pressure || t("normal"), watchdog.pressure && watchdog.pressure !== "normal" ? "warn" : "ok")}
-					${healthRow(t("runtimeAverage"), `${formatValue(telemetry.cpu_average, "% CPU")} · ${formatValue(telemetry.rss_average_mb, " MB RAM")}`, "")}
+					${healthRow(t("runtimeAverage"), `${cpuShare(telemetry.cpu_average)} CPU · ${formatValue(telemetry.rss_average_mb, " MB RAM")}`, "")}
 					${override.active ? healthRow(t("temporaryOverride"), `${pages[override.page]?.name || override.page + 1} · ${formatDate(override.until)}`, "warn") : ""}
                     ${browser.last_error ? healthRow(t("lastError"), browser.last_error, "bad") : ""}
                     ${renderActionLog()}

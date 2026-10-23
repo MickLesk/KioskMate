@@ -66,6 +66,10 @@ type KioskConfig struct {
 	// open as tabs and switch between them without reloading.
 	PageSwitch string `json:"page_switch,omitempty"`
 	MaxTabs    int    `json:"max_tabs,omitempty"`
+	// DisplayBackend picks Chromium's Ozone platform: "" lets Chromium decide
+	// (XWayland on most Pi desktops, as before 0.9.0), "wayland" forces native
+	// Wayland, "x11" forces X11/XWayland.
+	DisplayBackend string `json:"display_backend,omitempty"`
 	// Rules are event-driven workflow steps on top of the playlist.
 	Rules []WorkflowRule `json:"rules,omitempty"`
 }
@@ -472,6 +476,9 @@ func Validate(cfg *Config) error {
 	}
 	if mode := cfg.Kiosk.PageSwitch; mode != "" && mode != "navigate" && mode != "tabs" {
 		return errors.New("page switch mode must be navigate or tabs")
+	}
+	if mode := cfg.Kiosk.DisplayBackend; mode != "" && mode != "auto" && mode != "wayland" && mode != "x11" {
+		return errors.New("display backend must be auto, wayland or x11")
 	}
 	if cfg.Kiosk.MaxTabs < 0 || cfg.Kiosk.MaxTabs > 8 {
 		return errors.New("maximum open tabs must be between 1 and 8")
