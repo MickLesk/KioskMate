@@ -63,6 +63,10 @@ type Browser struct {
 	scheduler        SchedulerStatus
 	rotationIndex    int
 	rotationUntil    time.Time
+	// insertShowing is set while a page insert is on screen; insertReturn
+	// is the page to go back to when the base programme names none.
+	insertShowing    bool
+	insertReturn     int
 	rotationCycles   int
 	lastMaintenance  time.Time
 	lastActivity     time.Time
@@ -199,6 +203,7 @@ type SchedulerStatus struct {
 	Mode          string     `json:"mode"`
 	Reason        string     `json:"reason"`
 	ActiveRule    string     `json:"active_rule,omitempty"`
+	ActiveInsert  string     `json:"active_insert,omitempty"`
 	NextSwitch    *time.Time `json:"next_switch,omitempty"`
 	RotationIndex int        `json:"rotation_index,omitempty"`
 }
@@ -1226,6 +1231,61 @@ func (b *Browser) schedulerTarget(now time.Time) (int, SchedulerStatus) {
 		return override.Page, status
 	}
 	cfg := b.cfg.Snapshot().Kiosk
+	target, status := b.baseTarget(now, cfg)
+	return b.applyInserts(now, cfg, target, status)
+}
+
+// applyInserts puts an insert that is due on top of the base programme. An
+// insert never wakes a display the schedule has turned off. When it ends,
+// the base programme's page returns, or the page shown before the insert
+// when the base programme names none (scheduler disabled or no rotation).
+func (b *Browser) applyInserts(now time.Time, cfg config.KioskConfig, target int, status SchedulerStatus) (int, SchedulerStatus) {
+	if len(cfg.Inserts) == 0 {
+		b.mu.Lock()
+		b.insertShowing = false
+		b.mu.Unlock()
+		return target, status
+	}
+	if next, ok := cfg.NextInsertChange(now); ok && (status.NextSwitch == nil || next.Before(*status.NextSwitch)) {
+		status.NextSwitch = &next
+	}
+	if !scheduleWantsDisplayOff(cfg, target, status) {
+		if slot, ok := cfg.ActiveInsert(now); ok {
+			if page := cfg.EnabledPageIndex(slot.Insert.PageID); page >= 0 {
+				b.mu.Lock()
+				if !b.insertShowing {
+					b.insertShowing = true
+					b.insertReturn = b.active
+				}
+				b.mu.Unlock()
+				status.Reason = "insert"
+				status.ActiveInsert = firstNonEmpty(slot.Insert.Name, slot.Insert.ID)
+				return page, status
+			}
+		}
+	}
+	b.mu.Lock()
+	if b.insertShowing {
+		b.insertShowing = false
+		if target < 0 && !scheduleWantsDisplayOff(cfg, target, status) {
+			target = clampPage(b.insertReturn, cfg.PageCount())
+		}
+	}
+	b.mu.Unlock()
+	return target, status
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// baseTarget is the page the base programme (rotation and time rules) wants.
+func (b *Browser) baseTarget(now time.Time, cfg config.KioskConfig) (int, SchedulerStatus) {
 	status := SchedulerStatus{Enabled: cfg.Scheduler.Enabled, Mode: cfg.Scheduler.Mode}
 	if !cfg.Scheduler.Enabled || cfg.PageCount() == 0 {
 		status.Reason = "disabled"
