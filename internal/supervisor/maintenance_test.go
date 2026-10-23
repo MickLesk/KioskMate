@@ -100,11 +100,23 @@ func TestMaintenanceReloadAfterRotationCycles(t *testing.T) {
 }
 
 func TestOzonePlatformFlag(t *testing.T) {
-	if got := ozonePlatformFlag("wayland-0"); got != "--ozone-platform=wayland" {
-		t.Fatalf("wayland session flag = %q", got)
+	cases := []struct {
+		name, backend, wayland, x11, want string
+		extra                             []string
+	}{
+		// 0.8 behaviour on a Pi desktop: no switch, Chromium uses XWayland.
+		{name: "desktop default", wayland: "wayland-0", x11: ":0", want: ""},
+		{name: "x11 session", x11: ":0", want: ""},
+		{name: "cage without xwayland", wayland: "wayland-0", want: "--ozone-platform=wayland"},
+		{name: "forced wayland", backend: "wayland", wayland: "wayland-0", x11: ":0", want: "--ozone-platform=wayland"},
+		{name: "forced x11", backend: "x11", wayland: "wayland-0", want: "--ozone-platform=x11"},
+		{name: "auto", backend: "auto", wayland: "wayland-0", x11: ":0", want: ""},
+		{name: "extra args win", backend: "wayland", wayland: "wayland-0", extra: []string{"--ozone-platform=x11"}, want: ""},
 	}
-	if got := ozonePlatformFlag(""); got != "--ozone-platform-hint=auto" {
-		t.Fatalf("default flag = %q", got)
+	for _, tc := range cases {
+		if got := ozonePlatformFlag(tc.backend, tc.extra, tc.wayland, tc.x11); got != tc.want {
+			t.Errorf("%s: flag = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

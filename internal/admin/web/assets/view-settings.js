@@ -67,6 +67,7 @@ export function renderSettingsAdmin() {
                 <div class="body form-grid">
                   ${selectHtml("perf-profile", t("performanceProfile"), perf.profile || "low-power", [["low-power", t("lowPower")], ["raspberry", t("raspberry")], ["minimal", t("minimal")], ["balanced", t("balanced")], ["quality", t("quality")], ["conservative", t("conservative")]])}
                   ${selectHtml("perf-gpu", t("gpuMode"), perf.gpu_mode || "auto", [["auto", t("auto")], ["software", t("software")], ["hardware", t("hardwareMode")]])}
+                  ${selectHtml("kiosk-display-backend", t("displayBackend"), kiosk.display_backend || "auto", [["auto", t("displayBackendAuto")], ["wayland", t("displayBackendWayland")], ["x11", t("displayBackendX11")]])}
                   <div class="span-2">${switchHtml("perf-reduce", t("reduceMotion"), perf.reduce_motion !== false)}</div>
 				  ${recommendation.profile ? `<div class="notice span-2 recommendation"><div><strong>${esc(t("recommendedProfile"))}: ${esc(recommendation.profile)} / ${esc(recommendation.gpu_mode)}</strong><span>${esc(recommendation.reason_key ? t(recommendation.reason_key) : recommendation.reason || "")}</span></div><button data-action="profile-recommendation-apply">${esc(t("applyRecommendation"))}</button></div>` : ""}
                 </div>

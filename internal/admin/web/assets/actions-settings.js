@@ -97,6 +97,7 @@ export function bindSettings() {
           cfg.kiosk.widget = checked("kiosk-widget");
           cfg.performance.profile = val("perf-profile");
           cfg.performance.gpu_mode = val("perf-gpu");
+          cfg.kiosk.display_backend = ["wayland", "x11"].includes(val("kiosk-display-backend")) ? val("kiosk-display-backend") : "";
           cfg.performance.reduce_motion = checked("perf-reduce");
           cfg.performance.auth_monitor = val("perf-auth-monitor") === "always" ? "always" : "";
           cfg.kiosk.page_switch = val("kiosk-page-switch") === "tabs" ? "tabs" : "";

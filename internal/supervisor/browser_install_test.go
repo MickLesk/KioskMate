@@ -145,6 +145,7 @@ func TestBrowserArgsKeepOzoneOutsideWindows(t *testing.T) {
 	}
 	cfg := &config.Config{}
 	cfg.Kiosk.UserDataDir = "/tmp/profile"
+	cfg.Kiosk.DisplayBackend = "wayland"
 	args := browserArgs(cfg, "chromium", "about:blank", nil, 0)
 	if !slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, "--ozone-platform") }) {
 		t.Fatalf("ozone switch missing on this platform: %#v", args)

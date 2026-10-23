@@ -803,5 +803,9 @@
   "validationSlideshowFolder": "Gib den absoluten Pfad des Bilderordners an.",
   "validationSlideshowInterval": "Sekunden pro Bild müssen zwischen 2 und 86400 liegen.",
   "validationLocalHtml": "Gib das HTML für diese Seite ein.",
-  "validationLocalHtmlSize": "Das HTML darf höchstens 256 KB groß sein."
+  "validationLocalHtmlSize": "Das HTML darf höchstens 256 KB groß sein.",
+  "displayBackend": "Anzeige-Backend",
+  "displayBackendAuto": "Automatisch (XWayland am Desktop, am besten für Touch)",
+  "displayBackendWayland": "Natives Wayland",
+  "displayBackendX11": "X11 / XWayland"
 }
