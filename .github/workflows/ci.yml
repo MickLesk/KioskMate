@@ -52,3 +52,29 @@ jobs:
           python3 scripts/package-deb.py --version 0.0.0-ci --arch arm64 --arch amd64
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_arm64.deb
           bash scripts/verify-deb.sh dist/kioskmate_0.0.0-ci_amd64.deb
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Playwright
+        run: |
+          npm install --prefix tests/e2e --no-audit --no-fund
+          npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Build
+        run: go build -o /tmp/kioskmate ./cmd/kioskmate
+      - name: Admin UI browser tests
+        run: node tests/e2e/run.mjs /tmp/kioskmate /tmp/e2e-shots
+      - name: Upload screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: /tmp/e2e-shots

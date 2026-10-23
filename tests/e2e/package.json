@@ -1,0 +1,12 @@
+{
+  "name": "kioskmate-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser tests for the KioskMate Admin UI",
+  "scripts": {
+    "test": "node run.mjs ../../kioskmate"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

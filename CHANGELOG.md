@@ -4,6 +4,31 @@
 
 Second pre-release: the redesigned Admin UI gets the depth it was missing. Configs from 1.0.0-pre and 0.9.x keep working unchanged.
 
+### Conditions, presence and sun times
+- Inserts can depend on an MQTT value ("only when `home/motion` = ON", or negated). The timeline marks conditional inserts and shows whether the condition holds right now.
+- Presence: an MQTT topic, `POST /api/presence` or a touch counts as someone being there. Mode "wake" keeps the display on outside the schedule for a set time; mode "require" turns it off inside the schedule when nobody is there.
+- Time windows of pages, time rules and inserts accept sunrise and sunset with an offset (for example "sunset −30 min"). With the kiosk's location (Programme → Advanced, or "Use this device's location") they follow the real sun times; without it sunrise counts as 06:00 and sunset as 18:00.
+
+### Home Assistant
+- MQTT discovery adds a sensor for the active insert, a switch per insert, a presence button, an occupancy sensor (when presence is on) and an undervoltage problem sensor.
+
+### Setup and editing
+- First-run assistant on a fresh install: page, when the screen is on, optional MQTT. It can be reopened under Settings.
+- Removing a page, insert or workflow no longer asks first; a toast offers "Undo" instead.
+- Duration and time window of base programme pages can be edited directly in the list.
+- Saving checks whether the config was changed elsewhere in the meantime (another browser, MQTT, the API) and asks before overwriting. `GET /api/config` returns a `revision`; a `POST` with an old revision answers 409 unless `?force=1`.
+- Page previews: KioskMate keeps a small screenshot of each page after it has been on screen for 20 seconds (at most every 30 minutes per page) and shows it in Pages and the programme.
+
+### Diagnosis
+- Doctor shows a sorted, translated list of checks with technical details folded away, and on a Raspberry Pi checks hardware video decoding: CMA size and allocation failures, `gpu_mem`, the decoder Chromium reports. It recommends `dtoverlay=vc4-kms-v3d,cma-512` when the decoder is starved.
+
+### Fixes
+- Buttons whose handler was a named function could stop working after a re-render (the Doctor button among them).
+- Doctor no longer gives up after 12 seconds on slow devices.
+
+### Development
+- Browser tests of the Admin UI (`tests/e2e`, Playwright) run in CI against a real server.
+
 ### Programme
 - The base programme is a clear list of only the pages that run in it, each with its time window as a 24-hour strip or its rotation duration, "Show now", edit, move up/down (or drag) and remove. Insert-only and trigger pages are listed separately with "Add to base programme".
 - "Show now" takes a duration (15 minutes to 8 hours); an active override shows its end time and a "Back to programme" button.

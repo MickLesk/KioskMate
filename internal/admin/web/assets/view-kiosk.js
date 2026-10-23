@@ -1,6 +1,7 @@
 // Page sequence helpers shared by the programme and pages views.
 import { formatDuration, state, t } from "./app-core.js";
 import { sourceLabel } from "./renderers.js";
+import { describeClock } from "./clock.js";
 
       export function selectedKioskPageIndex(pages) {
         // state.status.browser.active is in enabled-page index space (matches backend
@@ -39,7 +40,7 @@ import { sourceLabel } from "./renderers.js";
       }
 
       export function pageTimingLabel(page) {
-        if (page.display_mode === "schedule") return `${page.schedule?.start || "--:--"} - ${page.schedule?.end || "--:--"}`;
+        if (page.display_mode === "schedule") return `${describeClock(page.schedule?.start, false)} - ${describeClock(page.schedule?.end, false)}`;
         if (page.display_mode === "mqtt") return t("mqttTrigger");
         if (page.display_mode === "insert") return t("insertOnlyShort");
         return formatDuration(Number(page.duration_seconds || 3600));

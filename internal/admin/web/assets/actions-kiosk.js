@@ -1,7 +1,8 @@
 import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
-import { KIOSK_VIEWS, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { KIOSK_VIEWS, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, offerUndo, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { button, collectPages, collectRotation, collectRules, isLocalSource, normalizePages, sourceLabel, sourceMark, validatePages, validateScheduler, validationError } from "./renderers.js";
 import { bindWorkflows } from "./workflows.js";
+import { clockField, isSunClock, readClock } from "./clock.js";
 import { absolutePageIndexFromEnabled, displayModeLabel, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
 
 export function bindKiosk() {
@@ -42,15 +43,17 @@ export function bindKiosk() {
         });
         document.querySelectorAll("[data-page-remove]").forEach((button) => {
           button.addEventListener("click", () => {
-            if (!confirm(t("confirmRemovePage"))) return;
+            const before = cloneConfig();
             const cfg = cloneConfig();
             cfg.kiosk.pages = collectPages();
+            const removed = cfg.kiosk.pages[Number(button.dataset.pageRemove)];
             removePage(cfg.kiosk, Number(button.dataset.pageRemove));
             synchronizeKioskWorkflow(cfg.kiosk);
             state.config = cfg;
             state.kioskSelectedPageIndex = Math.max(0, Math.min(Number(button.dataset.pageRemove), cfg.kiosk.pages.length - 1));
             markDirty();
             renderApp();
+            offerUndo(before, t("pageRemoved"), removed?.name || removed?.url || "");
           });
         });
         document.querySelectorAll("[data-page-duplicate]").forEach((button) => {
@@ -192,7 +195,7 @@ export function bindKiosk() {
           return `<div class="wizard-step-grid">
             <div class="span-2">${selectHtml("wizard-display-mode", t("displayMode"), mode, [["duration", t("customDuration")], ["schedule", t("fixedSchedule")], ["insert", t("insertOnly")], ["mqtt", t("triggerBased")]])}</div>
             ${mode === "duration" ? field("wizard-duration", t("durationSeconds"), "number", "", page.duration_seconds || 60) : ""}
-            ${mode === "schedule" ? `${field("wizard-schedule-start", t("start"), "time", "", page.schedule?.start || "08:00")}${field("wizard-schedule-end", t("end"), "time", "", page.schedule?.end || "18:00")}<div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
+            ${mode === "schedule" ? `${clockField("wizard-schedule-start", t("start"), page.schedule?.start || "08:00", "08:00")}${clockField("wizard-schedule-end", t("end"), page.schedule?.end || "18:00", "18:00")}<small class="span-2 hint">${esc(t(state.config?.kiosk?.scheduler?.latitude || state.config?.kiosk?.scheduler?.longitude ? "sunTimesHint" : "sunTimesNeedLocation"))}</small><div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
             ${mode === "mqtt" ? `${field("wizard-trigger-topic", t("mqttTopic"), "text", "", page.trigger?.topic || "")}${field("wizard-trigger-payload", t("mqttPayload"), "text", "", page.trigger?.payload || "ON")}` : ""}
             <details class="span-2 wizard-options" open><summary>${esc(t("advancedDisplayActions"))}</summary><div class="wizard-option-grid">
               ${switchHtml("wizard-power-off", t("powerOffAfterExpiry"), mode === "schedule" ? page.display_options?.power_off_after !== false : !!page.display_options?.power_off_after)}
@@ -276,7 +279,8 @@ export function bindKiosk() {
         if (wizard.step === 2) {
           page.display_mode = val("wizard-display-mode") || page.display_mode || "duration";
           page.duration_seconds = Number(val("wizard-duration") || page.duration_seconds || 60);
-          page.schedule = { start: val("wizard-schedule-start") || page.schedule?.start || "08:00", end: val("wizard-schedule-end") || page.schedule?.end || "18:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].filter((day) => checked(`wizard-day-${day}`)) };
+          const scheduleField = (id, fallback) => (document.getElementById(`${id}-kind`) ? readClock(id) : "") || fallback;
+          page.schedule = { start: scheduleField("wizard-schedule-start", page.schedule?.start || "08:00"), end: scheduleField("wizard-schedule-end", page.schedule?.end || "18:00"), days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].filter((day) => checked(`wizard-day-${day}`)) };
           page.trigger = { topic: val("wizard-trigger-topic") || page.trigger?.topic || "", payload: val("wizard-trigger-payload") || page.trigger?.payload || "ON" };
           page.display_options = {
             power_off_after: page.display_mode === "schedule" ? (document.getElementById("wizard-power-off") ? checked("wizard-power-off") : true) : checked("wizard-power-off"),
@@ -602,6 +606,7 @@ export function bindKiosk() {
       }
 
       function normalizeClock(value) {
+        if (isSunClock(value)) return String(value).trim().toLowerCase().replace(/\s+/g, "");
         const parts = String(value || "").trim().split(":");
         if (parts.length < 2) return "08:00";
         const hour = Math.max(0, Math.min(23, Number(parts[0]) || 0));

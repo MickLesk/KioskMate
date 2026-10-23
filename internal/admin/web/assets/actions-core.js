@@ -237,26 +237,46 @@ export function bindView() {
         snapshotTimer = setTimeout(tick, age >= SNAPSHOT_INTERVAL ? 300 : SNAPSHOT_INTERVAL - age);
       }
 
+      // Doctor findings in plain language; the raw detail stays available
+      // under "Technical details".
+      export function doctorMessage(check) {
+        const detail = check.detail || {};
+        if (check.id === "video_decode" && detail.finding) {
+          return t(`videoDecode_${detail.finding}`)
+            .replace("{count}", detail.cma_failures || 0)
+            .replace("{mb}", detail.cma_total_mb || 0)
+            .replace("{gpu}", detail.gpu_mem_mb || 0)
+            .replace("{file}", detail.boot_config || "config.txt");
+        }
+        const key = `doctor_${check.id}_${check.level}`;
+        const text = t(key);
+        return text === key ? check.message || check.id || "-" : text;
+      }
+
       export async function loadBrowserDoctor() {
         await runAction("browser-doctor", async () => {
-          const report = await getJSON("/api/browser/doctor");
-          const checks = (report.checks || []).map((check) => `
-            <div class="recovery-step">
-              <strong>${esc(check.level || "-")} · ${esc(check.message || check.id || "-")}</strong>
-              <span class="hint">${esc(typeof check.detail === "string" ? check.detail : JSON.stringify(check.detail || ""))}</span>
-            </div>`).join("");
+          const report = await getJSON("/api/browser/doctor", { timeout: 30000 });
+          state.doctor = report;
+          const order = { error: 0, warn: 1, ok: 2 };
+          const sorted = [...(report.checks || [])].sort((a, b) => (order[a.level] ?? 3) - (order[b.level] ?? 3));
+          const problems = sorted.filter((check) => check.level !== "ok").length;
+          const checks = sorted.map((check) => `
+            <li class="health-check ${check.level === "error" ? "bad" : check.level === "warn" ? "warn" : "ok"}">
+              <span class="health-mark" aria-hidden="true">${check.level === "ok" ? "✓" : "!"}</span>
+              <div><strong>${esc(t(`doctorCheck_${check.id}`) === `doctorCheck_${check.id}` ? check.id : t(`doctorCheck_${check.id}`))}</strong><span>${esc(doctorMessage(check))}</span>
+              ${check.detail && check.level !== "ok" && typeof check.detail !== "string" ? `<details class="tech-details"><summary>${esc(t("technicalDetails"))}</summary><pre class="logbox">${esc(JSON.stringify(check.detail, null, 2))}</pre></details>` : ""}</div>
+            </li>`).join("");
           openModal(`
-            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
+            <div class="modal doctor-dialog" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
               <div class="modal-head">
                 <div>
                   <h3 id="doctor-title">${esc(t("browserDoctor"))}</h3>
-                  <div class="hint">${esc(t("doctorHint"))}</div>
+                  <div class="hint ${problems ? "warn-text" : "ok-text"}">${esc(problems ? t("healthProblems").replace("{count}", problems) : t("healthAllGood"))}</div>
                 </div>
                 <button data-modal-close>${esc(t("close"))}</button>
               </div>
-              <div class="modal-body grid">
-                <div class="recovery-list">${checks}</div>
-                <div><label>${esc(t("diagnostics"))}</label><pre class="logbox">${esc(JSON.stringify(report.advice || [], null, 2))}</pre></div>
+              <div class="modal-body">
+                <ul class="health-checks">${checks}</ul>
               </div>
               <div class="modal-foot"><button data-modal-close>${esc(t("close"))}</button></div>
             </div>`);

@@ -1,4 +1,4 @@
-import { checked, cloneConfig, closeModal, esc, field, formatDate, getJSON, isDirty, markDirty, modalRoot, openModal, postJSON, renderApp, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { checked, cloneConfig, closeModal, esc, field, formatDate, getJSON, isDirty, markDirty, modalRoot, offerUndo, openModal, postJSON, renderApp, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { icon } from "./icons.js";
 import { normalizePages } from "./renderers.js";
 
@@ -123,12 +123,14 @@ export function bindWorkflows() {
   document.querySelectorAll("[data-workflow-remove]").forEach((button) => button.addEventListener("click", () => {
     const index = Number(button.dataset.workflowRemove);
     const rule = rules()[index];
-    if (!rule || !confirm(t("confirmRemoveWorkflow").replace("{name}", rule.name || rule.id))) return;
+    if (!rule) return;
+    const before = cloneConfig();
     const cfg = cloneConfig();
     cfg.kiosk.rules.splice(index, 1);
     state.config = cfg;
     markDirty();
     renderApp();
+    offerUndo(before, t("workflowRemoved"), rule.name || rule.id);
   }));
   document.querySelectorAll("[data-workflow-template]").forEach((button) => button.addEventListener("click", () => openWorkflowEditor(null, button.dataset.workflowTemplate)));
   document.querySelectorAll("[data-workflow-toggle]").forEach((input) => input.addEventListener("change", () => {

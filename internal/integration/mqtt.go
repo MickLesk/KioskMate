@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
+	"github.com/MickLesk/KioskMate/internal/signals"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/systemtime"
 	"github.com/MickLesk/KioskMate/internal/updater"
@@ -80,6 +82,72 @@ type MQTTService struct {
 	discoveryTopics  []string
 	discoveryLoaded  bool
 	needsRestart     atomic.Bool
+	signals          *signals.Store
+}
+
+// SetSignals attaches the store that receives insert condition values and
+// presence detections.
+func (s *MQTTService) SetSignals(store *signals.Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signals = store
+}
+
+func (s *MQTTService) signalStore() *signals.Store {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.signals
+}
+
+// signalTopics lists the outside topics the scheduler depends on: insert
+// conditions and the presence sensor.
+func signalTopics(kiosk config.KioskConfig) []string {
+	topics := kiosk.ConditionTopics()
+	if topic := strings.TrimSpace(kiosk.Presence.Topic); kiosk.Presence.Enabled && topic != "" && !slices.Contains(topics, topic) {
+		topics = append(topics, topic)
+	}
+	return topics
+}
+
+// presenceDetected reads a presence payload: the configured value, or when
+// none is set any payload that does not mean "off".
+func presenceDetected(payload, want string) bool {
+	payload = strings.TrimSpace(payload)
+	if want = strings.TrimSpace(want); want != "" {
+		return strings.EqualFold(payload, want)
+	}
+	switch strings.ToLower(payload) {
+	case "", "off", "false", "0", "clear", "no", "not_home", "idle":
+		return false
+	}
+	return true
+}
+
+// handleSignal stores condition values and presence detections. It reports
+// whether topic is one of the outside signal topics.
+func (s *MQTTService) handleSignal(topic, payload string) bool {
+	kiosk := s.cfg.Snapshot().Kiosk
+	store := s.signalStore()
+	if strings.HasSuffix(topic, "/presence/set") && strings.HasPrefix(topic, s.root()+"/") {
+		if presenceDetected(payload, "") {
+			store.NotePresence(time.Now(), "mqtt")
+		}
+		return true
+	}
+	matched := false
+	for _, want := range kiosk.ConditionTopics() {
+		if want == topic {
+			store.Set(topic, payload)
+			matched = true
+		}
+	}
+	if kiosk.Presence.Enabled && strings.TrimSpace(kiosk.Presence.Topic) == topic {
+		matched = true
+		if presenceDetected(payload, kiosk.Presence.Value) {
+			store.NotePresence(time.Now(), "mqtt")
+		}
+	}
+	return matched
 }
 
 type MQTTConnectionStatus struct {
@@ -368,6 +436,12 @@ func (s *MQTTService) connectionKey() string {
 			pageSig.WriteString("rule:" + strings.TrimSpace(rule.Trigger.Topic) + "|")
 		}
 	}
+	for _, topic := range signalTopics(cfg.Kiosk) {
+		pageSig.WriteString("signal:" + topic + "|")
+	}
+	for _, insert := range cfg.Kiosk.Inserts {
+		pageSig.WriteString("insert:" + insert.ID + "|")
+	}
 	return strings.Join([]string{
 		cfg.MQTT.URL,
 		cfg.MQTT.Username,
@@ -491,6 +565,15 @@ func (s *MQTTService) commands(ctx context.Context) {
 		s.root() + "/isolate_page_sessions/set",
 		s.root() + "/kiosk_theme/set",
 		s.root() + "/watchdog_enabled/set",
+		s.root() + "/presence/set",
+	}
+	for _, insert := range cfg.Kiosk.Inserts {
+		topics = append(topics, s.root()+"/inserts/"+insert.ID+"/set")
+	}
+	for _, topic := range signalTopics(cfg.Kiosk) {
+		if !slices.Contains(topics, topic) {
+			topics = append(topics, topic)
+		}
 	}
 	for _, page := range s.pageEntities() {
 		topics = append(topics, s.root()+"/pages/"+page.ID+"/activate")
@@ -524,6 +607,7 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 	defer s.commandMu.Unlock()
 	actionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	signal := s.handleSignal(topic, command)
 	if rules := s.workflowRules(); rules != nil && rules.HandleMQTT(ctx, topic, command) {
 		// Workflow rule topics are never KioskMate commands.
 		s.recordCommand(topic, nil)
@@ -545,8 +629,25 @@ func (s *MQTTService) handleCommand(ctx context.Context, topic string, command s
 		s.logger.Debug("mqtt page trigger payload mismatch", "topic", topic, "payload", command)
 		return
 	}
+	if signal {
+		if strings.HasSuffix(topic, "/presence/set") {
+			s.recordCommand(topic, nil)
+		}
+		return
+	}
 	var err error
 	switch {
+	case strings.Contains(topic, "/inserts/") && strings.HasSuffix(topic, "/set"):
+		id := strings.TrimSuffix(strings.TrimPrefix(topic, s.root()+"/inserts/"), "/set")
+		err = s.cfg.Mutate(func(next *config.Config) error {
+			for i := range next.Kiosk.Inserts {
+				if next.Kiosk.Inserts[i].ID == id {
+					next.Kiosk.Inserts[i].Disabled = !boolCommand(command)
+					return nil
+				}
+			}
+			return fmt.Errorf("unknown insert %q", id)
+		})
 	case strings.HasSuffix(topic, "/browser/set"):
 		if boolCommand(command) {
 			err = s.browser.Start(actionCtx)
@@ -1038,6 +1139,18 @@ func (s *MQTTService) publishAll() error {
 		_ = s.publishState(client, "scheduler_next_switch", status.Scheduler.NextSwitch.Format(time.RFC3339), true)
 	} else {
 		_ = s.publishState(client, "scheduler_next_switch", "none", true)
+	}
+	_ = s.publishState(client, "active_insert", firstString(status.Scheduler.ActiveInsert, "none"), true)
+	for _, insert := range cfg.Kiosk.Inserts {
+		_ = s.publishState(client, "inserts/"+insert.ID, boolState(!insert.Disabled), true)
+	}
+	if cfg.Kiosk.Presence.Enabled {
+		_ = s.publishState(client, "presence", boolState(status.Scheduler.Presence == "present"), false)
+	}
+	if power, ok := hw.System["power"].(map[string]any); ok {
+		if undervoltage, ok := power["undervoltage_now"].(bool); ok {
+			_ = s.publishState(client, "undervoltage", boolState(undervoltage), false)
+		}
 	}
 	_ = s.publishState(client, "performance_profile", cfg.Performance.Profile, true)
 	_ = s.publishState(client, "gpu_mode", cfg.Performance.GPUMode, true)
@@ -1943,6 +2056,35 @@ func (s *MQTTService) runtimeDiscoveryItems(device map[string]any) []discoveryIt
 		s.diagnosticSensor(device, "auth_guard_first_seen", "HA Authentication First Seen", "mdi:clock-start", ""),
 		s.diagnosticSensor(device, "auth_guard_last_seen", "HA Authentication Last Seen", "mdi:clock-alert", ""),
 		s.diagnosticSensor(device, "auth_guard_kiosk_ip", "Kiosk IP For HA", "mdi:ip-network", ""),
+		{Topic: s.discoveryTopic("sensor", "active_insert"), Data: map[string]any{
+			"name": "Active Insert", "unique_id": s.cfg.Snapshot().MQTT.Node + "_active_insert",
+			"state_topic": s.root() + "/active_insert/state", "icon": "mdi:timeline-clock-outline", "device": device,
+		}},
+		{Topic: s.discoveryTopic("button", "presence"), Data: map[string]any{
+			"name": "Presence Detected", "unique_id": s.cfg.Snapshot().MQTT.Node + "_presence_button",
+			"command_topic": s.root() + "/presence/set", "payload_press": "ON", "icon": "mdi:motion-sensor", "device": device,
+		}},
+		{Topic: s.discoveryTopic("binary_sensor", "undervoltage"), Data: map[string]any{
+			"name": "Undervoltage", "unique_id": s.cfg.Snapshot().MQTT.Node + "_undervoltage",
+			"state_topic": s.root() + "/undervoltage/state", "payload_on": "ON", "payload_off": "OFF",
+			"device_class": "problem", "entity_category": "diagnostic", "device": device,
+		}},
+	}
+	kiosk := s.cfg.Snapshot().Kiosk
+	if kiosk.Presence.Enabled {
+		items = append(items, discoveryItem{Topic: s.discoveryTopic("binary_sensor", "presence"), Data: map[string]any{
+			"name": "Presence", "unique_id": s.cfg.Snapshot().MQTT.Node + "_presence",
+			"state_topic": s.root() + "/presence/state", "payload_on": "ON", "payload_off": "OFF",
+			"device_class": "occupancy", "device": device,
+		}})
+	}
+	for _, insert := range kiosk.Inserts {
+		name := firstNonEmpty(insert.Name, kiosk.PageNameByID(insert.PageID), insert.ID)
+		items = append(items, discoveryItem{Topic: s.discoveryTopic("switch", "insert_"+slug(insert.ID)), Data: map[string]any{
+			"name": "Insert " + name, "unique_id": s.cfg.Snapshot().MQTT.Node + "_insert_" + slug(insert.ID),
+			"command_topic": s.root() + "/inserts/" + insert.ID + "/set", "state_topic": s.root() + "/inserts/" + insert.ID + "/state",
+			"payload_on": "ON", "payload_off": "OFF", "icon": "mdi:timeline-plus-outline", "device": device,
+		}})
 	}
 	return items
 }

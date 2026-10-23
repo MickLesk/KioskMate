@@ -19,6 +19,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/config"
 	"github.com/MickLesk/KioskMate/internal/events"
 	"github.com/MickLesk/KioskMate/internal/logutil"
+	"github.com/MickLesk/KioskMate/internal/signals"
 	"github.com/MickLesk/KioskMate/internal/system"
 )
 
@@ -94,13 +95,17 @@ type Browser struct {
 	override         ManualOverride
 	displayPower     string
 	idleBlanked      bool
+	// signals carries MQTT condition values and presence (may be nil).
+	signals *signals.Store
 }
 
 type Status struct {
-	Operation  Operation               `json:"operation"`
-	State      string                  `json:"state"`
-	Running    bool                    `json:"running"`
-	Ready      bool                    `json:"ready"`
+	Operation Operation `json:"operation"`
+	State     string    `json:"state"`
+	Running   bool      `json:"running"`
+	Ready     bool      `json:"ready"`
+	// Blanked is set while the schedule has the display off (page blanked).
+	Blanked    bool                    `json:"blanked,omitempty"`
 	Generation uint64                  `json:"generation"`
 	PID        int                     `json:"pid,omitempty"`
 	Started    *time.Time              `json:"started,omitempty"`
@@ -206,6 +211,10 @@ type SchedulerStatus struct {
 	ActiveInsert  string     `json:"active_insert,omitempty"`
 	NextSwitch    *time.Time `json:"next_switch,omitempty"`
 	RotationIndex int        `json:"rotation_index,omitempty"`
+	// Presence is "present" or "absent" when presence control is on;
+	// PresenceUntil is when the last detection runs out.
+	Presence      string     `json:"presence,omitempty"`
+	PresenceUntil *time.Time `json:"presence_until,omitempty"`
 }
 
 func NewBrowser(cfg *config.Config, logger *slog.Logger) *Browser {
@@ -213,6 +222,19 @@ func NewBrowser(cfg *config.Config, logger *slog.Logger) *Browser {
 	browser.loadAuthGuard()
 	browser.loadRuntimeState()
 	return browser
+}
+
+// SetSignals attaches the store with MQTT condition values and presence.
+func (b *Browser) SetSignals(store *signals.Store) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.signals = store
+}
+
+func (b *Browser) signalStore() *signals.Store {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.signals
 }
 
 func (b *Browser) SetDisplayPower(control displayPowerControl) {
@@ -572,6 +594,21 @@ func (b *Browser) CaptureScreenshot(ctx context.Context) ([]byte, error) {
 	return captureDevToolsScreenshot(ctx, profile, preferred)
 }
 
+// CaptureThumbnail takes a small JPEG of the page on screen, width pixels
+// wide.
+func (b *Browser) CaptureThumbnail(ctx context.Context, width int) ([]byte, error) {
+	cfg := b.cfg.Snapshot()
+	b.mu.Lock()
+	if b.cmd == nil || b.cmd.Process == nil {
+		b.mu.Unlock()
+		return nil, errors.New("browser is not running")
+	}
+	profile := browserUserDataDir(cfg, b.active)
+	preferred := b.activeTarget
+	b.mu.Unlock()
+	return captureDevToolsImage(ctx, profile, preferred, width)
+}
+
 func (b *Browser) TripAuthGuard(reason string) {
 	b.tripAuthGuard(reason)
 }
@@ -592,6 +629,7 @@ func (b *Browser) Status() Status {
 	command, args, err := b.command()
 	status := Status{Command: command, Args: diagnosticArgs(args), Stats: b.lastStat, Active: b.active, PageName: cfg.Kiosk.PageName(b.active), URL: diagnosticURL(activeURL(cfg, b.active)), Scheduler: b.scheduler, Watchdog: b.watchdogStatusLocked(), StartCount: b.startCount, Restarts: b.restartCount, LastError: b.lastError, DevTools: b.devTools, Theme: b.themeStatus, AuthGuard: b.authGuard, Recovery: b.recovery, Telemetry: b.telemetrySummaryLocked(), Override: b.override, Generation: b.generation, Exit: b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts)}
 	status.OpenTabs = len(b.tabs)
+	status.Blanked = b.idleBlanked
 	status.Control = ControlStatus{Required: b.requiresControl, Connected: b.devTools, Failures: b.controlFailures, LastError: b.controlError}
 	if !b.controlConnected.IsZero() {
 		connected := b.controlConnected
@@ -639,10 +677,19 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	changes := b.cfg.Changes()
+	signalChanges := b.signalStore().Changes()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-signalChanges:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(0)
 		case <-changes:
 			// A config change may have altered rotation items/order, so the
 			// previous rotation position is no longer meaningful.
@@ -812,10 +859,20 @@ func (b *Browser) applyScheduleDisplayPower(ctx context.Context, target int, sta
 }
 
 func scheduleWantsDisplayOff(cfg config.KioskConfig, target int, status SchedulerStatus) bool {
-	if !cfg.Scheduler.Enabled || len(cfg.TimeRules) == 0 {
+	if status.Reason == "manual override" || status.Mode == "override" {
 		return false
 	}
-	if status.Reason == "manual override" || status.Mode == "override" {
+	// Presence wins over the schedule: someone there keeps the display on,
+	// and in "require" mode nobody there turns it off.
+	switch status.Presence {
+	case "present":
+		return false
+	case "absent":
+		if cfg.Presence.Mode == "require" {
+			return true
+		}
+	}
+	if !cfg.Scheduler.Enabled || len(cfg.TimeRules) == 0 {
 		return false
 	}
 	timeRuleActive := status.Reason == "time" && target >= 0
@@ -1226,13 +1283,35 @@ func (b *Browser) schedulerTarget(now time.Time) (int, SchedulerStatus) {
 		go b.persistRuntimeState()
 	}
 	b.mu.Unlock()
+	store := b.signalStore()
 	if override.Active {
 		status := SchedulerStatus{Enabled: true, Mode: "override", Reason: "manual override", NextSwitch: override.Until}
-		return override.Page, status
+		return override.Page, applyPresence(now, b.cfg.Snapshot().Kiosk, store, status)
 	}
-	cfg := b.cfg.Snapshot().Kiosk
+	cfg := b.cfg.Snapshot().Kiosk.InsertsWhere(store.Value)
 	target, status := b.baseTarget(now, cfg)
+	status = applyPresence(now, cfg, store, status)
 	return b.applyInserts(now, cfg, target, status)
+}
+
+// applyPresence marks whether someone was detected within the presence
+// timeout and makes the scheduler wake up when the detection runs out.
+func applyPresence(now time.Time, cfg config.KioskConfig, store *signals.Store, status SchedulerStatus) SchedulerStatus {
+	if !cfg.Presence.Enabled {
+		return status
+	}
+	last, _ := store.LastPresence()
+	until := last.Add(cfg.Presence.Timeout())
+	if last.IsZero() || !now.Before(until) {
+		status.Presence = "absent"
+		return status
+	}
+	status.Presence = "present"
+	status.PresenceUntil = &until
+	if status.NextSwitch == nil || until.Before(*status.NextSwitch) {
+		status.NextSwitch = &until
+	}
+	return status
 }
 
 // applyInserts puts an insert that is due on top of the base programme. An
@@ -1350,8 +1429,8 @@ func timeRuleTarget(cfg config.KioskConfig, now time.Time) (int, string, time.Ti
 		if rule.Disabled || !dayMatches(rule.Days, now.Weekday()) {
 			continue
 		}
-		start, ok1 := parseClock(rule.Start)
-		end, ok2 := parseClock(rule.End)
+		start, ok1 := ruleClock(cfg, rule.Start, now)
+		end, ok2 := ruleClock(cfg, rule.End, now)
 		if !ok1 || !ok2 {
 			continue
 		}
@@ -1375,6 +1454,14 @@ func timeRuleTarget(cfg config.KioskConfig, now time.Time) (int, string, time.Ti
 		}
 	}
 	return -1, "", time.Time{}, false
+}
+
+// ruleClock resolves a time rule bound: HH:MM(:SS) or a sun time.
+func ruleClock(cfg config.KioskConfig, value string, now time.Time) (int, bool) {
+	if minute, ok := parseClock(value); ok {
+		return minute, true
+	}
+	return cfg.ResolveClock(value, now)
 }
 
 func parseClock(value string) (int, bool) {

@@ -1,8 +1,10 @@
 import { applySafeMode, loadBrowserDiagnostics } from "./actions-kiosk.js";
 import { boot, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, getJSON, openModal, postJSON, refreshCore, renderApp, renderAppIfIdle, request, runAction, saveConfig, sleep, state, t, toast, val } from "./app-core.js";
 import { button, lines, metric, renderUpdatePreflight } from "./renderers.js";
+import { openSetupWizard } from "./setup-wizard.js";
 
 export function bindSettings() {
+        document.querySelector('[data-action="setup-wizard-open"]')?.addEventListener("click", openSetupWizard);
         document.querySelector('[data-action="admin-save"]')?.addEventListener("click", saveAdminSettings);
         document.querySelector('[data-action="password-save"]')?.addEventListener("click", savePassword);
         document.querySelector('[data-action="browser-settings-save"]')?.addEventListener("click", () => saveBrowserSettings(false));

@@ -13,6 +13,7 @@ import { renderPages } from "./view-pages.js";
 import { renderProgram } from "./view-program.js";
 import { renderSettingsAdmin, renderSettingsBrowser, renderSettingsConfig, renderSettingsMaintenance } from "./view-settings.js";
 import { renderLogs, renderSystemActions } from "./view-system.js";
+import { maybeOpenSetupWizard } from "./setup-wizard.js";
 
 // Five areas. Automations and Device have sections, shown as tabs inside
 // the area; the phone layout shows a bottom bar with the first three areas.
@@ -203,14 +204,31 @@ const NAV = [
         if (!on) updateDirtyUI();
       }
 
-      export function toast(title, message = "", type = "ok") {
+      // options.action = { label, run } adds a button (for example "Undo");
+      // options.timeout overrides how long the toast stays.
+      export function toast(title, message = "", type = "ok", options = {}) {
         const item = document.createElement("div");
-        item.className = "toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "");
+        item.className = "toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "") + (options.action ? " with-action" : "");
         item.setAttribute("role", type === "error" ? "alert" : "status");
-        item.innerHTML = `<div><strong>${esc(title)}</strong>${message ? `<div class="muted">${esc(message)}</div>` : ""}</div><button class="toast-close" title="${esc(t("close"))}" aria-label="${esc(t("close"))}">&times;</button>`;
+        item.innerHTML = `<div><strong>${esc(title)}</strong>${message ? `<div class="muted">${esc(message)}</div>` : ""}</div>${options.action ? `<button class="toast-action">${esc(options.action.label)}</button>` : ""}<button class="toast-close" title="${esc(t("close"))}" aria-label="${esc(t("close"))}">&times;</button>`;
         item.querySelector(".toast-close")?.addEventListener("click", () => item.remove());
+        item.querySelector(".toast-action")?.addEventListener("click", () => {
+          item.remove();
+          options.action.run();
+        });
         toasts.appendChild(item);
-        setTimeout(() => item.remove(), 5200);
+        setTimeout(() => item.remove(), options.timeout || (options.action ? 8000 : 5200));
+      }
+
+      // Applies an unsaved removal right away and offers to undo it, instead
+      // of asking first. before is the config as it was.
+      export function offerUndo(before, title, message = "", after = () => {}) {
+        toast(title, message, "ok", { action: { label: t("undo"), run: () => {
+          state.config = before;
+          markDirty();
+          renderApp();
+          after();
+        } } });
       }
 
       let modalKeyHandler = null;
@@ -477,6 +495,7 @@ const NAV = [
           startLiveUpdates();
 		  refreshCore(false).then(() => {
 			if (state.auth?.authenticated) renderAppIfIdle();
+			if (state.auth?.authenticated && !isDirty()) maybeOpenSetupWizard();
 		  }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
         } catch (err) {
 		  renderFatal(err);
@@ -508,17 +527,59 @@ const NAV = [
 
 	  // Saves the whole config and shows the conflicts the server found
 	  // (overlapping time rules, workflows sharing a trigger) as warnings.
-	  export async function saveConfig(cfg) {
-		const result = await postJSON("/api/config", cfg);
+	  // A page's thumbnail image, or "" when there is none yet.
+	  export function thumbnailImg(pageID, cls = "page-thumb") {
+		const at = state.thumbnails?.[pageID];
+		if (!at || !pageID) return "";
+		return `<img class="${cls}" src="/api/pages/thumbnails/${encodeURIComponent(pageID)}?v=${encodeURIComponent(new Date(at).getTime())}" alt="" loading="lazy" decoding="async">`;
+	  }
+
+	  export async function saveConfig(cfg, force = false) {
+		let result;
+		try {
+		  result = await postJSON(`/api/config${force ? "?force=1" : ""}`, { ...cfg, revision: state.persistedConfig?.revision || cfg.revision || "" });
+		} catch (error) {
+		  if (error.status !== 409 || error.data?.code !== "config_changed") throw error;
+		  // Someone else saved in the meantime: let the user choose instead of
+		  // overwriting their change silently.
+		  if (!(await askOverwrite())) throw new Error(t("configChangedKept"));
+		  return saveConfig(cfg, true);
+		}
+		if (result?.revision) {
+		  if (state.persistedConfig) state.persistedConfig.revision = result.revision;
+		  if (state.config) state.config.revision = result.revision;
+		}
 		for (const conflict of (result?.conflicts || []).slice(0, 3)) {
 		  toast(t("configConflict"), t(`conflict_${conflict.kind}`).replace("{a}", conflict.first).replace("{b}", conflict.second), "warn");
 		}
 		return result;
 	  }
 
+	  function askOverwrite() {
+		return new Promise((resolve) => {
+		  openModal(`
+			<div class="modal conflict-dialog" role="alertdialog" aria-modal="true" aria-labelledby="conflict-title">
+			  <div class="modal-head"><div><h3 id="conflict-title">${esc(t("configChangedTitle"))}</h3><div class="hint">${esc(t("configChangedHint"))}</div></div></div>
+			  <div class="modal-foot">
+				<button data-conflict="reload">${esc(t("configChangedReload"))}</button>
+				<button class="primary" data-conflict="overwrite">${esc(t("configChangedOverwrite"))}</button>
+			  </div>
+			</div>`);
+		  document.querySelector('[data-conflict="overwrite"]')?.addEventListener("click", () => { closeModal(); resolve(true); });
+		  document.querySelector('[data-conflict="reload"]')?.addEventListener("click", async () => {
+			closeModal();
+			state.dirtyViews.clear();
+			await refreshCore(true).catch(() => {});
+			renderApp();
+			resolve(false);
+		  });
+		});
+	  }
+
 	  const VIEW_DATA = {
-		dashboard: ["operations", "events", "timeline", "today"],
-		program: ["timeline"],
+		dashboard: ["operations", "events", "timeline", "today", "thumbnails"],
+		program: ["timeline", "thumbnails"],
+		pages: ["thumbnails"],
 		device: ["zones", "jobs"],
 		"device-maintenance": ["jobs", "updateHistory"],
 	  };
@@ -530,6 +591,7 @@ const NAV = [
 		updateHistory: ["/api/update/history", (value) => ({ updateHistory: value })],
 		timeline: [() => `/api/program/timeline?minutes=${Number(state.programRange || 60)}`, (value) => ({ timeline: value })],
 		today: ["/api/program/timeline?day=1", (value) => ({ timelineToday: value })],
+		thumbnails: ["/api/pages/thumbnails", (value) => ({ thumbnails: value })],
 	  };
 	  const viewDataLoadedAt = new Map();
 
@@ -555,7 +617,7 @@ const NAV = [
 		if (state.view === view && state.auth?.authenticated) renderApp({ background: true });
 	  }
 
-	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events, timeline, timelineToday }) {
+	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events, timeline, timelineToday, thumbnails }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -575,6 +637,7 @@ const NAV = [
 		if (events) state.events = events.events || [];
 		if (timeline) state.timeline = timeline;
 		if (timelineToday) state.timelineToday = timelineToday;
+		if (thumbnails) state.thumbnails = thumbnails;
 		syncThemeFromConfig();
 	  }
 
@@ -682,7 +745,10 @@ const NAV = [
 			toast(t("signedIn"), "", "ok");
 			startUpdateStatusPolling();
           startLiveUpdates();
-			refreshCore(false).then(() => { if (state.auth?.authenticated) renderAppIfIdle(); }).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
+			refreshCore(false).then(() => {
+			  if (state.auth?.authenticated) renderAppIfIdle();
+			  if (state.auth?.authenticated && !isDirty()) maybeOpenSetupWizard();
+			}).catch((error) => toast(t("backgroundLoadFailed"), error.message, "warn"));
 		  } catch (error) {
 			const currentError = document.getElementById("auth-error");
 			retryDelay = Number(error.retryAfter || 0);

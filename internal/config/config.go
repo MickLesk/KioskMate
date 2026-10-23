@@ -32,6 +32,9 @@ type Config struct {
 	MQTT        MQTTConfig     `json:"mqtt"`
 	Time        TimeConfig     `json:"time"`
 	Update      UpdateConfig   `json:"update"`
+	// Revision is only set in Admin API responses: a hash of the saved
+	// configuration, so a save based on an outdated copy can be refused.
+	Revision string `json:"revision,omitempty"`
 }
 
 type AdminConfig struct {
@@ -74,6 +77,8 @@ type KioskConfig struct {
 	Rules []WorkflowRule `json:"rules,omitempty"`
 	// Inserts interleave pages on a fixed rhythm (see inserts.go).
 	Inserts []PageInsert `json:"inserts,omitempty"`
+	// Presence wakes or blanks the display from a motion sensor.
+	Presence PresenceConfig `json:"presence,omitempty"`
 }
 
 // KioskMaintenance schedules soft page reloads. Dashboards that run for days
@@ -126,6 +131,33 @@ type KioskScheduler struct {
 	Enabled      bool          `json:"enabled"`
 	Mode         string        `json:"mode"`
 	TickInterval time.Duration `json:"tick_interval"`
+	// Latitude and Longitude locate the kiosk for sunrise/sunset schedule
+	// times (see sun.go). Both zero means unset.
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
+}
+
+// PresenceConfig lets a motion or presence sensor control the display. A
+// detection comes from an MQTT topic (Topic, matching Value), the KioskMate
+// presence command, the presence API or a touch on the screen, and counts for
+// TimeoutMinutes. Mode "wake" switches the display on outside the scheduled
+// times while someone is there; "require" additionally switches it off inside
+// the scheduled times when nobody has been there for the timeout.
+type PresenceConfig struct {
+	Enabled        bool   `json:"enabled"`
+	Mode           string `json:"mode,omitempty"`
+	Topic          string `json:"topic,omitempty"`
+	Value          string `json:"value,omitempty"`
+	TimeoutMinutes int    `json:"timeout_minutes,omitempty"`
+	Touch          bool   `json:"touch,omitempty"`
+}
+
+// Timeout is how long one detection keeps the display on.
+func (p PresenceConfig) Timeout() time.Duration {
+	if p.TimeoutMinutes <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(p.TimeoutMinutes) * time.Minute
 }
 
 type RotationItem struct {
@@ -239,6 +271,16 @@ func (k KioskConfig) PageName(index int) string {
 	return ""
 }
 
+// PageNameByID returns the name of the page with page_id id, or "".
+func (k KioskConfig) PageNameByID(id string) string {
+	for _, page := range k.Pages {
+		if page.PageID == id {
+			return page.Name
+		}
+	}
+	return ""
+}
+
 func (k KioskConfig) PageCount() int {
 	return len(k.PageURLs())
 }
@@ -252,6 +294,15 @@ func (k KioskConfig) PreloadIndexes() []int {
 		}
 	}
 	return out
+}
+
+// EnabledPageID returns the page_id of the enabled page at index, or "".
+func (k KioskConfig) EnabledPageID(index int) string {
+	enabled := k.enabledPages()
+	if index < 0 || index >= len(enabled) {
+		return ""
+	}
+	return enabled[index].PageID
 }
 
 func (k KioskConfig) enabledPages() []KioskPage {
@@ -492,6 +543,20 @@ func Validate(cfg *Config) error {
 	if err := validateInserts(cfg.Kiosk); err != nil {
 		return err
 	}
+	if lat, lon := cfg.Kiosk.Scheduler.Latitude, cfg.Kiosk.Scheduler.Longitude; lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return errors.New("location must have a latitude between -90 and 90 and a longitude between -180 and 180")
+	}
+	if presence := cfg.Kiosk.Presence; presence.Enabled {
+		if presence.Mode != "" && presence.Mode != "wake" && presence.Mode != "require" {
+			return errors.New("presence mode must be wake or require")
+		}
+		if presence.TimeoutMinutes < 0 || presence.TimeoutMinutes > 24*60 {
+			return errors.New("presence timeout must be between 1 minute and 24 hours")
+		}
+		if strings.ContainsAny(presence.Topic, "#+\x00") {
+			return errors.New("presence topic must not contain wildcards")
+		}
+	}
 	if every := cfg.Kiosk.Maintenance.ReloadEveryMinutes; every != 0 && (every < 10 || every > 7*24*60) {
 		return errors.New("scheduled reload interval must be 0 or between 10 minutes and 7 days")
 	}
@@ -525,8 +590,8 @@ func Validate(cfg *Config) error {
 		if brightness := page.DisplayOptions.Brightness; brightness != nil && (*brightness < 1 || *brightness > 100) {
 			return fmt.Errorf("kiosk page %d brightness must be between 1 and 100 percent", index+1)
 		}
-		if page.DisplayMode == "schedule" && (!validClock(page.Schedule.Start) || !validClock(page.Schedule.End)) {
-			return fmt.Errorf("kiosk page %d schedule requires valid HH:MM start and end values", index+1)
+		if page.DisplayMode == "schedule" && (!validScheduleClock(page.Schedule.Start) || !validScheduleClock(page.Schedule.End)) {
+			return fmt.Errorf("kiosk page %d schedule requires valid HH:MM (or sunrise/sunset) start and end values", index+1)
 		}
 	}
 	if strings.ContainsAny(cfg.Time.Timezone+cfg.Time.NTPServer, "\r\n\x00") {

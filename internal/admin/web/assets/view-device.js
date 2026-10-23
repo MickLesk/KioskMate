@@ -1,6 +1,6 @@
 // Device health: one readable checklist (power, touch, browser, network,
 // memory) with a fix for every warning, above the hardware controls.
-import { loadBrowserDoctor } from "./actions-core.js";
+import { doctorMessage, loadBrowserDoctor } from "./actions-core.js";
 import { esc, formatValue, getJSON, formatMQTTState, renderApp, runAction, state, t } from "./app-core.js";
 import { cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage } from "./renderers.js";
 import { renderHardware } from "./view-system.js";
@@ -47,6 +47,8 @@ export function healthChecks() {
   const disk = Number(system.disk_usage?.percent);
   if (Number.isFinite(disk)) checks.push(check(disk >= 90 ? "warn" : "ok", t("storage"), `${formatValue(system.disk_usage.available_gb, " GB")} ${t("available")}`, disk >= 90 ? t("checkDiskHint") : "", formatValue(disk, " %")));
   if (state.time) checks.push(check(state.time.synchronized ? "ok" : "warn", t("time"), state.time.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"), state.time.synchronized ? "" : t("checkTimeHint")));
+  const video = (state.doctor?.checks || []).find((item) => item.id === "video_decode");
+  if (video) checks.push(check(video.level === "error" ? "bad" : video.level === "warn" ? "warn" : "ok", t("doctorCheck_video_decode"), doctorMessage(video)));
   return checks;
 }
 

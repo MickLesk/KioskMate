@@ -103,7 +103,7 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 	for _, name := range []string{
 		"app-core.js", "view-dashboard.js", "view-kiosk.js", "view-mqtt.js", "view-system.js", "view-settings.js",
 		"actions-core.js", "actions-kiosk.js", "actions-mqtt.js", "actions-system.js", "actions-settings.js", "renderers.js", "main.js", "workflows.js",
-		"view-program.js", "view-pages.js", "view-device.js", "view-automations.js", "icons.js", "timeline.js",
+		"view-program.js", "view-pages.js", "view-device.js", "view-automations.js", "icons.js", "timeline.js", "clock.js", "setup-wizard.js",
 	} {
 		asset, err := content.ReadFile("web/assets/" + name)
 		if err != nil {

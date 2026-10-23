@@ -22,8 +22,11 @@ import (
 //   - "times": at each HH:MM in Times
 //
 // Start/End limit the insert to a daily window (overnight windows work), Days
-// to weekdays. When inserts overlap the one with the higher Priority wins,
-// equal priorities go to the insert listed first.
+// to weekdays; Times, Start and End may also be sun times (see sun.go). When
+// inserts overlap the one with the higher Priority wins, equal priorities go
+// to the insert listed first. With a Condition the insert only shows while an
+// MQTT topic has a given value, for example a camera only while the motion
+// sensor reports motion.
 type PageInsert struct {
 	ID              string   `json:"id"`
 	Name            string   `json:"name,omitempty"`
@@ -38,6 +41,61 @@ type PageInsert struct {
 	Days            []string `json:"days,omitempty"`
 	Priority        int      `json:"priority,omitempty"`
 	Disabled        bool     `json:"disabled,omitempty"`
+	// Condition limits the insert to times when an MQTT topic has a value.
+	Condition *InsertCondition `json:"condition,omitempty"`
+}
+
+// InsertCondition holds when the last message on Topic equals Value
+// (trimmed, case-insensitive), or differs from it with Negate. A topic that
+// has not sent anything yet never holds.
+type InsertCondition struct {
+	Topic  string `json:"topic"`
+	Value  string `json:"value"`
+	Negate bool   `json:"negate,omitempty"`
+}
+
+// Holds reports whether the condition is met for the last value seen on its
+// topic.
+func (c InsertCondition) Holds(value string, seen bool) bool {
+	if !seen {
+		return false
+	}
+	equal := strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(c.Value))
+	return equal != c.Negate
+}
+
+// ConditionTopics lists the MQTT topics inserts depend on.
+func (k KioskConfig) ConditionTopics() []string {
+	var out []string
+	for _, insert := range k.Inserts {
+		if insert.Condition != nil && !insert.Disabled && !slices.Contains(out, insert.Condition.Topic) {
+			out = append(out, insert.Condition.Topic)
+		}
+	}
+	return out
+}
+
+// InsertsWhere returns a copy whose conditional inserts are disabled unless
+// their condition holds according to lookup.
+func (k KioskConfig) InsertsWhere(lookup func(topic string) (string, bool)) KioskConfig {
+	if lookup == nil {
+		return k
+	}
+	changed := false
+	inserts := cloneInserts(k.Inserts)
+	for i, insert := range inserts {
+		if insert.Condition == nil || insert.Disabled {
+			continue
+		}
+		if value, seen := lookup(insert.Condition.Topic); !insert.Condition.Holds(value, seen) {
+			inserts[i].Disabled = true
+			changed = true
+		}
+	}
+	if changed {
+		k.Inserts = inserts
+	}
+	return k
 }
 
 // InsertSlot is one run of an insert.
@@ -68,6 +126,10 @@ func cloneInserts(inserts []PageInsert) []PageInsert {
 	for i := range out {
 		out[i].Times = slices.Clone(inserts[i].Times)
 		out[i].Days = slices.Clone(inserts[i].Days)
+		if inserts[i].Condition != nil {
+			condition := *inserts[i].Condition
+			out[i].Condition = &condition
+		}
 	}
 	return out
 }
@@ -113,8 +175,8 @@ func validateInserts(kiosk KioskConfig) error {
 				return fail("needs at least one time")
 			}
 			for _, at := range insert.Times {
-				if !validClock(at) {
-					return fail("time %q must use HH:MM", at)
+				if !validScheduleClock(at) {
+					return fail("time %q must use HH:MM, sunrise or sunset", at)
 				}
 			}
 		}
@@ -124,8 +186,17 @@ func validateInserts(kiosk KioskConfig) error {
 		if (insert.Start == "") != (insert.End == "") {
 			return fail("window needs both start and end")
 		}
-		if insert.Start != "" && (!validClock(insert.Start) || !validClock(insert.End)) {
-			return fail("window must use HH:MM")
+		if insert.Start != "" && (!validScheduleClock(insert.Start) || !validScheduleClock(insert.End)) {
+			return fail("window must use HH:MM, sunrise or sunset")
+		}
+		if condition := insert.Condition; condition != nil {
+			topic := strings.TrimSpace(condition.Topic)
+			if topic == "" || strings.ContainsAny(topic, "#+\x00") {
+				return fail("condition needs an MQTT topic without wildcards")
+			}
+			if strings.TrimSpace(condition.Value) == "" {
+				return fail("condition needs a value")
+			}
 		}
 		if insert.Repeat == "interval" && time.Duration(insert.DurationSeconds)*time.Second >= time.Duration(insert.EveryMinutes)*time.Minute {
 			return fail("duration must be shorter than the interval")
@@ -134,9 +205,9 @@ func validateInserts(kiosk KioskConfig) error {
 	return nil
 }
 
-// slotMinutes lists the minutes of the day at which an insert starts,
-// ignoring days and window.
-func (p PageInsert) slotMinutes() []int {
+// slotMinutes lists the minutes of day at which an insert starts, ignoring
+// days and window.
+func (k KioskConfig) slotMinutes(p PageInsert, day time.Time) []int {
 	var out []int
 	switch p.Repeat {
 	case "interval":
@@ -155,7 +226,7 @@ func (p PageInsert) slotMinutes() []int {
 		}
 	case "times":
 		for _, at := range p.Times {
-			if minute, ok := insertClock(at); ok {
+			if minute, ok := k.ResolveClock(at, day); ok {
 				out = append(out, minute)
 			}
 		}
@@ -165,17 +236,17 @@ func (p PageInsert) slotMinutes() []int {
 	return out
 }
 
-// allows reports whether a run starting at minute on weekday is inside the
+// allows reports whether a run starting at minute on day is inside the
 // insert's days and window.
-func (p PageInsert) allows(weekday time.Weekday, minute int) bool {
-	if !weekdayMatches(p.Days, weekday) {
+func (k KioskConfig) allows(p PageInsert, day time.Time, minute int) bool {
+	if !weekdayMatches(p.Days, day.Weekday()) {
 		return false
 	}
 	if p.Start == "" {
 		return true
 	}
-	start, ok1 := insertClock(p.Start)
-	end, ok2 := insertClock(p.End)
+	start, ok1 := k.ResolveClock(p.Start, day)
+	end, ok2 := k.ResolveClock(p.End, day)
 	if !ok1 || !ok2 || start == end {
 		return ok1 && ok2
 	}
@@ -211,15 +282,14 @@ func (k KioskConfig) InsertSlots(from, to time.Time) []InsertSlot {
 		if duration <= 0 {
 			continue
 		}
-		minutes := insert.slotMinutes()
 		for day := first; day.Before(to); day = day.AddDate(0, 0, 1) {
-			for _, minute := range minutes {
+			for _, minute := range k.slotMinutes(insert, day) {
 				start := time.Date(day.Year(), day.Month(), day.Day(), minute/60, minute%60, 0, 0, loc)
 				end := start.Add(duration)
 				if !end.After(from) || !start.Before(to) {
 					continue
 				}
-				if !insert.allows(start.Weekday(), minute) {
+				if !k.allows(insert, day, minute) {
 					continue
 				}
 				out = append(out, InsertSlot{Insert: insert, Index: index, Start: start, End: end})

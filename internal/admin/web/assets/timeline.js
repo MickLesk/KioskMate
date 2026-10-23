@@ -2,6 +2,7 @@
 // programme (time windows, rotation, display off) as one track and the
 // inserts from /api/program/timeline on top of it.
 import { esc, formatDuration, state, t } from "./app-core.js";
+import { rememberSun, resolveClock } from "./clock.js";
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const INSERT_COLORS = 4;
@@ -9,11 +10,6 @@ const INSERT_COLORS = 4;
 export function clock(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function clockMinutes(value) {
-  const [hour, minute] = String(value || "").split(":").map(Number);
-  return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : null;
 }
 
 // Each insert keeps its colour everywhere it is drawn.
@@ -36,8 +32,8 @@ function baseAt(kiosk, date) {
     const current = date.getHours() * 60 + date.getMinutes();
     for (const rule of kiosk.time_rules || []) {
       if (rule.disabled || (rule.days?.length && !rule.days.includes(weekday))) continue;
-      const start = clockMinutes(rule.start);
-      const end = clockMinutes(rule.end);
+      const start = resolveClock(rule.start, date);
+      const end = resolveClock(rule.end, date);
       if (start === null || end === null) continue;
       const active = start <= end ? current >= start && current < end : current >= start || current < end;
       if (active) return { kind: "window", name: rule.name || `${rule.start}–${rule.end}` };
@@ -88,6 +84,8 @@ export function renderTimeline({ timeline, kiosk, pageName = (id) => id, showNow
   const from = new Date(timeline?.from || Date.now()).getTime();
   const span = minutes * 60000;
   const inserts = kiosk.inserts || [];
+  rememberSun(timeline?.sun);
+  const conditions = timeline?.conditions || {};
   const runs = baseRuns(kiosk, from, minutes);
   const shown = visibleInserts(timeline?.segments, runs);
   const pct = (value) => Math.max(0, Math.min(100, value / span * 100)).toFixed(3);
@@ -100,8 +98,9 @@ export function renderTimeline({ timeline, kiosk, pageName = (id) => id, showNow
     const start = new Date(segment.start).getTime();
     const end = new Date(segment.end).getTime();
     const name = segment.name || pageName(segment.page_id);
-    const label = `${clock(start)}–${clock(end)} ${name} (${formatDuration(Math.round((end - start) / 1000))})`;
-    return `<span class="tl-insert ${insertTone(segment.insert_id, inserts)}" data-left="${pct(start - from)}" data-width="${Math.max(minutes > 360 ? 0.18 : 0.5, (end - start) / span * 100).toFixed(3)}" title="${esc(label)}"></span>`;
+    const conditional = segment.insert_id in conditions;
+    const label = `${clock(start)}–${clock(end)} ${name} (${formatDuration(Math.round((end - start) / 1000))})${conditional ? ` · ${t("insertConditionalShort")}` : ""}`;
+    return `<span class="tl-insert ${insertTone(segment.insert_id, inserts)}${conditional ? " conditional" : ""}${conditional && !conditions[segment.insert_id] ? " unmet" : ""}" data-left="${pct(start - from)}" data-width="${Math.max(minutes > 360 ? 0.18 : 0.5, (end - start) / span * 100).toFixed(3)}" title="${esc(label)}"></span>`;
   }).join("");
   const step = tickStep(minutes);
   const firstTick = Math.ceil(from / (step * 60000)) * step * 60000;
@@ -121,7 +120,8 @@ export function renderTimeline({ timeline, kiosk, pageName = (id) => id, showNow
         ${kinds.map((kind) => `<span class="legend-item base-${kind}"><i></i>${esc(t(`timelineKind_${kind}`))}</span>`).join("")}
         ${usedInserts.map((id) => {
           const insert = inserts.find((item) => item.id === id) || {};
-          return `<span class="legend-item ${insertTone(id, inserts)}"><i></i>${esc(insert.name || pageName(insert.page_id))}</span>`;
+          const conditional = id in conditions;
+          return `<span class="legend-item ${insertTone(id, inserts)}${conditional ? " conditional" : ""}"><i></i>${esc(insert.name || pageName(insert.page_id))}${conditional ? ` <small>${esc(t(conditions[id] ? "conditionMetNow" : "conditionNotMetNow"))}</small>` : ""}</span>`;
         }).join("")}
       </div>
     </div>`,

@@ -11,6 +11,7 @@ import { describeInsert } from "./view-program.js";
 
 function reasonText(scheduler) {
   const reason = scheduler?.reason;
+  if (reason === "no active time rule" && scheduler.presence === "present") return t("reasonPresence");
   if (reason === "insert") return t("reasonInsertNamed").replace("{name}", scheduler.active_insert || "");
   if (reason === "time") return t("reasonTimeWindow").replace("{name}", scheduler.active_rule || "");
   if (reason === "rotation") return t("reasonRotation");

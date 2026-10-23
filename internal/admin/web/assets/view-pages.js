@@ -1,10 +1,11 @@
 // Pages: everything the kiosk can show, as a library. When a page runs is
 // set in the programme; this view adds, edits, checks and filters pages.
 import { openPageWizard, showPageNow, synchronizeKioskWorkflow } from "./actions-kiosk.js";
-import { cloneConfig, esc, formatDuration, isDirty, markDirty, postJSON, renderApp, runAction, state, t } from "./app-core.js";
+import { cloneConfig, esc, formatDuration, isDirty, markDirty, postJSON, renderApp, runAction, state, t, thumbnailImg } from "./app-core.js";
 import { icon } from "./icons.js";
 import { button, collectPages, isLocalSource, normalizePages, sourceLabel, sourceMark } from "./renderers.js";
 import { describeInsert } from "./view-program.js";
+import { describeClock } from "./clock.js";
 import { localPageSummary } from "./view-kiosk.js";
 
 const NEW_TYPES = [
@@ -21,7 +22,7 @@ const KINDS = ["all", "base", "insert", "trigger", "unused", "disabled"];
 function pageUses(page) {
   const uses = [];
   if (page.display_mode === "duration") uses.push({ kind: "base", text: `${t("rotationShort")} · ${formatDuration(Number(page.duration_seconds || 3600))}` });
-  if (page.display_mode === "schedule") uses.push({ kind: "base", text: `${t("timeWindow")} ${page.schedule?.start || "--:--"}–${page.schedule?.end || "--:--"}` });
+  if (page.display_mode === "schedule") uses.push({ kind: "base", text: `${t("timeWindow")} ${describeClock(page.schedule?.start, false)}–${describeClock(page.schedule?.end, false)}` });
   if (page.display_mode === "mqtt") uses.push({ kind: "trigger", text: t("triggerBased") });
   for (const insert of state.config?.kiosk?.inserts || []) {
     if (insert.page_id === page.page_id && !insert.disabled) uses.push({ kind: "insert", text: `${t("insert")}: ${describeInsert(insert).split(" · ")[0]}` });
@@ -91,7 +92,8 @@ export function renderPages() {
       ${pages.length ? `<section class="page-library" aria-label="${esc(t("navPages"))}">${rows.map(({ page, index, uses, kinds }) => {
         const onScreen = page.page_id === activeID;
         return `<article class="library-card source-${esc(page.source_type)} ${page.disabled ? "disabled" : ""} ${onScreen ? "on-screen" : ""}" data-page-card="${index}" ${matches(page, kinds) ? "" : "hidden"}>
-          <div class="library-thumb">
+          <div class="library-thumb ${state.thumbnails?.[page.page_id] ? "has-image" : ""}">
+            ${thumbnailImg(page.page_id)}
             <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
             <span class="library-kind">${esc(sourceLabel(page.source_type))}</span>
             ${onScreen ? `<span class="library-live">${esc(t("onScreenNow"))}</span>` : ""}
