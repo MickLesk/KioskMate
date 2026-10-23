@@ -2,9 +2,9 @@
    logs, toasts, modals, the kiosk sequence editor, page wizard and workflow editor. */
 
 button {
-  min-height: 36px;
+  min-height: 40px;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-raised);
   color: var(--text);
   padding: 8px 12px;
@@ -35,7 +35,7 @@ button.primary {
   border-color: var(--green);
   background: var(--green);
   color: #07150e;
-  font-weight: 750;
+  font-weight: 650;
 }
 
 button.primary:hover {
@@ -58,10 +58,17 @@ button.danger-ghost {
 }
 
 .icon-command {
-  width: 36px;
+  display: inline-grid;
+  width: 40px;
+  place-items: center;
   padding: 0;
   font-size: 20px;
   line-height: 1;
+}
+
+button .icon {
+  flex: 0 0 auto;
+  vertical-align: -3px;
 }
 
 input,
@@ -70,7 +77,7 @@ textarea {
   width: 100%;
   min-height: 38px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--field);
   color: var(--text);
   padding: 8px 10px;
@@ -149,11 +156,12 @@ label {
 .data-section-head,
 .section-toolbar {
   display: flex;
-  min-height: 56px;
+  min-height: 60px;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -165,14 +173,15 @@ label {
 .card .body,
 .data-section-body,
 .disclosure-body {
-  padding: 16px;
+  padding: 18px 20px;
 }
 
 .card h3,
 .data-section h3,
 .section-toolbar h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 650;
 }
 
 .section-toolbar {
@@ -401,7 +410,7 @@ label {
   gap: 12px;
   margin: 0;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
   padding: 9px 11px;
 }
@@ -423,7 +432,7 @@ label {
 
 .notice {
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
   color: var(--soft);
   padding: 10px 12px;
@@ -463,6 +472,12 @@ label {
 
 .save-bar.dirty {
   border-color: var(--amber);
+}
+
+@media (max-width: 760px) {
+  .save-bar {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
 }
 
 .save-bar.dirty > span {
@@ -540,7 +555,7 @@ label {
   display: grid;
   gap: 4px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
   padding: 12px;
 }
@@ -567,7 +582,7 @@ label {
   display: grid;
   gap: 4px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
   padding: 10px;
 }
@@ -580,7 +595,7 @@ label {
 .selected-page-bar,
 .sequence-canvas {
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel);
 }
 
@@ -598,7 +613,7 @@ label {
   display: inline-grid;
   grid-auto-flow: column;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--field);
   padding: 3px;
 }
@@ -620,7 +635,7 @@ label {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel);
 }
 
@@ -714,7 +729,7 @@ label {
   min-width: 0;
   scroll-snap-align: start;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
 }
 
@@ -921,7 +936,7 @@ label {
   min-height: 96px;
   gap: 6px;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel);
   padding: 12px;
   cursor: pointer;
@@ -975,7 +990,7 @@ label {
   align-content: center;
   gap: 5px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 10px 12px;
 }
 
@@ -1057,7 +1072,7 @@ label {
 
 .wizard-options {
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 .wizard-options summary {
@@ -1099,7 +1114,7 @@ label {
   place-content: center;
   gap: 8px;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--field);
   text-align: center;
 }
@@ -1180,7 +1195,7 @@ label {
 
 .empty {
   border: 1px dashed var(--line-strong);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--muted);
   padding: 18px;
   text-align: center;
@@ -1223,7 +1238,7 @@ tr:last-child td {
 .jsonbox {
   min-height: 240px;
   border: 1px solid #283039;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #080b0e;
   color: #caeed7;
   padding: 12px;
@@ -1296,7 +1311,7 @@ tr:last-child td {
   gap: 10px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--green);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
   padding: 11px 12px;
@@ -1382,7 +1397,7 @@ tr:last-child td {
   align-items: start;
   gap: 10px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
   padding: 10px;
 }
@@ -1575,7 +1590,7 @@ tr:last-child td {
   align-items: start;
   gap: 10px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 10px;
 }
 

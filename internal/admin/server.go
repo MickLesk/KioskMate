@@ -243,6 +243,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/auth/password", s.auth(s.authPassword))
 	mux.HandleFunc("/api/status", s.auth(s.status))
 	mux.HandleFunc("/api/time", s.auth(s.timeStatus))
+	mux.HandleFunc("/api/program/timeline", s.auth(s.programTimeline))
 	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
 	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
@@ -865,6 +866,57 @@ func statusConfig(cfg *config.Config) map[string]any {
 		"mqtt":                     cfg.MQTT.Enabled,
 		"mqtt_password_configured": cfg.MQTT.Password != "",
 	}
+}
+
+// programTimeline previews which page insert is on screen when, for the hour
+// view and the "up next" list. POST previews unsaved pages and inserts.
+func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
+	snap := s.cfg.Snapshot()
+	kiosk := snap.Kiosk
+	minutes := 60
+	if r.Method == http.MethodPost {
+		var body struct {
+			Pages   []config.KioskPage  `json:"pages"`
+			Inserts []config.PageInsert `json:"inserts"`
+			Minutes int                 `json:"minutes"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if body.Pages != nil {
+			kiosk.Pages = body.Pages
+		}
+		kiosk.Inserts = body.Inserts
+		if body.Minutes > 0 {
+			minutes = body.Minutes
+		}
+	} else if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	} else if value, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && value > 0 {
+		minutes = value
+	}
+	minutes = min(minutes, 24*60)
+	now := time.Now()
+	if loc, err := time.LoadLocation(strings.TrimSpace(snap.Time.Timezone)); err == nil && strings.TrimSpace(snap.Time.Timezone) != "" {
+		now = now.In(loc)
+	}
+	from := now.Truncate(time.Minute)
+	upcoming := []config.ProgramSegment{}
+	for _, segment := range kiosk.ProgramTimeline(now, now.Add(24*time.Hour)) {
+		if segment.InsertID != "" {
+			upcoming = append(upcoming, segment)
+		}
+		if len(upcoming) == 8 {
+			break
+		}
+	}
+	segments := kiosk.ProgramTimeline(from, from.Add(time.Duration(minutes)*time.Minute))
+	if segments == nil {
+		segments = []config.ProgramSegment{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"now": now, "from": from, "minutes": minutes, "segments": segments, "upcoming": upcoming})
 }
 
 func (s *Server) timeStatus(w http.ResponseWriter, r *http.Request) {

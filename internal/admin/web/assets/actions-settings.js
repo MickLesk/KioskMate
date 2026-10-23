@@ -30,21 +30,21 @@ export function bindSettings() {
           });
         });
         document.querySelectorAll("[data-restore]").forEach((button) => button.addEventListener("click", () => restoreBackup(button.dataset.restore)));
-        if (state.view === "settings-admin" && !state.loaded.sessions) {
+        if (state.view === "device-settings" && !state.loaded.sessions) {
           state.loaded.sessions = true;
-		  getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view.startsWith("settings")) renderAppIfIdle(); }).catch(() => {});
+		  getJSON("/api/auth/sessions").then((data) => { state.sessions = data; if (state.view === "device-settings") renderAppIfIdle(); }).catch(() => {});
         }
-        if (state.view === "settings-admin" && !state.loaded.ssh) {
+        if (state.view === "device-settings" && !state.loaded.ssh) {
           state.loaded.ssh = true;
-          getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view.startsWith("settings")) renderApp(); }).catch(() => {});
+          getJSON("/api/ssh-key").then((data) => { state.ssh = data; if (state.view === "device-settings") renderApp(); }).catch(() => {});
         }
-        if (state.view === "settings-config" && !state.loaded.backups) {
+        if (state.view === "device-settings" && !state.loaded.backups) {
           state.loaded.backups = true;
           loadBackups().catch(() => {});
         }
-		if (state.view === "kiosk-display" && !state.loaded.telemetry) {
+		if (state.view === "device-display" && !state.loaded.telemetry) {
 		  state.loaded.telemetry = true;
-		  getJSON("/api/browser/telemetry").then((data) => { state.telemetry = data; if (state.view === "kiosk-display") renderAppIfIdle(); }).catch(() => { state.loaded.telemetry = false; });
+		  getJSON("/api/browser/telemetry").then((data) => { state.telemetry = data; if (state.view === "device-display") renderAppIfIdle(); }).catch(() => { state.loaded.telemetry = false; });
 		}
       }
 
@@ -163,7 +163,7 @@ export function bindSettings() {
       async function loadBackups() {
         const result = await getJSON("/api/config/backups");
         state.backups = result.backups || [];
-        if (state.view.startsWith("settings")) renderApp();
+        if (state.view === "device-settings") renderApp();
       }
 
       async function restoreBackup(path) {
@@ -248,7 +248,7 @@ export function bindSettings() {
 
       async function loadUpdateHistory() {
         state.updateHistory = await getJSON("/api/update/history");
-        if (state.view === "settings-updates") renderApp();
+        if (state.view === "device-maintenance") renderApp();
       }
 
       async function installUpdate() {
@@ -293,7 +293,7 @@ export function bindSettings() {
             const index = state.updateJobs.findIndex((item) => item.id === id);
             if (index >= 0) state.updateJobs[index] = job;
             else state.updateJobs.unshift(job);
-            if (state.view === "settings-updates") renderApp();
+            if (state.view === "device-maintenance") renderApp();
             if (job.finished || job.exit_code >= 0) {
               state.update = { ...(state.update || {}), installing: false };
               if (job.exit_code === 0) {
@@ -301,7 +301,7 @@ export function bindSettings() {
                 setTimeout(() => window.location.reload(), 3500);
               } else {
                 toast(t("updateFailed"), job.error || t("failed"), "error");
-                if (state.view === "settings-updates") renderApp();
+                if (state.view === "device-maintenance") renderApp();
               }
               loadUpdateHistory().catch(() => {});
               return;

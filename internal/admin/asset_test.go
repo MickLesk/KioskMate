@@ -103,6 +103,7 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 	for _, name := range []string{
 		"app-core.js", "view-dashboard.js", "view-kiosk.js", "view-mqtt.js", "view-system.js", "view-settings.js",
 		"actions-core.js", "actions-kiosk.js", "actions-mqtt.js", "actions-system.js", "actions-settings.js", "renderers.js", "main.js", "workflows.js",
+		"view-program.js", "view-pages.js", "view-device.js", "view-automations.js", "icons.js",
 	} {
 		asset, err := content.ReadFile("web/assets/" + name)
 		if err != nil {
@@ -115,12 +116,12 @@ func TestEmbeddedAdminUIContainsInteractionContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderKioskFlow", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "formatEvents", "nav-mobile-toggle", "state.auth.config", "Promise.allSettled", "renderFatal", "auth-error", "renderWorkflows", "/api/rules/"} {
+	for _, marker := range []string{"dirtyViews", "confirmDiscardChanges", "renderDayPicker", "validatePages", "validateScheduler", "validateMQTT", "renderKioskStorybook", "renderProgram", "openInsertDialog", "/api/program/timeline", "bottom-nav", "renderPageWizard", "synchronizeKioskWorkflow", "stateBanner", "readinessItem", "filteredLogs", "formatEvents", "nav-mobile-toggle", "state.auth.config", "Promise.allSettled", "renderFatal", "auth-error", "renderWorkflows", "/api/rules/"} {
 		if !strings.Contains(app.String(), marker) {
 			t.Errorf("embedded Admin assets missing %q", marker)
 		}
 	}
-	for _, marker := range []string{"allChangesSaved", "validationPageUrl", "dayShort_mon", "kioskSequence", "finishAndStart", "mqttReadiness", "noJobsYet", "logEvents", "navigationMenu"} {
+	for _, marker := range []string{"allChangesSaved", "validationPageUrl", "dayShort_mon", "kioskSequence", "finishAndStart", "mqttReadiness", "noJobsYet", "logEvents", "navigationMenu", "navProgram", "insertSummary"} {
 		if !strings.Contains(string(i18n), marker) {
 			t.Errorf("embedded i18n-de.json missing %q", marker)
 		}

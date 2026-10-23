@@ -479,7 +479,7 @@ function renderPages(pages) {
 		const rssMax = Math.max(1, ...points.map((item) => Number(item.rss_mb || 0)));
 		return `<div class="telemetry-chart" role="img" aria-label="${esc(t("runtimeTelemetry"))}">${points.map((item) => {
 		  const level = Math.max(4, Math.round(Math.max(Number(item.cpu_percent || 0) / cpuMax, Number(item.rss_mb || 0) / rssMax) * 100));
-		  return `<i style="height:${level}%" title="${esc(`${formatDate(item.at)} · ${cpuShare(item.cpu_percent)} CPU · ${formatValue(item.rss_mb, " MB")}`)}"></i>`;
+		  return `<i data-height="${level}" title="${esc(`${formatDate(item.at)} · ${cpuShare(item.cpu_percent)} CPU · ${formatValue(item.rss_mb, " MB")}`)}"></i>`;
 		}).join("")}</div>`;
 	  }
 

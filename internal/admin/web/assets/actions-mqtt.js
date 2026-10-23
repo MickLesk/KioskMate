@@ -55,7 +55,7 @@ export function bindMQTT() {
             const status = await getJSON("/api/status?fast=1", { timeout: 8000 });
             if (status) {
               applyCoreState({ status });
-			  if (state.view === "mqtt") renderAppIfIdle();
+			  if (state.view === "automations-mqtt") renderAppIfIdle();
               const stateName = status.mqtt?.state || "";
               if (status.mqtt?.connected || stateName === "auth_error" || stateName === "error" || stateName === "disabled") {
                 return;

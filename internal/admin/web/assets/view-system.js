@@ -1,6 +1,6 @@
 import { filteredLogs } from "./actions-system.js";
 import { esc, field, formatClock, formatValue, selectHtml, state, t } from "./app-core.js";
-import { button, hardwareEntries, kvTable, powerBanner, renderJobsHTML, renderRepair, stateBanner, statusTile, unsupportedControl } from "./renderers.js";
+import { button, hardwareEntries, kvTable, renderJobsHTML, renderRepair, stateBanner, statusTile, unsupportedControl } from "./renderers.js";
 
 export function renderHardware() {
         const hw = state.hardware || {};
@@ -14,7 +14,6 @@ export function renderHardware() {
         const touch = hw.system?.touch_devices;
         return `
           <div class="page-stack">
-            ${powerBanner()}
             <section class="status-strip">
               ${statusTile(t("systemLoad"), formatValue(load), cores && Number(load || 0) > cores ? "warn" : "", `${cores ? `${cores} ${t("cpuCoresUnit")} · ` : ""}${t("temperature")} ${formatValue(hw.system?.processor_temperature_c, " °C")}`)}
               ${statusTile("RAM", formatValue(hw.system?.memory_usage_percent, "%"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}

@@ -21,9 +21,12 @@
   --red: #ef7070;
   --red-soft: #3c2020;
   --blue: #70b7e8;
+  --blue-soft: #1d2b35;
+  --violet: #b49cf0;
+  --rose: #ef8fb3;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --radius: 8px;
-  --sidebar: 252px;
+  --radius: 12px;
+  --sidebar: 248px;
 }
 
 :root[data-theme="light"] {
@@ -46,6 +49,9 @@
   --red: #c84444;
   --red-soft: #fde5e5;
   --blue: #176f9f;
+  --blue-soft: #dcebf5;
+  --violet: #6b4fc0;
+  --rose: #b23a6a;
   --shadow: 0 1px 3px rgba(20, 35, 28, 0.08);
 }
 

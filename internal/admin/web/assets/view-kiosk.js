@@ -1,89 +1,6 @@
-import { formatSchedulerReason } from "./actions-core.js";
-import { esc, field, formatDate, formatDuration, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
-import { button, isLocalSource, normalizePages, renderRotation, renderRules, sourceLabel, sourceMark, stateBanner, statusTile } from "./renderers.js";
-import { renderWorkflows } from "./workflows.js";
-
-export function renderKiosk() {
-        const kiosk = state.config?.kiosk || {};
-        const browser = state.status?.browser || {};
-        const pages = normalizePages(kiosk.pages, kiosk.urls);
-        const enabledPages = pages.filter((page) => !page.disabled && page.url).length;
-        const selected = selectedKioskPageIndex(pages);
-        const current = pages[selected] || {};
-		const override = browser.override || {};
-        return `
-          <div class="page-stack kiosk-workspace">
-            <section class="kiosk-commandbar">
-              <div class="section-summary">
-                <strong>${esc(t("kioskSequence"))}</strong>
-                <span>${esc(t("kioskSequenceHint"))}</span>
-              </div>
-              <div class="actions">
-                <div class="segmented" role="group" aria-label="${esc(t("editorView"))}">
-                  <button data-kiosk-mode="storybook" class="${state.kioskEditorMode === "storybook" ? "active" : ""}">${esc(t("storybookView"))}</button>
-                  <button data-kiosk-mode="flow" class="${state.kioskEditorMode === "flow" ? "active" : ""}">${esc(t("flowView"))}</button>
-                </div>
-                <button class="primary" data-action="page-wizard-new">+ ${esc(t("newPage"))}</button>
-              </div>
-            </section>
-            ${!kiosk.scheduler?.enabled && (kiosk.time_rules || []).length ? stateBanner("warn", t("scheduler"), t("scheduleNeedsEnable"), "") : ""}
-            <section class="kiosk-overview" aria-label="${esc(t("workflowStatus"))}">
-              <div><span>${esc(t("pages"))}</span><strong>${enabledPages} / ${pages.length}</strong></div>
-              <div><span>${esc(t("scheduler"))}</span><strong class="${kiosk.scheduler?.enabled ? "ok-text" : "warn-text"}">${esc(kiosk.scheduler?.enabled ? t("active") : t("disabled"))}</strong></div>
-              <div><span>${esc(t("currentPage"))}</span><strong>${esc(browser.page_name || current.name || "-")}</strong></div>
-              <div><span>${esc(t("nextSwitch"))}</span><strong>${esc(formatDate(browser.scheduler?.next_switch))}</strong></div>
-			  <div><span>${esc(t("temporaryOverride"))}</span><strong class="${override.active ? "warn-text" : ""}">${esc(override.active ? `${pages[override.page]?.name || override.page + 1} · ${formatDate(override.until)}` : t("inactive"))}</strong></div>
-            </section>
-            <section class="sequence-canvas ${state.kioskEditorMode === "flow" ? "flow-mode" : "storybook-mode"}">
-              <div class="sequence-canvas-head">
-                <div><h3>${esc(state.kioskEditorMode === "flow" ? t("visualWorkflow") : t("linearSequence"))}</h3><span>${esc(state.kioskEditorMode === "flow" ? t("flowViewHint") : t("storybookViewHint"))}</span></div>
-                ${switchHtml("scheduler-enabled", t("runAutomatically"), !!kiosk.scheduler?.enabled)}
-              </div>
-              ${state.kioskEditorMode === "flow" ? renderKioskFlow(pages, selected) : renderKioskStorybook(pages, selected)}
-            </section>
-            <section class="selected-page-bar">
-              <div>
-                <span>${esc(t("selectedPage"))}</span>
-                <strong>${esc(current.name || t("noPagesConfigured"))}</strong>
-                <small>${esc(current.url || t("addFirstPageHint"))}</small>
-              </div>
-              <div class="actions">
-                <button data-action="page-activate" ${pages.length ? "" : "disabled"} title="${esc(t("activatePageHint"))}">${esc(t("activatePage"))}</button>
-                <button data-action="page-check" ${pages.length ? "" : "disabled"} title="${esc(t("checkPageHint"))}">${esc(t("checkPage"))}</button>
-                <button data-action="page-wizard-edit" ${pages.length ? "" : "disabled"}>${esc(t("editPage"))}</button>
-              </div>
-            </section>
-            <div id="page-check-output" class="action-feedback">${esc(current.url || browser.url || "-")}</div>
-			<section class="override-bar">
-			  <div><strong>${esc(t("temporaryOverride"))}</strong><span>${esc(t("temporaryOverrideHint"))}</span></div>
-			  <label><span>${esc(t("durationMinutes"))}</span><input id="override-duration" type="number" min="1" max="1440" value="60"></label>
-			  <button class="primary" data-action="override-apply" ${pages.length ? "" : "disabled"}>${esc(t("showSelectedTemporarily"))}</button>
-			  ${override.active ? `<button data-action="override-clear">${esc(t("endOverride"))}</button>` : ""}
-			</section>
-            ${renderWorkflows()}
-            <details class="card disclosure advanced-settings">
-              <summary>${esc(t("sequenceAdvanced"))}</summary>
-              <div class="disclosure-body advanced-sequence-grid">
-                <div class="form-grid">
-                  ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
-                  <div class="readonly-field"><span>${esc(t("schedulerMode"))}</span><strong>${esc(t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}</strong></div>
-                </div>
-                <div class="actions">
-                  ${button("renderCheck", "render-check")}
-                  ${button("checkAllPages", "page-check-all")}
-                  ${button("importPages", "pages-import")}
-                  ${button("exportPages", "pages-export")}
-                </div>
-                <input id="pages-import-file" type="file" accept="application/json,.json" class="hidden" />
-                <div id="page-check-all-output" class="check-panel span-2"></div>
-              </div>
-            </details>
-            <div class="save-bar">
-              <span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span>
-              <div class="actions">${button("save", "kiosk-save")}${button("saveStartKiosk", "kiosk-save-restart", "primary")}</div>
-            </div>
-          </div>`;
-      }
+// Page sequence helpers shared by the programme and pages views.
+import { esc, formatDuration, state, t } from "./app-core.js";
+import { isLocalSource, normalizePages, sourceLabel, sourceMark } from "./renderers.js";
 
       export function selectedKioskPageIndex(pages) {
         // state.status.browser.active is in enabled-page index space (matches backend
@@ -124,10 +41,15 @@ export function renderKiosk() {
       export function pageTimingLabel(page) {
         if (page.display_mode === "schedule") return `${page.schedule?.start || "--:--"} - ${page.schedule?.end || "--:--"}`;
         if (page.display_mode === "mqtt") return t("mqttTrigger");
+        if (page.display_mode === "insert") return t("insertOnlyShort");
         return formatDuration(Number(page.duration_seconds || 3600));
       }
 
-      function renderKioskStorybook(pages, selected) {
+      export function displayModeLabel(mode) {
+        return t({ schedule: "fixedSchedule", mqtt: "triggerBased", insert: "insertOnly" }[mode] || "customDuration");
+      }
+
+      export function renderKioskStorybook(pages, selected) {
         if (!pages.length) return `<div class="sequence-empty"><strong>${esc(t("noPagesConfigured"))}</strong><span>${esc(t("addFirstPageHint"))}</span><button class="primary" data-action="page-wizard-new">+ ${esc(t("newPage"))}</button></div>`;
         return `<div class="storybook-track" data-sequence-track>
           ${pages.map((page, index) => `${index ? `<button class="insert-page" data-page-insert="${index}" title="${esc(t("insertPageHere"))}">+</button>` : ""}${renderSequenceCard(page, index, selected)}`).join("")}
@@ -135,7 +57,7 @@ export function renderKiosk() {
         </div>`;
       }
 
-      function localPageSummary(page) {
+      export function localPageSummary(page) {
         const local = page.local || {};
         if (page.source_type === "slideshow") return local.folder || t("notConfigured");
         return local.title || sourceLabel(page.source_type);
@@ -150,7 +72,7 @@ export function renderKiosk() {
           <button class="page-preview-tile" data-page-edit="${index}" title="${esc(t("editPage"))}">
             <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
             <strong>${esc(host)}</strong>
-            <small>${esc(page.display_mode === "schedule" ? t("fixedSchedule") : page.display_mode === "mqtt" ? t("triggerBased") : t("customDuration"))}</small>
+            <small>${esc(displayModeLabel(page.display_mode))}</small>
           </button>
           <div class="sequence-card-copy"><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><span>${esc(isLocalSource(page.source_type) ? localPageSummary(page) : page.url || t("notConfigured"))}</span></div>
           <div class="sequence-card-actions">
@@ -160,51 +82,4 @@ export function renderKiosk() {
             <button class="danger-ghost" data-page-remove="${index}" title="${esc(t("remove"))}">&times;</button>
           </div>
         </article>`;
-      }
-
-      function renderKioskFlow(pages, selected) {
-        return `<div class="flow-canvas">
-          <div class="flow-track">
-            <div class="flow-terminal">${esc(t("flowStart"))}</div>
-            ${pages.map((page, index) => `<span class="flow-arrow">&rarr;</span><article class="flow-node ${selected === index ? "selected" : ""} ${page.disabled ? "disabled" : ""}" data-page-select="${index}" data-page-edit="${index}"><span>${index + 1}</span><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><small>${esc(pageTimingLabel(page))}</small></article>`).join("")}
-            <span class="flow-arrow">&rarr;</span><div class="flow-terminal">${esc(kioskLoops() ? t("loop") : t("flowEnd"))}</div>
-            <button class="flow-add" data-page-insert="${pages.length}">+ ${esc(t("newPage"))}</button>
-          </div>
-        </div>`;
-      }
-
-      function kioskLoops() {
-        return (state.config?.kiosk?.rotation || []).length > 1;
-      }
-
-      function renderScheduler() {
-        const kiosk = state.config?.kiosk || {};
-        const browser = state.status?.browser || {};
-        return `
-          <div class="page-stack">
-            <section class="status-strip">
-              ${statusTile(t("scheduler"), kiosk.scheduler?.enabled ? t("enabled") : t("disabled"), kiosk.scheduler?.enabled ? "ok" : "", t(kiosk.scheduler?.mode === "time" ? "timeMode" : kiosk.scheduler?.mode === "hybrid" ? "mixedMode" : "rotationMode"))}
-              ${statusTile(t("currentPage"), browser.page_name || "-", "", formatSchedulerReason(browser.scheduler?.reason))}
-              ${statusTile(t("nextSwitch"), formatDate(browser.scheduler?.next_switch), "", browser.scheduler?.active_rule || t("noActiveRule"))}
-            </section>
-            <div class="card">
-              <div class="head"><div><h3>${esc(t("schedulerSettings"))}</h3><span class="section-kicker">${esc(t("scheduler"))}</span></div></div>
-              <div class="body schedule-settings">
-                ${switchHtml("scheduler-enabled", t("enabled"), !!kiosk.scheduler?.enabled)}
-                ${selectHtml("scheduler-mode", t("mode"), kiosk.scheduler?.mode || "rotation", [["rotation", t("rotationMode")], ["time", t("timeMode")], ["hybrid", t("mixedMode")]])}
-                ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
-              </div>
-            </div>
-            <div class="schedule-columns">
-              <section class="data-section">
-                <div class="data-section-head"><div><h3>${esc(t("rotation"))}</h3><span class="section-kicker">${esc(t("rotationSummary"))}</span></div><div class="actions">${button("buildRotation", "rotation-build")}${button("clearRotation", "rotation-clear")}${button("addRotation", "rotation-add", "primary")}</div></div>
-                <div class="data-section-body" id="rotation-list">${renderRotation(kiosk.rotation || [])}</div>
-              </section>
-              <section class="data-section">
-                <div class="data-section-head"><div><h3>${esc(t("timeRules"))}</h3><span class="section-kicker">${esc(t("timeRuleSummary"))}</span></div><div class="actions">${button("clearRules", "rules-clear")}${button("addRule", "rule-add", "primary")}</div></div>
-                <div class="data-section-body" id="rules-list">${renderRules(kiosk.time_rules || [])}</div>
-              </section>
-            </div>
-            <div class="save-bar"><span data-dirty-indicator>${esc(t(isDirty() ? "unsavedChanges" : "allChangesSaved"))}</span><button class="primary" data-busy="scheduler-save" data-action="scheduler-save">${esc(t("save"))}</button></div>
-          </div>`;
       }

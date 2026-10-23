@@ -72,6 +72,8 @@ type KioskConfig struct {
 	DisplayBackend string `json:"display_backend,omitempty"`
 	// Rules are event-driven workflow steps on top of the playlist.
 	Rules []WorkflowRule `json:"rules,omitempty"`
+	// Inserts interleave pages on a fixed rhythm (see inserts.go).
+	Inserts []PageInsert `json:"inserts,omitempty"`
 }
 
 // KioskMaintenance schedules soft page reloads. Dashboards that run for days
@@ -368,6 +370,7 @@ func (cfg *Config) Snapshot() *Config {
 		clone.Kiosk.TimeRules[i].Days = slices.Clone(cfg.Kiosk.TimeRules[i].Days)
 	}
 	clone.Kiosk.Rules = cloneRules(cfg.Kiosk.Rules)
+	clone.Kiosk.Inserts = cloneInserts(cfg.Kiosk.Inserts)
 	return &clone
 }
 
@@ -484,6 +487,9 @@ func Validate(cfg *Config) error {
 		return errors.New("maximum open tabs must be between 1 and 8")
 	}
 	if err := validateRules(cfg.Kiosk); err != nil {
+		return err
+	}
+	if err := validateInserts(cfg.Kiosk); err != nil {
 		return err
 	}
 	if every := cfg.Kiosk.Maintenance.ReloadEveryMinutes; every != 0 && (every < 10 || every > 7*24*60) {
