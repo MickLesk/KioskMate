@@ -69,7 +69,7 @@ export function bindHardware() {
           state.loaded.repair = true;
           getJSON("/api/repair").then((data) => {
             state.repair = data;
-            if (state.view === "system-maintenance") renderApp();
+            if (state.view === "device-maintenance") renderApp();
           }).catch(() => {});
         }
       }
@@ -98,7 +98,7 @@ export function bindHardware() {
           state.jobs.unshift(job);
           pollJob(job.id);
           await refreshCore();
-          clearDirty("system-device");
+          clearDirty("device");
           renderApp();
         }, t("saved"));
       }
@@ -112,7 +112,7 @@ export function bindHardware() {
             const job = await getJSON("/api/jobs/" + encodeURIComponent(id));
             const index = state.jobs.findIndex((item) => item.id === id);
             if (index >= 0) state.jobs[index] = job;
-            if (state.view === "system" || state.view === "system-maintenance") {
+            if (state.view === "device-maintenance") {
               const output = document.getElementById("job-output");
               if (output) output.innerHTML = renderJobsHTML();
             }

@@ -769,7 +769,19 @@ func compareVersion(left, right string) int {
 			return av - bv
 		}
 	}
+	// 1.0.0-pre comes before 1.0.0, so a pre-release is offered the final
+	// release as an update.
+	switch left, right := isPrerelease(left), isPrerelease(right); {
+	case left && !right:
+		return -1
+	case right && !left:
+		return 1
+	}
 	return 0
+}
+
+func isPrerelease(version string) bool {
+	return strings.ContainsAny(strings.TrimPrefix(version, "v"), "-~")
 }
 
 func versionParts(version string) []int {

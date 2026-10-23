@@ -4,76 +4,83 @@ import { KioskMateAPI } from "./api.js";
 import { I18N, loadLanguage } from "./i18n.js";
 import { button, stateBanner } from "./renderers.js";
 import { KioskMateUI } from "./ui-components.js";
+import { icon } from "./icons.js";
+import { renderAutomations } from "./view-automations.js";
 import { renderDashboard } from "./view-dashboard.js";
-import { renderKiosk } from "./view-kiosk.js";
+import { renderDeviceHealth } from "./view-device.js";
 import { renderMQTT } from "./view-mqtt.js";
+import { renderPages } from "./view-pages.js";
+import { renderProgram } from "./view-program.js";
 import { renderSettingsAdmin, renderSettingsBrowser, renderSettingsConfig, renderSettingsMaintenance } from "./view-settings.js";
-import { renderHardware, renderLogs, renderSystemActions, renderTerminal } from "./view-system.js";
+import { renderLogs, renderSystemActions } from "./view-system.js";
 
+// Five areas. Automations and Device have sections, shown as tabs inside
+// the area; the phone layout shows a bottom bar with the first three areas.
 const NAV = [
-        { id: "dashboard", label: "dashboard", hint: "overview" },
+        { id: "dashboard", label: "navOverview", hint: "navOverviewHint", icon: "overview" },
+        { id: "program", label: "navProgram", hint: "navProgramHint", icon: "program" },
+        { id: "pages", label: "navPages", hint: "navPagesHint", icon: "pages" },
         {
-          id: "kiosk",
-          label: "kiosk",
-          hint: "kioskStreaming",
+          id: "automations",
+          label: "navAutomations",
+          hint: "navAutomationsHint",
+          icon: "automations",
           children: [
-            { id: "kiosk-pages", label: "pagesAndWorkflow", hint: "kioskStreaming" },
-            { id: "kiosk-display", label: "displayRendering", hint: "performance" },
-          ],
-        },
-        { id: "mqtt", label: "mqtt", hint: "mqttSettings" },
-        {
-          id: "system",
-          label: "system",
-          hint: "systemTools",
-          children: [
-            { id: "system-device", label: "deviceAndTime", hint: "hardwareStatus" },
-            { id: "system-maintenance", label: "systemMaintenance", hint: "privilegedActions" },
-            { id: "system-logs", label: "logs", hint: "refreshLogs" },
+            { id: "automations", label: "workflows" },
+            { id: "automations-mqtt", label: "mqttConnection" },
           ],
         },
         {
-          id: "settings",
-          label: "settings",
-          hint: "adminSettings",
+          id: "device",
+          label: "navDevice",
+          hint: "navDeviceHint",
+          icon: "device",
           children: [
-            { id: "settings-admin", label: "adminAccess", hint: "adminSettings" },
-            { id: "settings-config", label: "configData", hint: "configFile" },
-            { id: "settings-updates", label: "updatesAndRepair", hint: "update" },
+            { id: "device", label: "deviceHealth" },
+            { id: "device-display", label: "displayRendering" },
+            { id: "device-maintenance", label: "systemMaintenance" },
+            { id: "device-logs", label: "logs" },
+            { id: "device-settings", label: "settings" },
           ],
         },
       ];
 
+      // Views of earlier versions, so a remembered view still opens.
       const VIEW_ALIASES = {
-        kiosk: "kiosk-pages",
-        scheduler: "kiosk-pages",
-        "kiosk-schedule": "kiosk-pages",
-        system: "system-device",
-        "system-actions": "system-maintenance",
-        "system-hardware": "system-device",
-        settings: "settings-admin",
-        "settings-browser": "kiosk-display",
-        "settings-maintenance": "settings-updates",
+        kiosk: "program",
+        "kiosk-pages": "program",
+        scheduler: "program",
+        "kiosk-schedule": "program",
+        "kiosk-display": "device-display",
+        mqtt: "automations-mqtt",
+        system: "device",
+        "system-device": "device",
+        "system-hardware": "device",
+        "system-actions": "device-maintenance",
+        "system-maintenance": "device-maintenance",
+        "system-logs": "device-logs",
+        "system-terminal": "device-maintenance",
+        settings: "device-settings",
+        "settings-admin": "device-settings",
+        "settings-config": "device-settings",
+        "settings-browser": "device-display",
+        "settings-maintenance": "device-maintenance",
+        "settings-updates": "device-maintenance",
       };
+
+      export function resolveView(view) {
+        return VIEW_ALIASES[view] || view;
+      }
 
       const root = document.getElementById("root");
       const toasts = document.getElementById("toasts");
       export const modalRoot = document.getElementById("modal-root");
       const storedTheme = localStorage.getItem("kioskmate.theme");
-      function storedList(key, fallback = []) {
-        try {
-          const value = JSON.parse(localStorage.getItem(key) || "null");
-          return Array.isArray(value) ? value : fallback;
-        } catch {
-          return fallback;
-        }
-      }
-
       export const state = {
         lang: localStorage.getItem("kioskmate.lang") || (((navigator.language || "en").toLowerCase().startsWith("de")) ? "de" : "en"),
         theme: storedTheme === "light" ? "light" : "dark",
         themeExplicit: localStorage.getItem("kioskmate.theme.explicit") === "1",
-        view: VIEW_ALIASES[localStorage.getItem("kioskmate.view")] || localStorage.getItem("kioskmate.view") || "dashboard",
+        view: resolveView(localStorage.getItem("kioskmate.view") || "dashboard"),
         auth: null,
         config: null,
         persistedConfig: null,
@@ -90,6 +97,7 @@ const NAV = [
 		telemetry: null,
         diagnostics: null,
         repair: null,
+        timeline: null,
         pageFilter: "",
         kioskEditorMode: localStorage.getItem("kioskmate.kioskEditorMode") === "flow" ? "flow" : "storybook",
         kioskSelectedPageIndex: null,
@@ -110,28 +118,37 @@ const NAV = [
         dirtyViews: new Set(),
         snapshotURL: "",
         snapshotTime: "",
-        navExpanded: new Set(storedList("kioskmate.navExpanded", [])),
         mobileNavOpen: false,
       };
 
 	  let authCountdownTimer = null;
 
+      const KIOSK_DIRTY = ["page-name-", "page-url-", "page-disabled-", "scheduler-", "rotation-", "rule-"];
       const DIRTY_PREFIXES = {
-        "kiosk-pages": ["page-name-", "page-url-", "page-disabled-", "scheduler-", "rotation-", "rule-"],
-        "kiosk-display": ["kiosk-", "perf-", "watchdog-"],
-        mqtt: ["mqtt-"],
-        "system-device": ["time-"],
-        "settings-admin": ["admin-"],
-        "settings-config": ["config-raw"],
+        program: KIOSK_DIRTY,
+        pages: KIOSK_DIRTY,
+        "device-display": ["kiosk-", "perf-", "watchdog-"],
+        "automations-mqtt": ["mqtt-"],
+        device: ["time-"],
+        "device-settings": ["admin-", "config-raw"],
       };
 
+      const KIOSK_SAVE = ["kiosk-save", "kiosk-save-restart"];
       const SAVE_ACTIONS = {
-        "kiosk-pages": ["kiosk-save", "kiosk-save-restart"],
-        "kiosk-display": ["browser-settings-save", "browser-settings-save-restart"],
-        mqtt: ["mqtt-save"],
-        "settings-admin": ["admin-save"],
-        "settings-config": ["config-raw-save"],
+        program: KIOSK_SAVE,
+        pages: KIOSK_SAVE,
+        automations: KIOSK_SAVE,
+        "device-display": ["browser-settings-save", "browser-settings-save-restart"],
+        "automations-mqtt": ["mqtt-save"],
+        "device-settings": ["admin-save", "config-raw-save"],
       };
+
+      // Pages, programme and workflows are all saved with the kiosk config,
+      // so unsaved changes in one of them belong to all three.
+      export const KIOSK_VIEWS = ["program", "pages", "automations"];
+      function dirtyKey(view) {
+        return KIOSK_VIEWS.includes(view) ? "kiosk" : view;
+      }
 
       document.documentElement.dataset.theme = state.theme;
 
@@ -351,17 +368,17 @@ const NAV = [
       }
 
       export function markDirty(view = state.view) {
-        state.dirtyViews.add(view);
+        state.dirtyViews.add(dirtyKey(view));
         updateDirtyUI();
       }
 
       export function clearDirty(view = state.view) {
-        state.dirtyViews.delete(view);
+        state.dirtyViews.delete(dirtyKey(view));
         updateDirtyUI();
       }
 
       export function isDirty(view = state.view) {
-        return state.dirtyViews.has(view);
+        return state.dirtyViews.has(dirtyKey(view));
       }
 
       function updateDirtyUI() {
@@ -380,7 +397,7 @@ const NAV = [
       function confirmDiscard(view = state.view) {
         if (!isDirty(view)) return true;
         if (!confirm(t("confirmDiscardChanges"))) return false;
-        state.dirtyViews.delete(view);
+        state.dirtyViews.delete(dirtyKey(view));
         if (state.persistedConfig) state.config = JSON.parse(JSON.stringify(state.persistedConfig));
         return true;
       }
@@ -487,11 +504,10 @@ const NAV = [
 	  }
 
 	  const VIEW_DATA = {
-		dashboard: ["operations", "events"],
-		system: ["jobs"],
-		"system-maintenance": ["jobs"],
-		"system-device": ["zones", "jobs"],
-		"settings-updates": ["updateHistory"],
+		dashboard: ["operations", "events", "timeline"],
+		program: ["timeline"],
+		device: ["zones", "jobs"],
+		"device-maintenance": ["jobs", "updateHistory"],
 	  };
 	  const VIEW_DATA_SOURCES = {
 		operations: ["/api/browser/operations", (value) => ({ operations: value })],
@@ -499,6 +515,7 @@ const NAV = [
 		jobs: ["/api/jobs?limit=25", (value) => ({ jobs: value })],
 		zones: ["/api/time/zones", (value) => ({ zones: value })],
 		updateHistory: ["/api/update/history", (value) => ({ updateHistory: value })],
+		timeline: ["/api/program/timeline?minutes=60", (value) => ({ timeline: value })],
 	  };
 	  const viewDataLoadedAt = new Map();
 
@@ -524,7 +541,7 @@ const NAV = [
 		if (state.view === view && state.auth?.authenticated) renderApp({ background: true });
 	  }
 
-	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events }) {
+	  export function applyCoreState({ cfg, status, privilege, timeInfo, zones, jobs, updateHistory, operations, events, timeline }) {
 		if (cfg) {
 		  state.config = cfg;
 		  state.persistedConfig = JSON.parse(JSON.stringify(cfg));
@@ -542,6 +559,7 @@ const NAV = [
 		if (updateHistory) state.updateHistory = updateHistory;
 		if (operations) state.operations = operations;
 		if (events) state.events = events.events || [];
+		if (timeline) state.timeline = timeline;
 		syncThemeFromConfig();
 	  }
 
@@ -710,25 +728,21 @@ const NAV = [
 		if (authCountdownTimer) clearInterval(authCountdownTimer);
 		authCountdownTimer = null;
         const browser = state.status?.browser || {};
-        const mqtt = state.status?.mqtt || {};
         const timeInfo = state.time || {};
+        const device = state.hardware?.device || {};
+        const host = device.hostname || state.status?.hostname || "";
+        const area = activeNavItem();
         if (!root.querySelector(":scope > .layout")) root.innerHTML = "";
+        const running = !!browser.running;
         const html = `
-          <div class="layout">
-            <aside class="sidebar ${state.mobileNavOpen ? "mobile-open" : ""}">
+          <div class="layout ${state.mobileNavOpen ? "nav-open" : ""}">
+            <aside class="sidebar" id="sidebar" aria-label="${esc(t("navigationMenu"))}">
               <div class="brand">
-                <div class="brand-identity">
-                  <div class="mark">K</div>
-                  <div>
-                    <h1>KioskMate</h1>
-                    <p>${esc(t("appSubtitle"))}</p>
-                  </div>
-                </div>
-                <button class="mobile-menu-toggle icon-command" data-action="nav-mobile-toggle" aria-expanded="${state.mobileNavOpen}" title="${esc(t("navigationMenu"))}" aria-label="${esc(t("navigationMenu"))}">☰</button>
+                <div class="mark">K</div>
+                <div class="brand-copy"><h1>KioskMate</h1><p>${esc(host || t("appSubtitle"))}</p></div>
+                <button class="icon-command sidebar-close" data-action="nav-mobile-toggle" aria-label="${esc(t("close"))}" title="${esc(t("close"))}">${icon("close", 18)}</button>
               </div>
-              <nav class="nav">
-                ${renderNav()}
-              </nav>
+              <nav class="nav" aria-label="${esc(t("mainNavigation"))}">${renderNav()}</nav>
               <div class="sidebar-foot">
                 <div class="sidebar-selects">
                   ${selectHtml("lang", t("language"), state.lang, [["en", "English"], ["de", "Deutsch"]])}
@@ -737,32 +751,38 @@ const NAV = [
                 <button data-action="logout">${esc(t("logout"))}</button>
               </div>
             </aside>
+            <div class="nav-scrim" data-action="nav-mobile-toggle" aria-hidden="true"></div>
             <main class="main">
               <header class="topbar">
                 <div class="title">
-                  <h2>${esc(t(activeNavItem().label || "dashboard"))}</h2>
-                  <p>${esc(t(activeNavItem().hint || "overview"))}</p>
+                  <h2>${esc(t(area.label))}</h2>
+                  <p>${esc(t(area.hint || "overview"))}</p>
                 </div>
                 <div class="chips">
-                  ${state.update?.update_available ? `<button class="chip update-chip" data-view="settings-updates" title="${esc(t("openUpdateHint"))}">${esc(t("updateAvailable"))}: ${esc(state.update.latest_version || "")}</button>` : ""}
-                  <button class="chip ${browser.running ? "ok" : "bad"}" data-view="dashboard" title="${esc(t("openDashboardStatusHint"))}">${esc(browser.running ? t("running") : t("stopped"))}</button>
-                  <button class="chip ${mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : ""}" data-view="mqtt" title="${esc(mqtt.last_error || t("openMQTTStatusHint"))}">MQTT: ${esc(formatMQTTState(mqtt.state))}</button>
-                  <button class="chip ${timeInfo.synchronized ? "ok" : "warn"}" data-view="system-device" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></button>
-                  <span class="chip">${esc(state.auth?.version || "dev")}</span>
-                  <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">↻</button>
+                  ${state.update?.update_available ? `<button class="chip update-chip" data-view="device-maintenance" title="${esc(t("openUpdateHint"))}">${esc(t("updateAvailable"))}: ${esc(state.update.latest_version || "")}</button>` : ""}
+                  <button class="chip status-chip ${running ? "ok" : "bad"}" data-view="dashboard" title="${esc(t("openDashboardStatusHint"))}"><span class="dot" aria-hidden="true"></span>${esc(running ? t("running") : t("stopped"))}</button>
+                  <button class="chip ${timeInfo.synchronized ? "" : "warn"}" data-view="device" title="${esc(timeInfo.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"))}"><span id="kiosk-clock">${esc(formatClock(timeInfo.current_time))}</span></button>
+                  <span class="chip version-chip">${esc(state.auth?.version || "dev")}</span>
+                  <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">${icon("reload", 18)}</button>
                 </div>
               </header>
               <section class="content">
                 ${state.status?.config?.load_warning ? stateBanner("warn", t("configurationRecovered"), state.status.config.load_warning) : ""}
+                ${area.children ? renderAreaTabs(area) : ""}
                 ${renderView()}
               </section>
             </main>
+            <nav class="bottom-nav" aria-label="${esc(t("mainNavigation"))}">
+              ${NAV.slice(0, 3).map((item) => `<button class="${isNavActive(item) ? "active" : ""}" data-view="${esc(item.id)}" ${isNavActive(item) ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${esc(t(item.label))}</span></button>`).join("")}
+              <button class="${NAV.slice(3).some(isNavActive) ? "active" : ""}" data-action="nav-mobile-toggle" aria-controls="sidebar" aria-expanded="${state.mobileNavOpen}">${icon("more")}<span>${esc(t("navMore"))}</span></button>
+            </nav>
           </div>`;
         morph(root, html, {
           preserveFocused: background,
           preserveEdited: background,
           preserveExternal: background,
         });
+        applyGeometry(root);
         bindScope(() => {
           bindShell();
           bindView();
@@ -770,6 +790,22 @@ const NAV = [
         });
         startHeaderClock();
         if (!background) ensureViewData(state.view);
+      }
+
+      // The Content-Security-Policy forbids inline style attributes, so bars
+      // and timelines carry their geometry as data-left/width/height
+      // (percent) and get it here through the CSSOM, which the policy allows.
+      export function applyGeometry(scope = document) {
+        scope.querySelectorAll("[data-left], [data-width], [data-height]").forEach((element) => {
+          for (const property of ["left", "width", "height"]) {
+            const value = element.dataset[property];
+            if (value !== undefined) element.style[property] = `${value}%`;
+          }
+        });
+      }
+
+      function renderAreaTabs(area) {
+        return `<div class="area-tabs" role="tablist" aria-label="${esc(t(area.label))}">${area.children.map((child) => `<button role="tab" aria-selected="${state.view === child.id}" class="${state.view === child.id ? "active" : ""}" data-view="${esc(child.id)}">${esc(t(child.label))}</button>`).join("")}</div>`;
       }
 
 	  // Background refreshes (loaded data, live updates) never discard input.
@@ -832,20 +868,8 @@ const NAV = [
 
       function renderNav() {
         return NAV.map((item) => {
-          const children = item.children || [];
           const active = isNavActive(item);
-          const expanded = children.length && (state.navExpanded.has(item.id) || active);
-          const childHtml = children.length
-            ? `<div class="nav-children" ${expanded ? "" : "hidden"}>${children.map((child) => `<button class="${state.view === child.id ? "active" : ""}" data-view="${child.id}"><span>${esc(t(child.label))}</span><small>${esc(t(child.hint))}</small></button>`).join("")}</div>`
-            : "";
-          return `
-            <div class="nav-group">
-              <button class="nav-parent ${active ? "active" : ""}" ${children.length ? `data-nav-toggle="${esc(item.id)}" aria-expanded="${expanded}"` : `data-view="${esc(item.id)}"`}>
-                <span>${esc(t(item.label))}</span>
-                <span class="nav-meta"><small>${esc(t(item.hint))}</small>${children.length ? `<span class="nav-chevron" aria-hidden="true">${expanded ? "−" : "+"}</span>` : ""}</span>
-              </button>
-              ${childHtml}
-            </div>`;
+          return `<button class="nav-item ${active ? "active" : ""}" data-view="${esc(item.id)}" ${active ? 'aria-current="page"' : ""}>${icon(item.icon)}<span>${esc(t(item.label))}</span></button>`;
         }).join("");
       }
 
@@ -854,74 +878,51 @@ const NAV = [
       }
 
       function activeNavItem() {
-        for (const item of NAV) {
-          if (state.view === item.id) return item;
-          const child = (item.children || []).find((entry) => entry.id === state.view);
-          if (child) return child;
-        }
-        return NAV[0];
+        return NAV.find(isNavActive) || NAV[0];
       }
 
       function renderView() {
         switch (state.view) {
-          case "kiosk":
-          case "kiosk-pages":
-            return renderKiosk();
-          case "kiosk-schedule":
-            return renderKiosk();
-          case "kiosk-display":
-            return renderSettingsBrowser();
-          case "mqtt":
+          case "program":
+            return renderProgram();
+          case "pages":
+            return renderPages();
+          case "automations":
+            return renderAutomations();
+          case "automations-mqtt":
             return renderMQTT();
-          case "system":
-          case "system-maintenance":
-            return renderSystemActions();
-          case "system-device":
-            return renderHardware();
-          case "system-terminal":
-            return renderTerminal();
-          case "system-logs":
+          case "device":
+            return renderDeviceHealth();
+          case "device-display":
+            return renderSettingsBrowser();
+          case "device-maintenance":
+            return `<div class="page-stack">${renderSystemActions()}${renderSettingsMaintenance()}</div>`;
+          case "device-logs":
             return renderLogs();
-          case "settings":
-          case "settings-browser":
-            return renderSettingsAdmin();
-          case "settings-admin":
-            return renderSettingsAdmin();
-          case "settings-config":
-            return renderSettingsConfig();
-          case "settings-updates":
-            return renderSettingsMaintenance();
+          case "device-settings":
+            return `<div class="page-stack">${renderSettingsAdmin()}${renderSettingsConfig()}</div>`;
           default:
             return renderDashboard();
         }
       }
 
+      export function navigate(nextView) {
+        nextView = resolveView(nextView);
+        if (nextView === state.view || !confirmDiscard()) return;
+        state.view = nextView;
+        state.mobileNavOpen = false;
+        localStorage.setItem("kioskmate.view", state.view);
+        renderApp();
+        window.scrollTo({ top: 0 });
+      }
+
       function bindShell() {
-        document.querySelector('[data-action="nav-mobile-toggle"]')?.addEventListener("click", () => {
+        document.querySelectorAll('[data-action="nav-mobile-toggle"]').forEach((button) => button.addEventListener("click", () => {
           state.mobileNavOpen = !state.mobileNavOpen;
           renderApp();
-        });
-        document.querySelectorAll("[data-nav-toggle]").forEach((button) => {
-          button.addEventListener("click", () => {
-            const id = button.dataset.navToggle;
-            if (state.navExpanded.has(id)) state.navExpanded.delete(id);
-            else state.navExpanded.add(id);
-            localStorage.setItem("kioskmate.navExpanded", JSON.stringify([...state.navExpanded]));
-            renderApp();
-          });
-        });
+        }));
         document.querySelectorAll("[data-view]").forEach((button) => {
-          button.addEventListener("click", () => {
-            const nextView = button.dataset.view;
-            if (nextView === state.view || !confirmDiscard()) return;
-            state.view = nextView;
-            state.mobileNavOpen = false;
-            const parent = NAV.find((item) => (item.children || []).some((child) => child.id === nextView));
-            if (parent) state.navExpanded.add(parent.id);
-            localStorage.setItem("kioskmate.view", state.view);
-            localStorage.setItem("kioskmate.navExpanded", JSON.stringify([...state.navExpanded]));
-            renderApp();
-          });
+          button.addEventListener("click", () => navigate(button.dataset.view));
         });
         document.getElementById("lang")?.addEventListener("change", (event) => setLanguage(event.target.value));
         document.getElementById("theme")?.addEventListener("change", (event) => setTheme(event.target.value));

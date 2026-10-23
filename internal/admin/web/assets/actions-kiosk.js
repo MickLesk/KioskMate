@@ -1,8 +1,8 @@
 import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
-import { checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { KIOSK_VIEWS, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { button, collectPages, collectRotation, collectRules, isLocalSource, normalizePages, sourceLabel, sourceMark, validatePages, validateScheduler, validationError } from "./renderers.js";
 import { bindWorkflows } from "./workflows.js";
-import { absolutePageIndexFromEnabled, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
+import { absolutePageIndexFromEnabled, displayModeLabel, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
 
 export function bindKiosk() {
         bindBrowserButtons();
@@ -119,7 +119,7 @@ export function bindKiosk() {
         });
       }
 
-      function openPageWizard(index = null, insertAt = null, sourceType = "url") {
+      export function openPageWizard(index = null, insertAt = null, sourceType = "url") {
         const pages = collectPages();
         const editing = index !== null && pages[index];
         const page = editing ? { ...pages[index], local: { ...(pages[index].local || {}) }, schedule: { ...(pages[index].schedule || {}) }, trigger: { ...(pages[index].trigger || {}) }, display_options: { ...(pages[index].display_options || {}) } } : {
@@ -195,7 +195,7 @@ export function bindKiosk() {
         if (wizard.step === 2) {
           const mode = page.display_mode || "duration";
           return `<div class="wizard-step-grid">
-            <div class="span-2">${selectHtml("wizard-display-mode", t("displayMode"), mode, [["duration", t("customDuration")], ["schedule", t("fixedSchedule")], ["mqtt", t("triggerBased")]])}</div>
+            <div class="span-2">${selectHtml("wizard-display-mode", t("displayMode"), mode, [["duration", t("customDuration")], ["schedule", t("fixedSchedule")], ["insert", t("insertOnly")], ["mqtt", t("triggerBased")]])}</div>
             ${mode === "duration" ? field("wizard-duration", t("durationSeconds"), "number", "", page.duration_seconds || 60) : ""}
             ${mode === "schedule" ? `${field("wizard-schedule-start", t("start"), "time", "", page.schedule?.start || "08:00")}${field("wizard-schedule-end", t("end"), "time", "", page.schedule?.end || "18:00")}<div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
             ${mode === "mqtt" ? `${field("wizard-trigger-topic", t("mqttTopic"), "text", "", page.trigger?.topic || "")}${field("wizard-trigger-payload", t("mqttPayload"), "text", "", page.trigger?.payload || "ON")}` : ""}
@@ -210,7 +210,7 @@ export function bindKiosk() {
         const next = pages[nextIndex];
         return `<div class="wizard-review">
           <div class="review-visual"><span>${esc(sourceMark(page.source_type))}</span><strong>${esc(page.name)}</strong><small>${esc(isLocalSource(page.source_type) ? sourceLabel(page.source_type) : page.url)}</small></div>
-          <dl><div><dt>${esc(t("displayMode"))}</dt><dd>${esc(page.display_mode === "schedule" ? t("fixedSchedule") : page.display_mode === "mqtt" ? t("triggerBased") : t("customDuration"))}</dd></div><div><dt>${esc(t("timing"))}</dt><dd>${esc(pageTimingLabel(page))}</dd></div><div><dt>${esc(t("nextPage"))}</dt><dd>${esc(next?.name || (pages.length ? pages[0]?.name : t("loop")))}</dd></div><div><dt>${esc(t("brightness"))}</dt><dd>${esc(page.display_options?.brightness ?? 100)}%</dd></div></dl>
+          <dl><div><dt>${esc(t("displayMode"))}</dt><dd>${esc(displayModeLabel(page.display_mode))}</dd></div><div><dt>${esc(t("timing"))}</dt><dd>${esc(pageTimingLabel(page))}</dd></div><div><dt>${esc(t("nextPage"))}</dt><dd>${esc(next?.name || (pages.length ? pages[0]?.name : t("loop")))}</dd></div><div><dt>${esc(t("brightness"))}</dt><dd>${esc(page.display_options?.brightness ?? 100)}%</dd></div></dl>
           <div class="wizard-summary">${esc(t("workflowReview").replace("{name}", page.name).replace("{timing}", pageTimingLabel(page)).replace("{next}", next?.name || t("loop")))}</div>
         </div>`;
       }
@@ -380,7 +380,7 @@ export function bindKiosk() {
         }, t("testBrowser"));
       }
 
-      async function saveKiosk(restart, skipConfirm = false) {
+      export async function saveKiosk(restart, skipConfirm = false) {
         if (restart && !skipConfirm && !confirm(t("confirmRestart"))) return;
         await runAction(restart ? "kiosk-save-restart" : "kiosk-save", async () => {
           const cfg = cloneConfig();
@@ -403,14 +403,14 @@ export function bindKiosk() {
           await saveConfig(cfg);
           if (restart) await postJSON(state.status?.browser?.running ? "/api/browser/restart" : "/api/browser/start");
           await refreshCore();
-          clearDirty("kiosk-pages");
+          KIOSK_VIEWS.forEach((view) => clearDirty(view));
           renderApp();
         }, t("saved"));
       }
 
       async function checkSelectedPage() {
         const pages = collectPages();
-        const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
+        const active = selectedKioskPageIndex(pages);
         const out = document.getElementById("page-check-output");
         await runAction("page-check", async () => {
           const result = await postJSON("/api/browser/check-page", { index: active, url: pages[active]?.url || "" });
@@ -421,7 +421,7 @@ export function bindKiosk() {
 
       async function renderCheckSelectedPage() {
         const pages = collectPages();
-        const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
+        const active = selectedKioskPageIndex(pages);
         const out = document.getElementById("page-check-output");
         await runAction("render-check", async () => {
           if (out) out.textContent = `${t("loading")}...`;
@@ -502,7 +502,7 @@ export function bindKiosk() {
           .filter((item) => !item.page.disabled && item.page.url)
           .map((item) => ({ page: item.index, duration_seconds: 3600 }));
         state.config = cfg;
-        markDirty("kiosk-pages");
+        markDirty("program");
         renderApp();
       }
 
@@ -512,7 +512,7 @@ export function bindKiosk() {
         cfg.kiosk.pages = collectPages();
         cfg.kiosk[key] = [];
         state.config = cfg;
-        markDirty("kiosk-pages");
+        markDirty("program");
         renderApp();
       }
 
@@ -551,7 +551,7 @@ export function bindKiosk() {
 
       function openPreview() {
         const pages = collectPages();
-        const active = Number(document.querySelector("[data-page-active]:checked")?.value || 0);
+        const active = selectedKioskPageIndex(pages);
         const url = pages[active]?.url || "";
         if (!url) return;
         window.open(url, "_blank", "noopener");
@@ -563,7 +563,7 @@ export function bindKiosk() {
         kiosk.urls = (kiosk.pages || []).filter((p) => !p.disabled && p.url).map((p) => p.url);
       }
 
-      function synchronizeKioskWorkflow(kiosk) {
+      export function synchronizeKioskWorkflow(kiosk) {
         kiosk.pages = normalizePages(kiosk.pages, kiosk.urls);
         syncKioskURLs(kiosk);
         const rotation = [];
@@ -612,6 +612,8 @@ export function bindKiosk() {
 
       function removePage(kiosk, index) {
         const pages = kiosk.pages || [];
+        const removedID = pages[index]?.page_id;
+        if (removedID) kiosk.inserts = (kiosk.inserts || []).filter((insert) => insert.page_id !== removedID);
         const order = pages.map((_, i) => i).filter((oldIndex) => oldIndex !== index);
         kiosk.pages = order.map((oldIndex) => pages[oldIndex]);
         remapPageIndexes(kiosk, order, pages);

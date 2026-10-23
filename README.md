@@ -35,7 +35,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.9.1` reports undervoltage and missing touch devices, shows CPU per device instead of per core sum, and adds a display backend setting on top of 0.9.0 (workflows, tab mode, local pages, a renderer watchdog, a Raspberry Pi OS image and experimental Windows support). See [CHANGELOG.md](CHANGELOG.md).
+KioskMate `1.0.0-pre` is a pre-release with a redesigned Admin UI (Overview, Programme, Pages, Automations, Device) and inserts that show other pages in between on a fixed rhythm. The current stable release, `0.9.1`, reports undervoltage and missing touch devices, shows CPU per device instead of per core sum, and adds a display backend setting on top of 0.9.0 (workflows, tab mode, local pages, a renderer watchdog, a Raspberry Pi OS image and experimental Windows support). See [CHANGELOG.md](CHANGELOG.md).
 
 The Admin UI is organized by task:
 

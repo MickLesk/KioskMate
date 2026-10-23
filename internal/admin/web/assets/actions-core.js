@@ -1,23 +1,50 @@
 import { bindKiosk, bindScheduler, loadBrowserDiagnostics } from "./actions-kiosk.js";
+import { bindPages } from "./view-pages.js";
+import { bindProgram } from "./view-program.js";
+import { bindDeviceHealth } from "./view-device.js";
 import { bindMQTT } from "./actions-mqtt.js";
 import { bindSettings } from "./actions-settings.js";
-import { bindHardware, bindLogs, bindSystem, bindSystemMaintenance, bindTerminal } from "./actions-system.js";
+import { bindHardware, bindLogs, bindSystem, bindSystemMaintenance } from "./actions-system.js";
 import { esc, getJSON, openModal, postJSON, refreshCore, renderApp, runAction, state, t } from "./app-core.js";
 import { button } from "./renderers.js";
 
 export function bindView() {
-        if (state.view === "dashboard") bindDashboard();
-        if (state.view === "kiosk" || state.view === "kiosk-pages") { bindKiosk(); bindScheduler(); }
-        if (state.view === "kiosk-schedule") bindScheduler();
-        if (state.view === "mqtt") bindMQTT();
-        if (state.view === "system" || state.view === "system-maintenance") bindSystemMaintenance();
-        if (state.view === "system-device") {
-          bindHardware();
-          bindSystem();
+        switch (state.view) {
+          case "dashboard":
+            bindDashboard();
+            break;
+          case "program":
+            bindKiosk();
+            bindScheduler();
+            bindProgram();
+            break;
+          case "pages":
+            bindKiosk();
+            bindPages();
+            break;
+          case "automations":
+            bindKiosk();
+            break;
+          case "automations-mqtt":
+            bindMQTT();
+            break;
+          case "device":
+            bindHardware();
+            bindSystem();
+            bindDeviceHealth();
+            break;
+          case "device-maintenance":
+            bindSystemMaintenance();
+            bindSettings();
+            break;
+          case "device-logs":
+            bindLogs();
+            break;
+          case "device-display":
+          case "device-settings":
+            bindSettings();
+            break;
         }
-        if (state.view === "system-terminal") bindTerminal();
-        if (state.view === "system-logs") bindLogs();
-        if (state.view.startsWith("settings") || state.view === "kiosk-display") bindSettings();
       }
 
       function bindDashboard() {
@@ -31,6 +58,19 @@ export function bindView() {
         document.querySelector('[data-action="browser-doctor"]')?.addEventListener("click", loadBrowserDoctor);
         document.querySelector('[data-action="browser-recover"]')?.addEventListener("click", recoverBrowser);
 		document.querySelector('[data-action="browser-auto-recover"]')?.addEventListener("click", recoverBrowserQuick);
+        document.querySelector('[data-action="overview-show"]')?.addEventListener("click", () => runAction("overview-show", async () => {
+          // A temporary override, so the programme does not switch straight back.
+          await postJSON("/api/browser/override", { page: Number(document.getElementById("overview-page")?.value || 0), duration_seconds: 3600, source: "admin-activate" });
+          clearSnapshot();
+          await refreshCore();
+          renderApp();
+        }, t("overrideApplied")));
+        const displayButton = document.querySelector('[data-action="overview-display"]');
+        displayButton?.addEventListener("click", () => runAction("overview-display", async () => {
+          await postJSON("/api/hardware/display", { value: displayButton.dataset.power || "ON" });
+          state.hardware = await getJSON("/api/hardware");
+          renderApp();
+        }));
         document.querySelector('[data-action="hardware-refresh"]')?.addEventListener("click", async () => {
           state.hardware = await getJSON("/api/hardware");
           renderApp();
@@ -81,6 +121,8 @@ export function bindView() {
           disabled: "disabled",
           time: "timeMode",
           rotation: "rotationMode",
+          insert: "reasonInsert",
+          "manual override": "temporaryOverride",
           "no active time rule": "noActiveRule",
           "no rotation items": "noRotationItems",
           "unsupported mode": "unsupportedMode",
@@ -153,7 +195,7 @@ export function bindView() {
         }, t("refreshSnapshot"));
       }
 
-      async function loadBrowserDoctor() {
+      export async function loadBrowserDoctor() {
         await runAction("browser-doctor", async () => {
           const report = await getJSON("/api/browser/doctor");
           const checks = (report.checks || []).map((check) => `

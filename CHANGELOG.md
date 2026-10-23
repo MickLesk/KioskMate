@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.0.0-pre
+
+Pre-release of the redesigned Admin UI. Configs from 0.9.x keep working unchanged.
+
+### Programme and inserts
+- Added inserts (`kiosk.inserts`): pages that come in between the base programme on a fixed rhythm, every N minutes, hourly at a given minute or at fixed times, for a set duration, optionally only within a daily window and on chosen weekdays. Example: Home Assistant 07:00-23:00, the weather and cameras every 5 minutes for 30 seconds and today's calendar at every full hour for one minute.
+- Overlapping inserts are decided by priority (then list order). Manual overrides and workflows still win over inserts, an insert never wakes a display the time windows turned off, and without a base programme the page shown before the insert returns afterwards.
+- The scheduler wakes exactly for each insert start and end instead of waiting for the next tick.
+- Added the page display mode "insert" (only shown by inserts or on demand, not in the rotation).
+- Added `/api/program/timeline`, which previews the next hour and the upcoming insert runs, also for unsaved changes.
+
+### Admin UI
+- New structure with five areas: Overview, Programme, Pages, Automations and Device. Device groups health, display, maintenance, logs and settings as tabs; Automations holds workflows and the MQTT connection. Bookmarked views of 0.9 open their new place.
+- Overview shows the live view, what is on screen and why, up next, page selection, reload and display power, and today's programme as a bar. Health problems appear as one banner with a link to Device.
+- Programme shows the base programme, the inserts with an editor (rhythm, duration, window, days, priority, "insert only" and preloading, with a plain-language summary), the next hour as a timeline and the order that wins on overlaps.
+- Pages is a library of cards with type, address and where each page is used (base programme, time window, insert, workflow), with "Show now".
+- Device opens with a health checklist (power, touch, browser, Home Assistant login, MQTT, memory and temperature, storage, time) that names a fix for every warning.
+- Phone layout with a bottom bar and a drawer for the remaining areas.
+- Timeline geometry is applied through the CSSOM, so it works with the strict Content-Security-Policy (inline styles stay blocked).
+
+### Updates and releases
+- A pre-release such as 1.0.0-pre now counts as older than the final 1.0.0, so the update check offers the final release.
+- The release workflow builds tags of any major version and marks `-pre` tags as pre-releases.
+
 ## v0.9.1
 
 ### Hardware

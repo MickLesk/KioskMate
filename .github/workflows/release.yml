@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v0*"
+      - "v[0-9]*"
 
 permissions:
   contents: write
@@ -77,7 +77,7 @@ jobs:
         run: |
           PRERELEASE=""
           case "$GITHUB_REF_NAME" in
-            *alpha*|*beta*|*rc*) PRERELEASE="--prerelease" ;;
+            *alpha*|*beta*|*rc*|*pre*) PRERELEASE="--prerelease" ;;
           esac
           gh release create "$GITHUB_REF_NAME" \
             --title "KioskMate ${GITHUB_REF_NAME#v}" \
