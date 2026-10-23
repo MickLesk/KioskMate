@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.1
 
 ### Hardware
 - Reported undervoltage on Raspberry Pi boards (live from the firmware voltage sensor, since boot from `vcgencmd get_throttled`) as a banner on the dashboard and on Device and Time, and in the Doctor. A weak supply throttles the CPU and can drop USB touch controllers.

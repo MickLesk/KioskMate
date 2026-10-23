@@ -66,9 +66,9 @@ type KioskConfig struct {
 	// open as tabs and switch between them without reloading.
 	PageSwitch string `json:"page_switch,omitempty"`
 	MaxTabs    int    `json:"max_tabs,omitempty"`
-	// DisplayBackend picks Chromium's Ozone platform: "" lets Chromium decide
-	// (XWayland on most Pi desktops, as before 0.9.0), "wayland" forces native
-	// Wayland, "x11" forces X11/XWayland.
+	// DisplayBackend picks Chromium's Ozone platform: "" or "auto" uses native
+	// Wayland in a Wayland session, "wayland" always forces it, "x11" forces
+	// X11/XWayland.
 	DisplayBackend string `json:"display_backend,omitempty"`
 	// Rules are event-driven workflow steps on top of the playlist.
 	Rules []WorkflowRule `json:"rules,omitempty"`

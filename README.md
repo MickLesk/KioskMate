@@ -35,7 +35,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `0.9.0` adds workflows, tab mode, local pages, a renderer watchdog, a ready-made Raspberry Pi OS image and experimental Windows support, and uses noticeably less CPU on small hardware. See [CHANGELOG.md](CHANGELOG.md).
+KioskMate `0.9.1` reports undervoltage and missing touch devices, shows CPU per device instead of per core sum, and adds a display backend setting on top of 0.9.0 (workflows, tab mode, local pages, a renderer watchdog, a Raspberry Pi OS image and experimental Windows support). See [CHANGELOG.md](CHANGELOG.md).
 
 The Admin UI is organized by task:
 
@@ -84,8 +84,8 @@ For Raspberry Pi / ARM64:
 
 ```bash
 cd /tmp
-wget https://github.com/MickLesk/KioskMate/releases/download/v0.9.0/kioskmate_0.9.0_arm64.deb
-sudo apt install ./kioskmate_0.9.0_arm64.deb
+wget https://github.com/MickLesk/KioskMate/releases/download/v0.9.1/kioskmate_0.9.1_arm64.deb
+sudo apt install ./kioskmate_0.9.1_arm64.deb
 systemctl --user enable --now kioskmate.service
 ```
 
@@ -259,14 +259,14 @@ The event journal is stored at `~/.config/kioskmate/events.jsonl`. It is bounded
 ## Packaging
 
 ```bash
-VERSION=0.9.0 ARCH=arm64 bash scripts/package-deb.sh
-VERSION=0.9.0 ARCH=amd64 bash scripts/package-deb.sh
+VERSION=0.9.1 ARCH=arm64 bash scripts/package-deb.sh
+VERSION=0.9.1 ARCH=amd64 bash scripts/package-deb.sh
 ```
 
 The shell command is a compatibility wrapper around the canonical, cross-platform package builder. Both architectures can be built in one invocation without `dpkg-deb`:
 
 ```bash
-python scripts/package-deb.py --version 0.9.0 --arch arm64 --arch amd64
+python scripts/package-deb.py --version 0.9.1 --arch arm64 --arch amd64
 ```
 
 Packages embed a minified Admin UI: the builder runs `go run ./tools/minify` (esbuild, only at build time) and builds with `-tags minified`. Plain `go build` keeps embedding the readable sources.
