@@ -419,7 +419,7 @@ func TestPerformanceProfileArgs(t *testing.T) {
 
 	cfg.Performance.Profile = "raspberry"
 	args = browserArgs(cfg, "chromium", "http://ha.local/main", nil, 0)
-	for _, want := range []string{"--renderer-process-limit=1"} {
+	for _, want := range []string{"--renderer-process-limit=1", "--ozone-platform-hint=auto"} {
 		if !contains(args, want) {
 			t.Fatalf("raspberry profile missing %s in %#v", want, args)
 		}

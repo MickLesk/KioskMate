@@ -1491,7 +1491,7 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
 	}
-	if flag := ozonePlatformFlag(cfg.Kiosk.DisplayBackend, cfg.Kiosk.ExtraArgs, os.Getenv("WAYLAND_DISPLAY"), os.Getenv("DISPLAY")); flag != "" {
+	if flag := ozonePlatformFlag(cfg.Kiosk.DisplayBackend, cfg.Kiosk.ExtraArgs, os.Getenv("WAYLAND_DISPLAY")); flag != "" {
 		args = append(args, flag)
 	}
 	if cfg.Performance.Profile == "raspberry" || cfg.Performance.Profile == "minimal" || cfg.Performance.ReduceMotion {
@@ -1702,13 +1702,12 @@ func chromiumLiteArgs() []string {
 }
 
 // ozonePlatformFlag returns the Ozone switch for the configured display
-// backend. By default KioskMate passes none and Chromium keeps its own choice,
-// which on a Pi desktop with DISPLAY=:0 is XWayland. Forcing native Wayland in
-// every Wayland session (0.9.0) broke touch input on labwc/Wayfire Pi setups,
-// so it is opt-in now. Only a Wayland session without X (Cage without
-// Xwayland) still gets native Wayland, since nothing else can work there.
-// A switch the user set in extra_args always wins.
-func ozonePlatformFlag(backend string, extra []string, waylandDisplay, x11Display string) string {
+// backend. "auto" (default) selects native Wayland inside a Wayland session
+// (labwc, Cage, Wayfire): DISPLAY=:0 from the service unit does not mean an
+// X server exists, and Raspberry Pi OS Trixie runs labwc without Xwayland.
+// "x11" forces XWayland for setups that need it. A switch the user set in
+// extra_args always wins.
+func ozonePlatformFlag(backend string, extra []string, waylandDisplay string) string {
 	for _, arg := range extra {
 		if strings.HasPrefix(strings.TrimSpace(arg), "--ozone-platform") {
 			return ""
@@ -1720,10 +1719,10 @@ func ozonePlatformFlag(backend string, extra []string, waylandDisplay, x11Displa
 	case "x11":
 		return "--ozone-platform=x11"
 	}
-	if strings.TrimSpace(waylandDisplay) != "" && strings.TrimSpace(x11Display) == "" {
+	if strings.TrimSpace(waylandDisplay) != "" {
 		return "--ozone-platform=wayland"
 	}
-	return ""
+	return "--ozone-platform-hint=auto"
 }
 
 func browserUserDataDir(cfg *config.Config, page int) string {

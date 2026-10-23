@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-### Fixes
-- Fixed touch input on Raspberry Pi desktops (labwc, Wayfire) that broke in 0.9.0: Chromium is no longer forced onto native Wayland whenever a Wayland socket exists and runs via XWayland again as in 0.8. Native Wayland stays automatic only where no X server exists (Cage without Xwayland). The new `kiosk.display_backend` setting (`auto`, `wayland`, `x11`; Settings -> Performance) chooses explicitly, and an `--ozone-platform` switch in the extra browser arguments always wins.
+### Kiosk
+- Added `kiosk.display_backend` (`auto`, `wayland`, `x11`; Settings -> Performance) to choose Chromium's display backend. `auto` keeps native Wayland in a Wayland session; `x11` forces XWayland where a setup needs it. An `--ozone-platform` switch in the extra browser arguments always wins.
 
 ## v0.9.0
 

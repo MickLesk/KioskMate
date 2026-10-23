@@ -805,7 +805,7 @@
   "validationLocalHtml": "Gib das HTML für diese Seite ein.",
   "validationLocalHtmlSize": "Das HTML darf höchstens 256 KB groß sein.",
   "displayBackend": "Anzeige-Backend",
-  "displayBackendAuto": "Automatisch (XWayland am Desktop, am besten für Touch)",
+  "displayBackendAuto": "Automatisch (Wayland in einer Wayland-Sitzung)",
   "displayBackendWayland": "Natives Wayland",
   "displayBackendX11": "X11 / XWayland"
 }

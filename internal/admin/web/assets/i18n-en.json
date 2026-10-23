@@ -805,7 +805,7 @@
   "validationLocalHtml": "Enter the HTML for this page.",
   "validationLocalHtmlSize": "The HTML must be at most 256 KB.",
   "displayBackend": "Display backend",
-  "displayBackendAuto": "Automatic (XWayland on desktops, best for touch)",
+  "displayBackendAuto": "Automatic (Wayland in a Wayland session)",
   "displayBackendWayland": "Native Wayland",
   "displayBackendX11": "X11 / XWayland"
 }
