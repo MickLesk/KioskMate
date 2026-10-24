@@ -167,6 +167,31 @@ export default async function admin({ browser, base, ok, errors, out }) {
     ok(`view ${view} renders`, content.length > 50);
   }
 
+  // ---- Update: check button and pre-release channel ----
+  await page.evaluate(() => document.querySelector('[data-view="device-maintenance"]')?.click());
+  await page.waitForSelector("#update-prerelease");
+  ok("update: stable channel by default", !(await page.isChecked("#update-prerelease")));
+  await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.remove()));
+  let wait = page.waitForResponse((r) => r.url().endsWith("/api/update") && r.request().method() === "GET");
+  await page.click('[data-action="update-check"]');
+  let body = await (await wait).json();
+  await page.waitForTimeout(300);
+  ok("update: check offers newest stable", body.latest_version === "0.9.1" && body.channel === "stable", JSON.stringify({ latest: body.latest_version, channel: body.channel }));
+  ok("update: check gives a result toast", /0\.9\.1/.test((await page.locator(".toast").allTextContents()).join(" ")), (await page.locator(".toast").allTextContents()).join(" | "));
+  wait = page.waitForResponse((r) => r.url().endsWith("/api/update/channel"));
+  await page.check("#update-prerelease");
+  body = await (await wait).json();
+  await page.waitForTimeout(300);
+  ok("update: pre-releases offer the highest pre-release", body.latest_version === "1.0.0-pre.2" && body.channel === "prerelease", body.latest_version);
+  ok("update: tile shows the pre-release", (await page.locator(".content").innerText()).includes("1.0.0-pre.2"));
+  ok("update: switch stays on after re-render", await page.isChecked("#update-prerelease"));
+  ok("update: channel saved to config", (await savedConfig(page)).update?.prerelease === true);
+  await page.screenshot({ path: `${out}/admin-e2e-update.png`, fullPage: true });
+  wait = page.waitForResponse((r) => r.url().endsWith("/api/update/channel"));
+  await page.uncheck("#update-prerelease");
+  body = await (await wait).json();
+  ok("update: back to stable", body.latest_version === "0.9.1" && (await savedConfig(page)).update?.prerelease === false);
+
   // ---- Phone: no horizontal overflow on any view ----
   const phone = await ctx.newPage();
   await phone.setViewportSize({ width: 390, height: 844 });

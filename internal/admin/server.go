@@ -303,6 +303,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/diagnostics", s.auth(s.browserDiagnostics))
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
+	mux.HandleFunc("/api/update/channel", s.auth(s.updateChannel))
 	mux.HandleFunc("/api/update/preflight", s.auth(s.updatePreflight))
 	mux.HandleFunc("/api/update/history", s.auth(s.updateHistory))
 	mux.HandleFunc("/api/update/install", s.auth(s.updateInstall))
@@ -1760,6 +1761,35 @@ func (s *Server) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// updateChannel switches between stable releases and pre-releases and checks
+// again right away, so the page shows what the new channel offers.
+func (s *Server) updateChannel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Prerelease *bool `json:"prerelease"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Prerelease == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prerelease must be true or false"})
+		return
+	}
+	if err := s.cfg.Mutate(func(next *config.Config) error {
+		next.Update.Prerelease = *body.Prerelease
+		return nil
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit("update_channel", "ok", "update channel changed", map[string]string{"prerelease": strconv.FormatBool(*body.Prerelease)})
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	// A failed check is stored in the status, the channel change itself stands.
+	_, _ = s.updater.Check(ctx)
+	writeJSON(w, http.StatusOK, s.updater.Status())
 }
 
 func (s *Server) updateInstall(w http.ResponseWriter, r *http.Request) {

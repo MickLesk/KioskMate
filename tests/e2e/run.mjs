@@ -44,7 +44,7 @@ async function withServer(fixture, port, run) {
   const configPath = path.join(dir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   const log = fs.openSync(path.join(out, `server-${port}.log`), "w");
-  const env = { ...process.env, KIOSKMATE_OPEN_METEO_URL: `${fakes.url}/forecast` };
+  const env = { ...process.env, KIOSKMATE_OPEN_METEO_URL: `${fakes.url}/forecast`, KIOSKMATE_GITHUB_API_URL: `${fakes.url}/github` };
   const server = spawn(binary, ["-config", configPath], { cwd: dir, env, stdio: ["ignore", log, log] });
   const base = `http://127.0.0.1:${port}`;
   try {

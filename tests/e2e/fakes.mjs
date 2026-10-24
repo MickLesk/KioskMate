@@ -1,6 +1,7 @@
 // Local stand-ins for the services the weather, news, camera and Immich pages
 // use, so the browser tests need no internet: an Open-Meteo forecast, an RSS
-// feed, a camera snapshot and a tiny Immich API.
+// feed, a camera snapshot, a tiny Immich API and the GitHub releases list the
+// update check reads.
 import http from "http";
 import zlib from "zlib";
 
@@ -79,6 +80,16 @@ function forecast() {
   };
 }
 
+// Newest first by publish date, like GitHub: the re-pushed pre.1 tag is the
+// most recent release but not the highest version.
+const RELEASES = [
+  { tag_name: "v1.0.0-pre.1", prerelease: true, body: "## v1.0.0-pre.1" },
+  { tag_name: "v1.0.0-pre.2", prerelease: true, body: "## v1.0.0-pre.2\n\n- Einschübe und Vorlagen" },
+  { tag_name: "v1.0.0-pre", prerelease: true, body: "## v1.0.0-pre" },
+  { tag_name: "v0.9.1", prerelease: false, body: "## v0.9.1\n\n- Unterspannungswarnung" },
+  { tag_name: "v0.9.2", draft: true, prerelease: false, body: "draft" },
+].map((release) => ({ draft: false, html_url: `https://github.invalid/releases/${release.tag_name}`, assets: [], ...release }));
+
 function rss() {
   const items = [
     ["Neue Straßenbahnlinie verbindet Hauptbahnhof und Messe", "Ab Montag fahren die Bahnen alle zehn Minuten, auch am Wochenende.", 20],
@@ -94,6 +105,7 @@ export async function startFakes() {
     const url = new URL(req.url, "http://fake");
     const send = (status, type, body) => { res.writeHead(status, { "Content-Type": type }); res.end(body); };
     if (url.pathname === "/forecast") return send(200, "application/json", JSON.stringify(forecast()));
+    if (url.pathname === "/github/repos/MickLesk/KioskMate/releases") return send(200, "application/json", JSON.stringify(RELEASES));
     if (url.pathname === "/rss") return send(200, "application/rss+xml", rss());
     if (url.pathname === "/camera.png") return send(200, "image/png", images.camera);
     if (url.pathname.startsWith("/immich/api/")) {

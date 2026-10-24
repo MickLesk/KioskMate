@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -71,6 +72,8 @@ type ReleaseInfo struct {
 	Installing      bool       `json:"installing"`
 	CheckedAt       *time.Time `json:"checked_at,omitempty"`
 	Error           string     `json:"error,omitempty"`
+	// Channel is "prerelease" when update.prerelease is on, else "stable".
+	Channel string `json:"channel"`
 }
 
 type Asset struct {
@@ -151,7 +154,15 @@ func (s *Service) Status() ReleaseInfo {
 	defer s.mu.Unlock()
 	status := s.status
 	status.Installing = s.installing
+	status.Channel = s.channel()
 	return status
+}
+
+func (s *Service) channel() string {
+	if s.cfg != nil && s.cfg.Snapshot().Update.Prerelease {
+		return "prerelease"
+	}
+	return "stable"
 }
 
 func (s *Service) setChecking(checking bool) {
@@ -440,50 +451,62 @@ func (s *Service) restartServiceAfterUpdate(job *Job) {
 	}
 }
 
-func (s *Service) latest(ctx context.Context) (githubRelease, error) {
+// githubAPI is the GitHub API base; KIOSKMATE_GITHUB_API_URL points the
+// update check at another server (used by the browser tests).
+var githubAPI = cmp.Or(os.Getenv("KIOSKMATE_GITHUB_API_URL"), "https://api.github.com")
+
+func (s *Service) releases(ctx context.Context) ([]githubRelease, error) {
 	cfg := s.cfg.Snapshot()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+cfg.Update.Repository+"/releases", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(githubAPI, "/")+"/repos/"+cfg.Update.Repository+"/releases", nil)
 	if err != nil {
-		return githubRelease{}, err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return githubRelease{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return githubRelease{}, fmt.Errorf("github releases failed: %s", resp.Status)
+		return nil, fmt.Errorf("github releases failed: %s", resp.Status)
 	}
 	var releases []githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, err
+	}
+	return releases, nil
+}
+
+func (s *Service) latest(ctx context.Context) (githubRelease, error) {
+	releases, err := s.releases(ctx)
+	if err != nil {
 		return githubRelease{}, err
 	}
+	return newestRelease(releases, s.cfg.Snapshot().Update.Prerelease)
+}
+
+// newestRelease picks the highest version, not the most recently published
+// one: a re-pushed pre-release tag must not hide a newer final release.
+func newestRelease(releases []githubRelease, prerelease bool) (githubRelease, error) {
+	var best githubRelease
+	found := false
 	for _, release := range releases {
-		if !release.Draft && (!release.Prerelease || cfg.Update.Prerelease) {
-			return release, nil
+		if release.Draft || (release.Prerelease && !prerelease) {
+			continue
+		}
+		if !found || compareVersion(strings.TrimPrefix(release.TagName, "v"), strings.TrimPrefix(best.TagName, "v")) > 0 {
+			best, found = release, true
 		}
 	}
-	return githubRelease{}, errors.New("no release found")
+	if !found {
+		return githubRelease{}, errors.New("no release found")
+	}
+	return best, nil
 }
 
 func (s *Service) releaseVersion(ctx context.Context, version string) (githubRelease, error) {
-	cfg := s.cfg.Snapshot()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+cfg.Update.Repository+"/releases", nil)
+	releases, err := s.releases(ctx)
 	if err != nil {
-		return githubRelease{}, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return githubRelease{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return githubRelease{}, fmt.Errorf("github releases failed: %s", resp.Status)
-	}
-	var releases []githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return githubRelease{}, err
 	}
 	for _, release := range releases {

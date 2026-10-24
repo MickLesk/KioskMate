@@ -1234,5 +1234,15 @@
   "validationCameraStreams": "Eine bis vier Kamera-Adressen mit http:// oder https:// eintragen.",
   "validationImmichUrl": "Bitte die Immich-Adresse mit http:// oder https:// eintragen.",
   "validationImmichKey": "Bitte einen API-Schlüssel eintragen.",
-  "validationImmichAlbum": "Das ist keine Album-Adresse oder -ID."
+  "validationImmichAlbum": "Das ist keine Album-Adresse oder -ID.",
+  "channelStable": "Stabil",
+  "channelPrerelease": "Vorabversionen",
+  "includePrereleases": "Vorabversionen anbieten",
+  "includePrereleasesHint": "Bietet auch Pre-Releases wie 1.0.0-pre.2 an. Sie sind neuer, aber weniger getestet.",
+  "prereleaseRunningHint": "Hier läuft eine Vorabversion. Ohne diesen Schalter werden nur stabile Versionen angeboten, also keine neueren Pre-Releases.",
+  "prereleasesOn": "Vorabversionen aktiviert",
+  "prereleasesOff": "Nur stabile Versionen",
+  "updateCheckFailed": "Update-Prüfung fehlgeschlagen",
+  "updateAvailableVersion": "Version {version} kann installiert werden.",
+  "upToDateVersion": "Installiert ist {version}, neueste angebotene Version ist {latest}."
 }

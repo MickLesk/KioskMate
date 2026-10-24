@@ -385,8 +385,9 @@ const NAV = [
         recordAction(t("actionStarted"), name, "warn");
         try {
           const result = await fn();
-          toast(success, "", "ok");
-          recordAction(success, name, "ok");
+          // null: fn shows its own, more specific result toast.
+          if (success !== null) toast(success, "", "ok");
+          recordAction(success ?? t("actionDone"), name, "ok");
           return result;
         } catch (err) {
           toast(t("failed"), err.message, "error");
