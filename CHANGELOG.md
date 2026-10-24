@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Inserts no longer turn the display off and on. With a time rule as base programme (or hybrid mode with schedule pages) an insert counted as "outside the schedule": the display was switched off, the page blanked, and after the insert the base page (for example a Home Assistant dashboard) loaded from scratch.
+- An insert now opens in its own tab, also in the default "navigate" page switch mode. The base page stays loaded underneath and comes back without a reload when the insert ends; the insert tab is closed again afterwards.
+
 ## v1.0.0-pre.2
 
 Second pre-release: the redesigned Admin UI gets the depth it was missing. Configs from 1.0.0-pre and 0.9.x keep working unchanged.
