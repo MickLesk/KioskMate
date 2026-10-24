@@ -20,6 +20,7 @@ export function bindSettings() {
         document.querySelector('[data-action="sessions-logout-all"]')?.addEventListener("click", logoutAllSessions);
         document.querySelector('[data-action="backups-refresh"]')?.addEventListener("click", loadBackups);
         document.querySelector('[data-action="update-check"]')?.addEventListener("click", checkUpdate);
+        document.getElementById("update-prerelease")?.addEventListener("change", (event) => setUpdateChannel(event.target.checked));
         document.querySelector('[data-action="update-preflight"]')?.addEventListener("click", runUpdatePreflight);
         document.querySelector('[data-action="update-install"]')?.addEventListener("click", installUpdate);
         document.querySelector('[data-action="update-rollback"]')?.addEventListener("click", rollbackUpdate);
@@ -228,7 +229,31 @@ export function bindSettings() {
         await runAction("update-check", async () => {
           state.update = await getJSON("/api/update");
           renderApp();
-        }, t("checkUpdate"));
+          toastUpdateResult(state.update);
+        }, null);
+      }
+
+      async function setUpdateChannel(prerelease) {
+        const input = document.getElementById("update-prerelease");
+        if (input) input.disabled = true;
+        const done = await runAction("update-check", async () => {
+          state.update = await postJSON("/api/update/channel", { prerelease });
+          if (state.config?.update) state.config.update.prerelease = prerelease;
+          renderApp();
+          toastUpdateResult(state.update, prerelease ? t("prereleasesOn") : t("prereleasesOff"));
+          return true;
+        }, null);
+        if (!done) renderApp();
+      }
+
+      function toastUpdateResult(update, title = "") {
+        if (update.error) {
+          toast(title || t("updateCheckFailed"), update.error, "error");
+        } else if (update.update_available) {
+          toast(title || t("updateAvailable"), t("updateAvailableVersion").replace("{version}", update.latest_version), "warn");
+        } else {
+          toast(title || t("upToDate"), t("upToDateVersion").replace("{version}", update.current_version || "-").replace("{latest}", update.latest_version || "-"), "ok");
+        }
       }
 
       function updateCredentials() {

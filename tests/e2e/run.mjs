@@ -44,7 +44,7 @@ async function withServer(fixture, port, run) {
   const configPath = path.join(dir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   const log = fs.openSync(path.join(out, `server-${port}.log`), "w");
-  const env = { ...process.env, KIOSKMATE_OPEN_METEO_URL: `${fakes.url}/forecast` };
+  const env = { ...process.env, KIOSKMATE_OPEN_METEO_URL: `${fakes.url}/forecast`, KIOSKMATE_GITHUB_API_URL: `${fakes.url}/github` };
   const server = spawn(binary, ["-config", configPath], { cwd: dir, env, stdio: ["ignore", log, log] });
   const base = `http://127.0.0.1:${port}`;
   try {
@@ -61,8 +61,12 @@ async function withServer(fixture, port, run) {
     };
     await run({ base, api, dir, fakes });
   } finally {
+    // Wait for the server to exit: it may still write into dir while it shuts
+    // down, and removing dir then fails with ENOTEMPTY.
+    const exited = server.exitCode !== null || server.signalCode !== null ? Promise.resolve() : new Promise((resolve) => server.once("exit", resolve));
     server.kill();
-    fs.rmSync(dir, { recursive: true, force: true });
+    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 

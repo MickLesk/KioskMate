@@ -149,6 +149,8 @@ export function renderSettingsAdmin() {
         const passwordless = !!state.hardware?.support?.sudo_rights;
         const hasPrivilege = privilege.configured || passwordless;
         const checked = update.checked_at ? formatDate(update.checked_at) : t("notChecked");
+        const prerelease = update.channel ? update.channel === "prerelease" : !!state.config?.update?.prerelease;
+        const runningPre = /-/.test(update.current_version || "");
         return `
           <div class="page-stack">
             <section class="status-strip">
@@ -158,7 +160,11 @@ export function renderSettingsAdmin() {
               ${statusTile(t("administratorRights"), hasPrivilege ? t("ready") : t("required"), hasPrivilege ? "ok" : "warn", passwordless ? t("passwordlessSudo") : privilege.configured ? t("temporaryPrivilegeActive") : t("enterPasswordBelow"))}
             </section>
             <div class="card">
-              <div class="head"><div><h3>${esc(t("update"))}</h3><span class="section-kicker">${esc(t("releaseChannel"))}: ${esc(update.channel || "stable")}</span></div><div class="actions">${button("checkUpdate", "update-check")}</div></div>
+              <div class="head"><div><h3>${esc(t("update"))}</h3><span class="section-kicker">${esc(t("releaseChannel"))}: ${esc(t(prerelease ? "channelPrerelease" : "channelStable"))}</span></div><div class="actions">${button("checkUpdate", "update-check")}</div></div>
+              <div class="body update-channel">
+                ${switchHtml("update-prerelease", t("includePrereleases"), prerelease)}
+                <p class="hint">${esc(t(runningPre && !prerelease ? "prereleaseRunningHint" : "includePrereleasesHint"))}</p>
+              </div>
               <div class="body update-layout">
                 <div>
                   <label>${esc(t("changelog"))}</label>
