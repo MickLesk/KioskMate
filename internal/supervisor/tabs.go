@@ -39,6 +39,60 @@ func (b *Browser) resetTabsLocked() {
 	b.retarget = false
 	b.pendingBlank = map[string]bool{}
 	b.tabURL = map[int]string{}
+	b.insertTab = false
+}
+
+// keepTabForInsertLocked prepares navigate mode for an insert: the tab now
+// on screen is recorded as the tab of page base, so switchTab opens the
+// insert next to it and can activate it again afterwards. It reports false
+// when the control session has no tab yet. Callers hold b.mu.
+func (b *Browser) keepTabForInsertLocked(cfg *config.Config, base int) bool {
+	if b.activeTarget == "" {
+		return false
+	}
+	b.tabs = map[int]string{base: b.activeTarget}
+	b.tabURL = map[int]string{base: activeURL(cfg, base)}
+	b.tabUse = []int{base}
+	b.pendingBlank = map[string]bool{}
+	b.insertBase = base
+	return true
+}
+
+// closeOtherTabs closes every kept tab except the one of page keep and ends
+// the insert bookkeeping of navigate mode.
+func (b *Browser) closeOtherTabs(ctx context.Context, cfg *config.Config, keep int) {
+	b.mu.Lock()
+	keepID := b.tabs[keep]
+	if keepID == "" {
+		// The switch fell back to navigating the tab on screen.
+		keepID = b.activeTarget
+	}
+	var closing []string
+	for index, id := range b.tabs {
+		if index != keep && id != keepID && id != b.activeTarget {
+			closing = append(closing, id)
+		}
+	}
+	b.insertTab = false
+	if keepID != "" {
+		b.tabs = map[int]string{keep: keepID}
+		b.tabURL = map[int]string{keep: activeURL(cfg, keep)}
+		b.tabUse = []int{keep}
+	}
+	profile := browserUserDataDir(cfg, keep)
+	b.mu.Unlock()
+	if len(closing) == 0 {
+		return
+	}
+	browser, err := dialBrowserTarget(ctx, profile)
+	if err != nil {
+		b.logger.Debug("closing insert tabs skipped", "error", err)
+		return
+	}
+	defer browser.close()
+	for _, id := range closing {
+		_ = browser.command(ctx, "Target.closeTarget", map[string]any{"targetId": id}, nil)
+	}
 }
 
 // bindControlTarget records the page target the control loop attached to and
@@ -167,8 +221,14 @@ func (b *Browser) evictTabsLocked(cfg *config.Config, keep int) []string {
 	for _, index := range cfg.Kiosk.PreloadIndexes() {
 		preloaded[index] = true
 	}
+	limit := maxTabs(cfg)
+	if b.insertTab || cfg.Kiosk.PageSwitch != "tabs" {
+		// The page underneath an insert must survive it.
+		preloaded[b.insertBase] = true
+		limit = max(limit, 2)
+	}
 	var evict []string
-	for len(b.tabUse) > maxTabs(cfg) {
+	for len(b.tabUse) > limit {
 		victim := -1
 		for position, index := range b.tabUse {
 			if index != keep && !preloaded[index] {

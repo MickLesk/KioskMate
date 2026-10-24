@@ -66,8 +66,12 @@ type Browser struct {
 	rotationUntil    time.Time
 	// insertShowing is set while a page insert is on screen; insertReturn
 	// is the page to go back to when the base programme names none.
-	insertShowing    bool
-	insertReturn     int
+	insertShowing bool
+	insertReturn  int
+	// insertTab is set while an insert runs in its own tab in navigate
+	// mode; insertBase is the page whose tab waits underneath it.
+	insertTab        bool
+	insertBase       int
 	rotationCycles   int
 	lastMaintenance  time.Time
 	lastActivity     time.Time
@@ -496,6 +500,13 @@ func (b *Browser) Previous(ctx context.Context) error {
 }
 
 func (b *Browser) setActive(ctx context.Context, index int) error {
+	return b.showPage(ctx, index, false)
+}
+
+// showPage switches to page index. An insert (from the scheduler) opens in a
+// tab of its own even in navigate mode, so the page underneath stays loaded
+// and comes back without a reload when the insert ends.
+func (b *Browser) showPage(ctx context.Context, index int, insert bool) error {
 	if err := b.authenticationAllowed(); err != nil {
 		return err
 	}
@@ -512,15 +523,31 @@ func (b *Browser) setActive(ctx context.Context, index int) error {
 	isolate := cfg.Kiosk.IsolateSessions
 	brightness := pageBrightness(cfg.Kiosk, index)
 	control := b.display
+	tabMode := cfg.Kiosk.PageSwitch == "tabs"
+	insertTab := b.insertTab
+	if running && !isolate && !tabMode && insert && !insertTab && previous != index {
+		insertTab = b.keepTabForInsertLocked(cfg, previous)
+	}
 	b.mu.Unlock()
 	var err error
 	if !running {
 		err = b.start(ctx)
-	} else if !isolate && cfg.Kiosk.PageSwitch == "tabs" && previous != index {
-		if tabErr := b.switchTab(ctx, cfg, index); tabErr != nil {
+	} else if !isolate && (tabMode || insertTab) && previous != index {
+		tabErr := b.switchTab(ctx, cfg, index)
+		if tabErr != nil {
 			b.logger.Warn("tab switch failed, navigating instead", "error", tabErr)
 			if navErr := b.navigateDevTools(ctx, target); navErr != nil {
 				err = b.restart(ctx, "page_navigation_recovery")
+			}
+		}
+		if !tabMode {
+			if insert && tabErr == nil {
+				b.mu.Lock()
+				b.insertTab = true
+				b.mu.Unlock()
+			} else {
+				// Back from the insert: navigate mode keeps one tab only.
+				b.closeOtherTabs(ctx, cfg, index)
 			}
 		}
 	} else if !isolate || previous == index {
@@ -722,7 +749,8 @@ func (b *Browser) RunScheduler(ctx context.Context) {
 			if target >= 0 && target != current {
 				b.logger.Info("scheduler page switch", "page", target, "reason", status.Reason)
 				switchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				_ = b.SetActive(switchCtx, target)
+				insert := status.Reason == "insert"
+				_ = b.operate(switchCtx, "page", func() error { return b.showPage(switchCtx, target, insert) })
 				cancel()
 			}
 			if b.maintenanceReloadDue(now, snap.Kiosk.Maintenance) {
@@ -875,8 +903,9 @@ func scheduleWantsDisplayOff(cfg config.KioskConfig, target int, status Schedule
 	if !cfg.Scheduler.Enabled || len(cfg.TimeRules) == 0 {
 		return false
 	}
-	timeRuleActive := status.Reason == "time" && target >= 0
-	if timeRuleActive {
+	// applyInserts only shows an insert while the schedule wants the
+	// display on, so an insert on screen never turns it off.
+	if (status.Reason == "time" || status.Reason == "insert") && target >= 0 {
 		return false
 	}
 	mode := cfg.Scheduler.Mode

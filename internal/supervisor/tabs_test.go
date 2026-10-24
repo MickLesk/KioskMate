@@ -158,3 +158,36 @@ func TestPickDevToolsTargetPrefersActiveTab(t *testing.T) {
 		t.Fatalf("fallback picked %q", target.ID)
 	}
 }
+
+func TestInsertKeepsBasePageTabInNavigateMode(t *testing.T) {
+	fake := &fakeBrowserTarget{}
+	browser := tabTestBrowser(t, fake)
+	browser.cfg.Kiosk.PageSwitch = "navigate"
+	browser.cfg.Kiosk.MaxTabs = 1
+	ctx := context.Background()
+
+	// The insert opens next to the base page instead of navigating it away.
+	if err := browser.showPage(ctx, 1, true); err != nil {
+		t.Fatal(err)
+	}
+	if browser.activeTarget != "tab-1" || !browser.insertTab {
+		t.Fatalf("insert not in its own tab: target %q insertTab %v", browser.activeTarget, browser.insertTab)
+	}
+	browser.bindControlTarget("tab-1")
+
+	// Back to the base page: the kept tab is activated without navigation
+	// and the insert tab is closed again.
+	if err := browser.showPage(ctx, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if browser.activeTarget != "initial" || browser.bindControlTarget("initial") {
+		t.Fatal("base page must come back in its kept tab without a reload")
+	}
+	want := []string{"Target.createTarget <nil>", "Target.activateTarget initial", "Target.closeTarget tab-1"}
+	if calls := fake.callList(); fmt.Sprint(calls) != fmt.Sprint(want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	if browser.insertTab || len(browser.tabs) != 1 || browser.tabs[0] != "initial" {
+		t.Fatalf("navigate mode should keep one tab afterwards: %v", browser.tabs)
+	}
+}
