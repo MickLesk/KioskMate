@@ -75,3 +75,17 @@ func TestSchedulerInsertReturnsToPreviousPageWithoutScheduler(t *testing.T) {
 		t.Fatalf("without a scheduler the page stays manual afterwards, got %d", page)
 	}
 }
+
+func TestInsertKeepsDisplayOnInTimeMode(t *testing.T) {
+	browser := insertTestBrowser(true)
+	day := time.Date(2026, 10, 23, 10, 5, 5, 0, time.Local)
+	page, status := browser.schedulerTarget(day)
+	if page != 1 || status.Reason != "insert" {
+		t.Fatalf("insert not shown: %d %q", page, status.Reason)
+	}
+	// Turning the display off here blanked the base page and reloaded it
+	// from scratch after every insert.
+	if scheduleWantsDisplayOff(browser.cfg.Snapshot().Kiosk, page, status) {
+		t.Fatal("an insert on screen must not turn the display off")
+	}
+}
