@@ -12,6 +12,13 @@ func TestCompareVersionOrdersPrereleases(t *testing.T) {
 		{"1.0.0", "1.0.0-pre", 1},
 		{"v1.0.0", "1.0.0", 0},
 		{"0.9.1", "0.10.0", -1},
+		{"v1.0.0-pre.2", "v1.0.0-pre", 1},
+		{"v1.0.0-pre", "v1.0.0-pre.2", -1},
+		{"v1.0.0-pre.10", "v1.0.0-pre.2", 1},
+		{"v1.0.0-pre2", "v1.0.0-pre", 1},
+		{"v1.0.0-rc.1", "v1.0.0-pre.3", 1},
+		{"v1.0.0-pre.2", "v1.0.0", -1},
+		{"v1.0.0-pre.2", "v1.0.1-pre", -1},
 	}
 	for _, tc := range cases {
 		got := compareVersion(tc.left, tc.right)

@@ -127,7 +127,7 @@ export function renderSettingsAdmin() {
         return `
           <div class="page-stack">
             <div class="card">
-              <div class="head"><div><h3>${esc(t("configAndBackups"))}</h3><span class="section-kicker">${esc(cfg.path || "-")}</span></div><div class="actions">${button("exportConfig", "config-export")}${button("importConfig", "config-import")}</div></div>
+              <div class="head"><div><h3>${esc(t("configAndBackups"))}</h3><span class="section-kicker">${esc(cfg.path || "-")}</span></div><div class="actions">${button("setupWizard", "setup-wizard-open")}${button("exportConfig", "config-export")}${button("importConfig", "config-import")}</div></div>
               <div class="body">
                 <input id="config-import-file" type="file" accept="application/json,.json" class="hidden" />
                 ${renderBackups()}

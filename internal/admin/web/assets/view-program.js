@@ -1,16 +1,17 @@
 // Programme: the base programme (page sequence with durations and time
 // windows) plus inserts that interleave other pages on a fixed rhythm, an
 // hour preview and the order that decides overlaps.
-import { synchronizeKioskWorkflow } from "./actions-kiosk.js";
-import { checked, cloneConfig, closeModal, esc, field, formatDate, formatDuration, isDirty, markDirty, openModal, postJSON, renderApp, renderAppIfIdle, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { showPageNow, synchronizeKioskWorkflow } from "./actions-kiosk.js";
+import { checked, cloneConfig, closeModal, offerUndo, thumbnailImg, esc, field, formatDuration, isDirty, markDirty, openModal, postJSON, renderApp, renderAppIfIdle, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
 import { icon } from "./icons.js";
-import { button, collectPages, normalizePages, stateBanner, validationError } from "./renderers.js";
-import { renderKioskStorybook, selectedKioskPageIndex } from "./view-kiosk.js";
+import { button, collectPages, isLocalSource, normalizePages, sourceMark, stateBanner, validationError } from "./renderers.js";
+import { clock, insertTone as toneOf, renderTimeline } from "./timeline.js";
+import { clockField, describeClock, isScheduleClock, isSunClock, readClock, resolveClock } from "./clock.js";
+import { displayModeLabel, localPageSummary } from "./view-kiosk.js";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const INTERVALS = [2, 3, 5, 10, 15, 20, 30, 45, 60, 90, 120];
 const DURATIONS = [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600];
-const INSERT_COLORS = 4;
 
 function inserts() {
   return state.config?.kiosk?.inserts || [];
@@ -25,10 +26,8 @@ function pageName(pageID) {
   return page ? page.name || page.url : t("pageMissing");
 }
 
-// Each insert keeps its colour in the cards, the hour view and the legend.
 function insertTone(id) {
-  const index = inserts().findIndex((item) => item.id === id);
-  return `tone-${(index < 0 ? 0 : index) % INSERT_COLORS}`;
+  return toneOf(id, inserts());
 }
 
 function dayList(days) {
@@ -46,13 +45,14 @@ export function describeInsert(insert) {
   if (insert.repeat === "hourly") {
     rhythm = Number(insert.minute || 0) === 0 ? t("insertHourlyFull") : t("insertHourlyAt").replace("{minute}", String(insert.minute).padStart(2, "0"));
   } else if (insert.repeat === "times") {
-    rhythm = t("insertAtTimes").replace("{times}", (insert.times || []).join(", ") || "--:--");
+    rhythm = t("insertAtTimes").replace("{times}", (insert.times || []).map((value) => describeClock(value, false)).join(", ") || "--:--");
   } else {
     rhythm = t("insertEvery").replace("{minutes}", insert.every_minutes || 5);
   }
   const parts = [t("insertRhythmFor").replace("{rhythm}", rhythm).replace("{duration}", duration)];
-  if (insert.start && insert.end) parts.push(t("insertWindow").replace("{start}", insert.start).replace("{end}", insert.end));
+  if (insert.start && insert.end) parts.push(t("insertWindow").replace("{start}", describeClock(insert.start, false)).replace("{end}", describeClock(insert.end, false)));
   if (insert.days?.length) parts.push(dayList(insert.days));
+  if (insert.condition?.topic) parts.push(t(insert.condition.negate ? "insertOnlyWhenNot" : "insertOnlyWhen").replace("{topic}", insert.condition.topic).replace("{value}", insert.condition.value || ""));
   return parts.join(" · ");
 }
 
@@ -60,29 +60,95 @@ function priorityLabel(priority) {
   return t(["priorityNormal", "priorityHigh", "priorityHighest"][Math.max(0, Math.min(2, Number(priority || 0)))]);
 }
 
-function clock(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "--:--" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const OVERRIDE_MINUTES = [15, 30, 60, 120, 240, 480];
+const RANGES = [[60, "range1h"], [360, "range6h"], [1440, "range24h"]];
+
+// Pages that make up the base programme: rotation pages and time windows.
+// Insert-only and trigger pages are listed separately.
+function isBasePage(page) {
+  return !page.disabled && page.url && ["duration", "schedule"].includes(page.display_mode || "duration");
+}
+
+function pageHost(page) {
+  if (isLocalSource(page.source_type)) return localPageSummary(page);
+  try {
+    const parsed = new URL(page.url);
+    return `${parsed.host}${parsed.pathname === "/" ? "" : parsed.pathname}`;
+  } catch {
+    return page.url || t("notConfigured");
+  }
+}
+
+function minutesOf(value) {
+  return resolveClock(value) ?? 0;
+}
+
+// A 24-hour strip with the page's time window, for schedule pages.
+function windowStrip(page) {
+  const start = minutesOf(page.schedule?.start);
+  const end = minutesOf(page.schedule?.end);
+  const parts = start <= end ? [[start, end]] : [[start, 1440], [0, end]];
+  return `<span class="window-strip" aria-hidden="true">${parts.map(([a, b]) => `<i data-left="${(a / 14.4).toFixed(2)}" data-width="${((b - a) / 14.4).toFixed(2)}"></i>`).join("")}</span>`;
+}
+
+function baseModeLabel(page) {
+  if (page.display_mode === "schedule") {
+    const days = page.schedule?.days?.length ? ` · ${dayList(page.schedule.days)}` : "";
+    return `${t("timeWindow")} ${describeClock(page.schedule?.start, false)}–${describeClock(page.schedule?.end, false)}${days}`;
+  }
+  return `${t("rotationShort")} · ${formatDuration(Number(page.duration_seconds || 3600))}`;
+}
+
+const ROTATION_DURATIONS = [15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+
+// Duration or window edited right in the row; sun-based windows keep the
+// label and are edited in the dialog.
+function inlineTiming(page, index) {
+  if (page.display_mode === "schedule") {
+    const start = page.schedule?.start || "";
+    const end = page.schedule?.end || "";
+    if (isSunClock(start) || isSunClock(end)) return `<span class="mode-chip window">${esc(baseModeLabel(page))}</span>`;
+    const days = page.schedule?.days?.length ? `<small>${esc(dayList(page.schedule.days))}</small>` : "";
+    return `<span class="inline-window mode-chip window"><span>${esc(t("timeWindow"))}</span><input type="time" data-inline-start="${index}" value="${esc(start)}" aria-label="${esc(t("start"))}" data-no-dirty><span aria-hidden="true">–</span><input type="time" data-inline-end="${index}" value="${esc(end)}" aria-label="${esc(t("end"))}" data-no-dirty>${days}</span>`;
+  }
+  const current = Number(page.duration_seconds || 3600);
+  return `<label class="inline-duration mode-chip rotation"><span>${esc(t("rotationShort"))}</span><select data-inline-duration="${index}" aria-label="${esc(t("durationSeconds"))}" data-no-dirty>${optionList(ROTATION_DURATIONS, current, (value) => formatDuration(value)).map(([value, text]) => `<option value="${value}" ${value === current ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
+}
+
+function nextRunOf(insertID) {
+  const value = state.timeline?.next?.[insertID];
+  if (!value) return "";
+  const at = new Date(value);
+  if (at.getTime() <= Date.now() + 1000) return t("now");
+  const tomorrow = at.toDateString() !== new Date().toDateString();
+  return tomorrow ? `${t("tomorrow")} ${clock(at)}` : clock(at);
 }
 
 export function renderProgram() {
   const kiosk = state.config?.kiosk || {};
   const browser = state.status?.browser || {};
   const list = pages();
-  const selected = selectedKioskPageIndex(list);
-  const current = list[selected] || {};
   const override = browser.override || {};
   const items = inserts();
+  const base = list.map((page, index) => ({ page, index })).filter(({ page }) => isBasePage(page));
+  const others = list.map((page, index) => ({ page, index })).filter(({ page }) => !isBasePage(page));
+  const activeID = browser.running ? (state.persistedConfig?.kiosk?.pages || []).filter((page) => !page.disabled && page.url)[Number(browser.active ?? -1)]?.page_id : "";
+  const range = Number(state.programRange || 60);
+  const draftTimeline = renderTimeline({ timeline: state.timeline, kiosk, pageName });
   return `
     <div class="page-stack program-view">
       ${!kiosk.scheduler?.enabled && (kiosk.time_rules || []).length ? stateBanner("warn", t("scheduler"), t("scheduleNeedsEnable"), "") : ""}
       <section class="program-hero">
-        <div>
+        <div class="program-hero-now">
           <span class="eyebrow">${esc(t("nowOnScreen"))}</span>
-          <strong>${esc(browser.page_name || "-")}</strong>
+          <strong>${esc(browser.running ? browser.page_name || "-" : t("displayStopped"))}</strong>
           <span>${esc(programReason(browser.scheduler))}${browser.scheduler?.next_switch ? ` · ${esc(t("nextSwitch"))} ${esc(clock(browser.scheduler.next_switch))}` : ""}</span>
+          ${override.active ? `<div class="override-note">${icon("clock", 14)}<span>${esc(t("overrideUntil").replace("{time}", clock(override.until)))}</span><button class="link-button" data-busy="override-clear" data-action="override-clear">${esc(t("backToProgramme"))}</button></div>` : ""}
         </div>
-        ${switchHtml("scheduler-enabled", t("runAutomatically"), !!kiosk.scheduler?.enabled)}
+        <div class="program-hero-controls">
+          ${switchHtml("scheduler-enabled", t("runAutomatically"), !!kiosk.scheduler?.enabled)}
+          <label class="inline-select"><span>${esc(t("showNowFor"))}</span><select id="override-minutes" data-no-dirty>${OVERRIDE_MINUTES.map((value) => `<option value="${value}" ${Number(state.overrideMinutes || 60) === value ? "selected" : ""}>${esc(formatDuration(value * 60))}</option>`).join("")}</select></label>
+        </div>
       </section>
 
       <section class="card program-base" aria-labelledby="program-base-title">
@@ -91,23 +157,40 @@ export function renderProgram() {
           <button class="primary" data-action="page-wizard-new">${icon("plus", 16)} ${esc(t("newPage"))}</button>
         </div>
         <div class="body">
-          ${renderKioskStorybook(list, selected)}
-          <div class="selected-page-bar">
-            <div>
-              <span>${esc(t("selectedPage"))}</span>
-              <strong>${esc(current.name || t("noPagesConfigured"))}</strong>
-            </div>
-            <div class="actions">
-              <button data-action="page-activate" ${list.length ? "" : "disabled"} title="${esc(t("activatePageHint"))}">${esc(t("activatePage"))}</button>
-              <button data-action="page-wizard-edit" ${list.length ? "" : "disabled"}>${esc(t("editPage"))}</button>
-            </div>
-          </div>
-          <div class="override-bar">
-            <div><strong>${esc(t("temporaryOverride"))}</strong><span>${esc(override.active ? `${list[override.page]?.name || override.page + 1} · ${formatDate(override.until)}` : t("temporaryOverrideHint"))}</span></div>
-            <label><span>${esc(t("durationMinutes"))}</span><input id="override-duration" type="number" min="1" max="1440" value="60"></label>
-            <button data-action="override-apply" ${list.length ? "" : "disabled"}>${esc(t("showSelectedTemporarily"))}</button>
-            ${override.active ? `<button data-action="override-clear">${esc(t("endOverride"))}</button>` : ""}
-          </div>
+          ${base.length ? `<ol class="base-list">${base.map(({ page, index }, position) => `
+            <li class="base-row ${page.display_mode === "schedule" ? "is-window" : "is-rotation"} ${page.page_id === activeID ? "on-screen" : ""}" draggable="true" data-sequence-index="${index}">
+              <span class="drag-handle" title="${esc(t("dragToReorder"))}" aria-hidden="true">${icon("grip", 16)}</span>
+              <span class="step-number">${position + 1}</span>
+              ${thumbnailImg(page.page_id, "base-thumb") || `<span class="source-mark">${esc(sourceMark(page.source_type))}</span>`}
+              <div class="base-copy">
+                <strong>${esc(page.name || page.url)}${page.page_id === activeID ? ` <span class="live-badge">${esc(t("onScreenNow"))}</span>` : ""}</strong>
+                <span>${esc(pageHost(page))}</span>
+              </div>
+              <div class="base-mode">
+                ${inlineTiming(page, index)}
+                ${page.display_mode === "schedule" ? windowStrip(page) : ""}
+              </div>
+              <div class="base-actions">
+                <button data-page-show-id="${esc(page.page_id)}" data-busy="page-show-${esc(page.page_id)}">${esc(t("showNow"))}</button>
+                <button data-page-edit="${index}">${esc(t("edit"))}</button>
+                <button class="icon-button" data-base-move="${index}" data-direction="-1" ${position === 0 ? "disabled" : ""} title="${esc(t("moveUp"))}" aria-label="${esc(t("moveUp"))}">${icon("up", 16)}</button>
+                <button class="icon-button" data-base-move="${index}" data-direction="1" ${position === base.length - 1 ? "disabled" : ""} title="${esc(t("moveDown"))}" aria-label="${esc(t("moveDown"))}">${icon("down", 16)}</button>
+                <button class="icon-button danger-ghost" data-page-remove="${index}" title="${esc(t("remove"))}" aria-label="${esc(t("remove"))}">${icon("close", 16)}</button>
+              </div>
+            </li>`).join("")}</ol>` : `<div class="empty"><strong>${esc(t("baseEmpty"))}</strong><span>${esc(t("baseEmptyHint"))}</span></div>`}
+          <p class="base-explainer">${esc(t("baseExplainer"))}</p>
+          ${others.length ? `<div class="other-pages">
+            <h4>${esc(t("otherPages"))}</h4>
+            <ul>${others.map(({ page, index }) => `<li>
+              <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
+              <div><strong>${esc(page.name || page.url)}</strong><span>${esc(page.disabled ? t("disabled") : displayModeLabel(page.display_mode))}${usedByInserts(page.page_id)}</span></div>
+              <div class="actions">
+                ${page.disabled ? "" : `<button data-page-show-id="${esc(page.page_id)}" data-busy="page-show-${esc(page.page_id)}">${esc(t("showNow"))}</button>`}
+                <button data-page-tobase="${index}">${esc(t("addToBase"))}</button>
+                <button data-page-edit="${index}">${esc(t("edit"))}</button>
+              </div>
+            </li>`).join("")}</ul>
+          </div>` : ""}
         </div>
       </section>
 
@@ -117,46 +200,71 @@ export function renderProgram() {
           <button class="primary" data-action="insert-new" ${list.length ? "" : "disabled"}>${icon("plus", 16)} ${esc(t("newInsert"))}</button>
         </div>
         <div class="body">
-          ${items.length ? `<div class="insert-list">${items.map((insert, index) => `
+          ${items.length ? `<div class="insert-list">${items.map((insert, index) => {
+            const next = insert.disabled ? "" : nextRunOf(insert.id);
+            return `
             <article class="insert-card ${insertTone(insert.id)} ${insert.disabled ? "disabled" : ""}">
               <span class="insert-swatch" aria-hidden="true"></span>
               <div class="insert-copy">
                 <strong>${esc(insert.name || pageName(insert.page_id))}</strong>
                 <span>${esc(describeInsert(insert))}</span>
                 <small>${esc(t("insertShows").replace("{page}", pageName(insert.page_id)))}${Number(insert.priority || 0) > 0 ? ` · <span class="priority-badge">${esc(priorityLabel(insert.priority))}</span>` : ""}</small>
+                ${insert.condition && state.timeline?.conditions && insert.id in state.timeline.conditions ? `<span class="condition-chip ${state.timeline.conditions[insert.id] ? "met" : ""}">${icon("link", 12)} ${esc(t(state.timeline.conditions[insert.id] ? "conditionMetNow" : "conditionNotMetNow"))}</span>` : ""}
               </div>
+              ${next ? `<span class="insert-next"><small>${esc(t("nextRun"))}</small><strong>${esc(next)}</strong></span>` : ""}
               <div class="actions">
                 <label class="inline-check"><input type="checkbox" data-insert-toggle="${index}" ${insert.disabled ? "" : "checked"}><span>${esc(t("active"))}</span></label>
                 <button data-insert-edit="${index}">${esc(t("edit"))}</button>
+                <button data-insert-duplicate="${index}" title="${esc(t("duplicate"))}">${esc(t("duplicate"))}</button>
                 <button class="danger-ghost" data-insert-remove="${index}" title="${esc(t("remove"))}" aria-label="${esc(t("remove"))}">${icon("close", 16)}</button>
               </div>
-            </article>`).join("")}</div>` : `<div class="empty insert-empty"><strong>${esc(t("noInserts"))}</strong><span>${esc(t("noInsertsHint"))}</span></div>`}
+            </article>`;
+          }).join("")}</div>` : `<div class="insert-templates">
+            <p class="hint">${esc(t("noInsertsHint"))}</p>
+            <div class="template-grid">
+              ${[["interval", "templateEvery5", "templateEvery5Hint"], ["hourly", "templateHourly", "templateHourlyHint"], ["times", "templateTimes", "templateTimesHint"]].map(([repeat, title, hint]) => `<button class="template-tile" data-insert-template="${repeat}" ${list.length ? "" : "disabled"}>${icon(repeat === "times" ? "clock" : "repeat", 20)}<strong>${esc(t(title))}</strong><small>${esc(t(hint))}</small></button>`).join("")}
+            </div>
+          </div>`}
         </div>
       </section>
 
-      ${renderHourView()}
-
-      <section class="card priority-card" aria-labelledby="priority-title">
-        <div class="head"><div><h3 id="priority-title">${esc(t("priorityTitle"))}</h3><span class="section-kicker">${esc(t("priorityHint"))}</span></div></div>
-        <ol class="priority-ladder">
-          <li><strong>${esc(t("priorityStep1"))}</strong><span>${esc(t("priorityStep1Hint"))}</span></li>
-          <li><strong>${esc(t("priorityStep2"))}</strong><span>${esc(t("priorityStep2Hint"))}</span></li>
-          <li><strong>${esc(t("priorityStep3"))}</strong><span>${esc(t("priorityStep3Hint"))}</span></li>
-          <li><strong>${esc(t("priorityStep4"))}</strong><span>${esc(t("priorityStep4Hint"))}</span></li>
-        </ol>
+      <section class="card timeline-card" aria-labelledby="timeline-title">
+        <div class="head">
+          <div><h3 id="timeline-title">${esc(t("programmeFlow"))}</h3><span class="section-kicker">${esc(state.timeline ? t("flowHint").replace("{percent}", Math.round((1 - draftTimeline.share) * 100)) : t("loading"))}</span></div>
+          <div class="segmented compact" role="radiogroup" aria-label="${esc(t("programmeFlow"))}">
+            ${RANGES.map(([value, label]) => `<button role="radio" aria-checked="${range === value}" class="${range === value ? "active" : ""}" data-program-range="${value}">${esc(t(label))}</button>`).join("")}
+          </div>
+        </div>
+        <div class="body">${draftTimeline.html}</div>
       </section>
 
-      <details class="card disclosure advanced-settings">
+      ${renderPresenceCard(kiosk)}
+
+      <details class="card disclosure priority-card" data-keep-open="programPriority" ${state.openDetails?.has("programPriority") ? "open" : ""}>
+        <summary>${esc(t("priorityTitle"))}</summary>
+        <div class="disclosure-body">
+          <p class="hint">${esc(t("priorityHint"))}</p>
+          <ol class="priority-ladder">
+            <li><strong>${esc(t("priorityStep1"))}</strong><span>${esc(t("priorityStep1Hint"))}</span></li>
+            <li><strong>${esc(t("priorityStep2"))}</strong><span>${esc(t("priorityStep2Hint"))}</span></li>
+            <li><strong>${esc(t("priorityStep3"))}</strong><span>${esc(t("priorityStep3Hint"))}</span></li>
+            <li><strong>${esc(t("priorityStep4"))}</strong><span>${esc(t("priorityStep4Hint"))}</span></li>
+          </ol>
+        </div>
+      </details>
+
+      <details class="card disclosure advanced-settings" data-keep-open="programAdvanced" ${state.openDetails?.has("programAdvanced") ? "open" : ""}>
         <summary>${esc(t("sequenceAdvanced"))}</summary>
         <div class="disclosure-body advanced-sequence-grid">
           <div class="form-grid">
             ${field("scheduler-tick", t("tickInterval"), "number", "", secondsToDuration(kiosk.scheduler?.tick_interval, 15))}
           </div>
+          ${renderLocation(kiosk)}
           <div class="actions">
             ${button("renderCheck", "render-check")}
             ${button("checkPage", "page-check")}
           </div>
-          <div id="page-check-output" class="action-feedback">${esc(current.url || "-")}</div>
+          <div id="page-check-output" class="action-feedback"></div>
         </div>
       </details>
       <div class="save-bar">
@@ -166,8 +274,107 @@ export function renderProgram() {
     </div>`;
 }
 
+const PRESENCE_TIMEOUTS = [1, 2, 5, 10, 15, 30, 60, 120];
+
+function renderPresenceCard(kiosk) {
+  const presence = kiosk.presence || {};
+  const scheduler = state.status?.browser?.scheduler || {};
+  const live = presence.enabled && state.persistedConfig?.kiosk?.presence?.enabled
+    ? (scheduler.presence === "present" ? t("presenceNow").replace("{time}", clock(scheduler.presence_until)) : t("presenceNobody"))
+    : "";
+  const open = state.openDetails?.has("programPresence") || (presence.enabled && !state.openDetails?.has("programPresence:closed"));
+  return `<details class="card disclosure presence-card" data-keep-open="programPresence" ${open ? "open" : ""}>
+    <summary>${esc(t("presenceTitle"))} <span class="mode-chip ${presence.enabled ? "rotation" : ""}">${esc(t(presence.enabled ? "active" : "disabled"))}</span></summary>
+    <div class="disclosure-body">
+      <p class="hint">${esc(t("presenceHint"))}</p>
+      ${switchHtml("presence-enabled", t("presenceEnable"), !!presence.enabled)}
+      <div class="presence-fields" ${presence.enabled ? "" : "hidden"}>
+        <div class="form-grid">
+          ${selectHtml("presence-mode", t("presenceMode"), presence.mode || "wake", [["wake", t("presenceModeWake")], ["require", t("presenceModeRequire")]])}
+          ${selectHtml("presence-timeout", t("presenceTimeout"), presence.timeout_minutes || 5, PRESENCE_TIMEOUTS.map((value) => [value, formatDuration(value * 60)]))}
+          ${field("presence-topic", t("presenceTopic"), "text", "", presence.topic || "", "zigbee2mqtt/flur_bewegung/occupancy")}
+          ${field("presence-value", t("presenceValue"), "text", "", presence.value || "", t("presenceValuePlaceholder"))}
+        </div>
+        ${switchHtml("presence-touch", t("presenceTouch"), !!presence.touch)}
+        <p class="hint">${esc(t(state.config?.mqtt?.enabled ? "presenceSources" : "presenceSourcesNoMQTT"))}</p>
+        ${live ? `<p class="presence-live">${icon("touch", 14)} ${esc(live)}</p>` : ""}
+      </div>
+    </div>
+  </details>`;
+}
+
+function renderLocation(kiosk) {
+  const scheduler = kiosk.scheduler || {};
+  const today = (state.timeline?.sun || []).find((day) => day.date === new Date().toLocaleDateString("sv"));
+  return `<div class="location-box">
+    <h4>${esc(t("locationTitle"))}</h4>
+    <p class="hint">${esc(t("locationHint"))}</p>
+    <div class="form-grid">
+      ${field("location-lat", t("latitude"), "number", "", scheduler.latitude || "", "52.52")}
+      ${field("location-lon", t("longitude"), "number", "", scheduler.longitude || "", "13.40")}
+    </div>
+    <div class="actions"><button data-action="location-detect">${esc(t("locationDetect"))}</button>${today && state.timeline?.location ? `<span class="hint">${esc(t("sunToday").replace("{sunrise}", today.sunrise).replace("{sunset}", today.sunset))}</span>` : ""}</div>
+  </div>`;
+}
+
+// Presence and location edit the draft config directly.
+function bindPresenceAndLocation() {
+  const update = (change) => {
+    const cfg = cloneConfig();
+    cfg.kiosk = cfg.kiosk || {};
+    change(cfg.kiosk);
+    state.config = cfg;
+    markDirty();
+  };
+  const readPresence = () => update((kiosk) => {
+    kiosk.presence = {
+      enabled: checked("presence-enabled"),
+      mode: val("presence-mode") || "wake",
+      timeout_minutes: Number(val("presence-timeout") || 5),
+      topic: val("presence-topic").trim(),
+      value: val("presence-value").trim(),
+      touch: checked("presence-touch"),
+    };
+  });
+  ["presence-mode", "presence-timeout", "presence-topic", "presence-value", "presence-touch"].forEach((id) => document.getElementById(id)?.addEventListener("change", readPresence));
+  document.getElementById("presence-enabled")?.addEventListener("change", (event) => {
+    const fields = document.querySelector(".presence-fields");
+    if (fields) fields.hidden = !event.target.checked;
+    readPresence();
+  });
+  const readLocation = () => {
+    const lat = Number(val("location-lat"));
+    const lon = Number(val("location-lon"));
+    if (val("location-lat") && (!Number.isFinite(lat) || lat < -90 || lat > 90)) return validationError("location-lat", t("validationLatitude"));
+    if (val("location-lon") && (!Number.isFinite(lon) || lon < -180 || lon > 180)) return validationError("location-lon", t("validationLongitude"));
+    update((kiosk) => {
+      kiosk.scheduler = { ...(kiosk.scheduler || {}), latitude: Math.round((lat || 0) * 10000) / 10000, longitude: Math.round((lon || 0) * 10000) / 10000 };
+    });
+    refreshDraftTimeline();
+  };
+  const safeLocation = () => { try { readLocation(); } catch (error) { toast(t("validationFailed"), error.message, "error"); } };
+  ["location-lat", "location-lon"].forEach((id) => document.getElementById(id)?.addEventListener("change", safeLocation));
+  document.querySelector('[data-action="location-detect"]')?.addEventListener("click", () => {
+    if (!navigator.geolocation) return toast(t("failed"), t("locationUnavailable"), "warn");
+    navigator.geolocation.getCurrentPosition((position) => {
+      const lat = document.getElementById("location-lat");
+      const lon = document.getElementById("location-lon");
+      if (lat) lat.value = position.coords.latitude.toFixed(4);
+      if (lon) lon.value = position.coords.longitude.toFixed(4);
+      safeLocation();
+    }, () => toast(t("failed"), t("locationUnavailable"), "warn"), { timeout: 10000 });
+  });
+}
+
+function usedByInserts(pageID) {
+  const count = inserts().filter((insert) => insert.page_id === pageID && !insert.disabled).length;
+  if (!count) return "";
+  return ` · ${count === 1 ? t("usedByOneInsert") : t("usedByInserts").replace("{count}", count)}`;
+}
+
 function programReason(scheduler) {
   if (!scheduler?.reason) return t("manualPageControl");
+  if (scheduler.reason === "no active time rule" && scheduler.presence === "present") return t("reasonPresence");
   if (scheduler.reason === "insert") return t("reasonInsertNamed").replace("{name}", scheduler.active_insert || "");
   if (scheduler.reason === "time") return t("reasonTimeWindow").replace("{name}", scheduler.active_rule || "");
   if (scheduler.reason === "rotation") return t("rotationMode");
@@ -177,46 +384,11 @@ function programReason(scheduler) {
   return scheduler.reason;
 }
 
-function renderHourView() {
-  const timeline = state.timeline;
-  const segments = timeline?.segments || [];
-  const minutes = Number(timeline?.minutes || 60);
-  const from = new Date(timeline?.from || Date.now()).getTime();
-  const span = minutes * 60000;
-  const blocks = segments.filter((segment) => segment.insert_id).map((segment) => {
-    const left = Math.max(0, (new Date(segment.start).getTime() - from) / span * 100);
-    const width = Math.max(0.6, (new Date(segment.end).getTime() - new Date(segment.start).getTime()) / span * 100);
-    const label = `${clock(segment.start)}–${clock(segment.end)} ${segment.name || pageName(segment.page_id)}`;
-    return `<span class="hour-block ${insertTone(segment.insert_id)}" data-left="${left.toFixed(2)}" data-width="${width.toFixed(2)}" title="${esc(label)}"></span>`;
-  }).join("");
-  const ticks = [0, 10, 20, 30, 40, 50, 60].filter((m) => m <= minutes).map((m) => `<span data-left="${(m / minutes * 100).toFixed(2)}">${esc(clock(from + m * 60000))}</span>`).join("");
-  const used = [...new Set(segments.filter((segment) => segment.insert_id).map((segment) => segment.insert_id))];
-  const share = segments.filter((segment) => segment.insert_id).reduce((sum, segment) => sum + (new Date(segment.end) - new Date(segment.start)), 0) / span;
-  return `<section class="card hour-view" aria-labelledby="hour-title">
-    <div class="head">
-      <div><h3 id="hour-title">${esc(t("nextHour"))}</h3><span class="section-kicker">${esc(timeline ? t("nextHourHint").replace("{percent}", Math.round((1 - share) * 100)) : t("loading"))}</span></div>
-    </div>
-    <div class="body">
-      <div class="hour-track" role="img" aria-label="${esc(t("nextHour"))}">
-        ${blocks}
-      </div>
-      <div class="hour-ticks" aria-hidden="true">${ticks}</div>
-      <div class="hour-legend">
-        <span class="legend-item"><i class="hour-legend-base"></i>${esc(t("baseProgramme"))}</span>
-        ${used.map((id) => {
-          const insert = inserts().find((item) => item.id === id) || {};
-          return `<span class="legend-item ${insertTone(id)}"><i></i>${esc(insert.name || pageName(insert.page_id))}</span>`;
-        }).join("")}
-      </div>
-    </div>
-  </section>`;
-}
-
-// Recomputes the hour view from the unsaved inserts and pages.
+// Recomputes the timeline from the unsaved inserts and pages.
 export async function refreshDraftTimeline() {
   try {
     const kiosk = state.config?.kiosk || {};
-    state.timeline = await postJSON("/api/program/timeline", { pages: kiosk.pages || [], inserts: kiosk.inserts || [], minutes: 60 });
+    state.timeline = await postJSON("/api/program/timeline", { pages: kiosk.pages || [], inserts: kiosk.inserts || [], scheduler: kiosk.scheduler || {}, minutes: Number(state.programRange || 60) });
     renderAppIfIdle();
   } catch (error) {
     toast(t("failed"), error.message, "warn");
@@ -242,13 +414,88 @@ function updateInserts(change) {
   refreshDraftTimeline();
 }
 
+function updatePages(change) {
+  const cfg = cloneConfig();
+  cfg.kiosk = cfg.kiosk || {};
+  cfg.kiosk.pages = collectPages();
+  change(cfg.kiosk);
+  synchronizeKioskWorkflow(cfg.kiosk);
+  state.config = cfg;
+  markDirty();
+  renderApp();
+  refreshDraftTimeline();
+}
+
 export function bindProgram() {
+  bindPresenceAndLocation();
+  // Disclosures stay open across re-renders.
+  document.querySelectorAll(".program-view [data-keep-open]").forEach((details) => details.addEventListener("toggle", () => {
+    state.openDetails = state.openDetails || new Set();
+    const key = details.dataset.keepOpen;
+    state.openDetails.delete(key);
+    state.openDetails.delete(`${key}:closed`);
+    state.openDetails.add(details.open ? key : `${key}:closed`);
+  }));
   document.querySelector('[data-action="insert-new"]')?.addEventListener("click", () => openInsertDialog(null));
+  document.querySelectorAll("[data-insert-template]").forEach((button) => button.addEventListener("click", () => openInsertDialog(null, button.dataset.insertTemplate)));
+  document.querySelectorAll("[data-insert-duplicate]").forEach((button) => button.addEventListener("click", () => {
+    const source = inserts()[Number(button.dataset.insertDuplicate)];
+    if (!source) return;
+    updateInserts((kiosk) => kiosk.inserts.splice(Number(button.dataset.insertDuplicate) + 1, 0, { ...source, id: newInsertID(), name: source.name ? `${source.name} ${t("copy")}` : "", disabled: true }));
+  }));
+  document.querySelectorAll("[data-page-show-id]").forEach((button) => button.addEventListener("click", () => showPageNow(button.dataset.pageShowId, Number(state.overrideMinutes || 60), `page-show-${button.dataset.pageShowId}`)));
+  document.getElementById("override-minutes")?.addEventListener("change", (event) => {
+    state.overrideMinutes = Number(event.target.value) || 60;
+    try { localStorage.setItem("kioskmate.overrideMinutes", String(state.overrideMinutes)); } catch {}
+  });
+  document.querySelectorAll("[data-program-range]").forEach((button) => button.addEventListener("click", () => {
+    state.programRange = Number(button.dataset.programRange) || 60;
+    try { localStorage.setItem("kioskmate.programRange", String(state.programRange)); } catch {}
+    refreshDraftTimeline();
+  }));
+  // Arrows move a page past its neighbour in the base programme; pages that
+  // are not part of it keep their place.
+  document.querySelectorAll("[data-base-move]").forEach((button) => button.addEventListener("click", () => {
+    const from = Number(button.dataset.baseMove);
+    const direction = Number(button.dataset.direction);
+    updatePages((kiosk) => {
+      const base = kiosk.pages.map((page, index) => (isBasePage(page) ? index : -1)).filter((index) => index >= 0);
+      const target = base[base.indexOf(from) + direction];
+      if (target === undefined) return;
+      const [page] = kiosk.pages.splice(from, 1);
+      kiosk.pages.splice(target, 0, page);
+    });
+  }));
+  document.querySelectorAll("[data-page-tobase]").forEach((button) => button.addEventListener("click", () => {
+    const index = Number(button.dataset.pageTobase);
+    updatePages((kiosk) => {
+      const page = kiosk.pages[index];
+      if (!page) return;
+      page.disabled = false;
+      page.display_mode = "duration";
+      page.duration_seconds = Number(page.duration_seconds || 300);
+    });
+  }));
+  document.querySelectorAll("[data-inline-duration]").forEach((select) => select.addEventListener("change", () => {
+    const index = Number(select.dataset.inlineDuration);
+    updatePages((kiosk) => { if (kiosk.pages[index]) kiosk.pages[index].duration_seconds = Number(select.value); });
+  }));
+  document.querySelectorAll("[data-inline-start], [data-inline-end]").forEach((input) => input.addEventListener("change", () => {
+    const index = Number(input.dataset.inlineStart ?? input.dataset.inlineEnd);
+    if (!/^\d{2}:\d{2}$/.test(input.value)) return;
+    updatePages((kiosk) => {
+      const page = kiosk.pages[index];
+      if (!page) return;
+      page.schedule = { ...(page.schedule || {}), [input.dataset.inlineStart !== undefined ? "start" : "end"]: input.value };
+    });
+  }));
   document.querySelectorAll("[data-insert-edit]").forEach((button) => button.addEventListener("click", () => openInsertDialog(Number(button.dataset.insertEdit))));
   document.querySelectorAll("[data-insert-remove]").forEach((button) => button.addEventListener("click", () => {
-    if (!confirm(t("confirmRemoveInsert"))) return;
     const index = Number(button.dataset.insertRemove);
+    const before = cloneConfig();
+    const removed = inserts()[index];
     updateInserts((kiosk) => kiosk.inserts.splice(index, 1));
+    offerUndo(before, t("insertRemoved"), removed?.name || pageName(removed?.page_id), refreshDraftTimeline);
   }));
   document.querySelectorAll("[data-insert-toggle]").forEach((input) => input.addEventListener("change", () => {
     const index = Number(input.dataset.insertToggle);
@@ -262,11 +509,17 @@ function optionList(values, current, format) {
   return list.sort((a, b) => a - b).map((value) => [value, format(value)]);
 }
 
-function openInsertDialog(index) {
+const TEMPLATES = {
+  interval: { repeat: "interval", every_minutes: 5, duration_seconds: 30 },
+  hourly: { repeat: "hourly", minute: 0, duration_seconds: 60 },
+  times: { repeat: "times", times: ["08:00", "12:00", "18:00"], duration_seconds: 120 },
+};
+
+function openInsertDialog(index, template = "interval") {
   const list = pages().filter((page) => !page.disabled && page.url);
   const editing = index !== null ? inserts()[index] : null;
   const fallbackPage = list.find((page) => page.display_mode === "insert") || list[1] || list[0] || {};
-  const insert = editing ? { ...editing } : { id: newInsertID(), page_id: fallbackPage.page_id, repeat: "interval", every_minutes: 5, minute: 0, times: [], duration_seconds: 30, start: "", end: "", days: [], priority: 0 };
+  const insert = editing ? { ...editing } : { id: newInsertID(), page_id: fallbackPage.page_id, repeat: "interval", every_minutes: 5, minute: 0, times: [], duration_seconds: 30, start: "", end: "", days: [], priority: 0, ...(TEMPLATES[template] || {}) };
   const page = list.find((item) => item.page_id === insert.page_id) || fallbackPage;
   const onlyInsert = editing ? page.display_mode === "insert" : suggestOnlyInsert(list, page);
   const repeat = insert.repeat || "interval";
@@ -292,12 +545,21 @@ function openInsertDialog(index) {
         </div>
         ${switchHtml("insert-window", t("insertWindowLabel"), !!(insert.start && insert.end))}
         <div class="form-grid" data-window ${insert.start && insert.end ? "" : "hidden"}>
-          ${field("insert-start", t("start"), "time", "", insert.start || "07:00")}
-          ${field("insert-end", t("end"), "time", "", insert.end || "23:00")}
+          ${clockField("insert-start", t("start"), insert.start || "07:00", "07:00")}
+          ${clockField("insert-end", t("end"), insert.end || "23:00", "23:00")}
         </div>
         <fieldset class="day-picker"><legend>${esc(t("days"))} <small class="hint">${esc(t("insertDaysHint"))}</small></legend><div>${DAYS.map((day) => `<label><input id="insert-day-${day}" type="checkbox" ${(insert.days || []).includes(day) ? "checked" : ""}><span>${esc(t(`dayShort_${day}`))}</span></label>`).join("")}</div></fieldset>
         <div class="form-grid">
           ${selectHtml("insert-priority", t("insertPriority"), Number(insert.priority || 0), [[0, t("priorityNormal")], [1, t("priorityHigh")], [2, t("priorityHighest")]])}
+        </div>
+        ${switchHtml("insert-condition", t("insertConditionToggle"), !!insert.condition)}
+        <div class="condition-box" data-condition ${insert.condition ? "" : "hidden"}>
+          <p class="hint">${esc(t(state.config?.mqtt?.enabled ? "insertConditionHint" : "insertConditionNeedsMQTT"))}</p>
+          <div class="form-grid">
+            ${field("insert-condition-topic", t("mqttTopic"), "text", "", insert.condition?.topic || "", "zigbee2mqtt/flur_bewegung/occupancy")}
+            ${selectHtml("insert-condition-negate", t("insertConditionOperator"), insert.condition?.negate ? "1" : "0", [["0", t("conditionEquals")], ["1", t("conditionNotEquals")]])}
+            ${field("insert-condition-value", t("insertConditionValue"), "text", "", insert.condition?.value || "ON", "ON")}
+          </div>
         </div>
         <div class="insert-options">
           ${switchHtml("insert-only", t("insertOnlyToggle"), onlyInsert)}
@@ -320,6 +582,10 @@ function openInsertDialog(index) {
   }));
   document.getElementById("insert-window")?.addEventListener("change", (event) => {
     const group = form?.querySelector("[data-window]");
+    if (group) group.hidden = !event.target.checked;
+  });
+  document.getElementById("insert-condition")?.addEventListener("change", (event) => {
+    const group = form?.querySelector("[data-condition]");
     if (group) group.hidden = !event.target.checked;
   });
   document.getElementById("insert-page")?.addEventListener("change", (event) => {
@@ -379,20 +645,26 @@ function readInsertForm(base, validate) {
   if (repeat === "hourly") next.minute = Math.round(Number(val("insert-minute") || 0));
   if (repeat === "times") next.times = val("insert-times").split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean).map(normalizeTime);
   if (windowOn) {
-    next.start = val("insert-start");
-    next.end = val("insert-end");
+    next.start = readClock("insert-start");
+    next.end = readClock("insert-end");
+  }
+  if (checked("insert-condition")) {
+    next.condition = { topic: val("insert-condition-topic").trim(), value: val("insert-condition-value").trim(), negate: val("insert-condition-negate") === "1" };
   }
   if (!next.days.length) delete next.days;
   if (!validate) return next;
   if (!next.page_id) validationError("insert-page", t("validationInsertPage"));
   if (repeat === "hourly" && (next.minute < 0 || next.minute > 59)) validationError("insert-minute", t("validationInsertMinute"));
-  if (repeat === "times" && (!next.times.length || next.times.some((item) => !/^\d{2}:\d{2}$/.test(item)))) validationError("insert-times", t("validationInsertTimes"));
+  if (repeat === "times" && (!next.times.length || next.times.some((item) => !isScheduleClock(item)))) validationError("insert-times", t("validationInsertTimes"));
   if (repeat === "interval" && next.duration_seconds >= next.every_minutes * 60) validationError("insert-duration", t("validationInsertDuration"));
   if (windowOn && (!next.start || !next.end)) validationError("insert-start", t("validationTime"));
+  if (next.condition && (!next.condition.topic || /[#+]/.test(next.condition.topic))) validationError("insert-condition-topic", t("validationConditionTopic"));
+  if (next.condition && !next.condition.value) validationError("insert-condition-value", t("validationConditionValue"));
   return next;
 }
 
 function normalizeTime(value) {
+  if (isSunClock(value)) return value.toLowerCase().replace(/\s+/g, "");
   const match = /^(\d{1,2})[:.](\d{2})$/.exec(value);
   if (!match) return value;
   return `${match[1].padStart(2, "0")}:${match[2]}`;

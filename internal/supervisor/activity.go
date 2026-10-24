@@ -64,7 +64,11 @@ func (b *Browser) noteActivity() {
 	b.mu.Lock()
 	b.lastActivity = time.Now()
 	handler := b.activityHandler
+	store := b.signals
 	b.mu.Unlock()
+	if presence := b.cfg.Snapshot().Kiosk.Presence; presence.Enabled && presence.Touch {
+		store.NotePresence(time.Now(), "touch")
+	}
 	if handler != nil {
 		go handler()
 	}

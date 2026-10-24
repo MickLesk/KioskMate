@@ -70,6 +70,13 @@ func dialDevTools(ctx context.Context, profile string, preferred string) (*cdpSe
 }
 
 func captureDevToolsScreenshot(ctx context.Context, profile string, preferred string) ([]byte, error) {
+	return captureDevToolsImage(ctx, profile, preferred, 0)
+}
+
+// captureDevToolsImage takes a PNG of the page, or with thumbWidth > 0 a
+// small JPEG scaled by the compositor, which costs far less CPU on a Pi than
+// encoding and scaling a full-size PNG.
+func captureDevToolsImage(ctx context.Context, profile string, preferred string, thumbWidth int) ([]byte, error) {
 	session, err := dialDevTools(ctx, profile, preferred)
 	if err != nil {
 		return nil, err
@@ -78,14 +85,35 @@ func captureDevToolsScreenshot(ctx context.Context, profile string, preferred st
 	if err := session.command(ctx, "Page.enable", map[string]any{}, nil); err != nil {
 		return nil, err
 	}
-	var result struct {
-		Data string `json:"data"`
-	}
-	if err := session.command(ctx, "Page.captureScreenshot", map[string]any{
+	params := map[string]any{
 		"format":                "png",
 		"fromSurface":           true,
 		"captureBeyondViewport": false,
-	}, &result); err != nil {
+	}
+	if thumbWidth > 0 {
+		var metrics struct {
+			Viewport struct {
+				Width  float64 `json:"clientWidth"`
+				Height float64 `json:"clientHeight"`
+			} `json:"cssLayoutViewport"`
+		}
+		if err := session.command(ctx, "Page.getLayoutMetrics", map[string]any{}, &metrics); err != nil {
+			return nil, err
+		}
+		if metrics.Viewport.Width <= 0 || metrics.Viewport.Height <= 0 {
+			return nil, errors.New("page has no viewport")
+		}
+		params["format"] = "jpeg"
+		params["quality"] = 60
+		params["clip"] = map[string]any{
+			"x": 0, "y": 0, "width": metrics.Viewport.Width, "height": metrics.Viewport.Height,
+			"scale": min(1, float64(thumbWidth)/metrics.Viewport.Width),
+		}
+	}
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := session.command(ctx, "Page.captureScreenshot", params, &result); err != nil {
 		return nil, err
 	}
 	data, err := base64.StdEncoding.DecodeString(result.Data)

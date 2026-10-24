@@ -1,0 +1,90 @@
+{
+  "version": 4,
+  "admin": {
+    "bind": "0.0.0.0",
+    "port": 33411,
+    "token": "tOKdOBxEKmUzh0S7yalc_P2ObYn13WAm",
+    "password_hash": "argon2id$v=19$m=65536,t=3,p=2$pqIg0AZkAGzav1XCatUwZg$6oTQxGfSHAPHFn5WW6AJJMIgBen4kUYAuex2SyiTOtI"
+  },
+  "kiosk": {
+    "urls": [
+      "https://demo.home-assistant.io"
+    ],
+    "pages": [
+      {
+        "page_id": "home_assistant",
+        "name": "Home Assistant",
+        "url": "https://demo.home-assistant.io",
+        "source_type": "home_assistant",
+        "display_mode": "duration",
+        "duration_seconds": 3600,
+        "disabled": false
+      }
+    ],
+    "browser_preset": "custom",
+    "browser_command": "/bin/true",
+    "extra_args": null,
+    "user_data_dir": "",
+    "isolate_page_sessions": false,
+    "theme": "dark",
+    "zoom_percent": 125,
+    "widget": true,
+    "scheduler": {
+      "enabled": true,
+      "mode": "time",
+      "tick_interval": 15000000000
+    },
+    "rotation": [
+      {
+        "page": 0,
+        "duration_seconds": 3600
+      }
+    ],
+    "time_rules": [],
+    "maintenance": {},
+    "inserts": [],
+    "rules": []
+  },
+  "performance": {
+    "profile": "balanced",
+    "gpu_mode": "auto",
+    "reduce_motion": true
+  },
+  "watchdog": {
+    "restart_on_cpu": false,
+    "enabled": true,
+    "check_interval": 10000000000,
+    "max_rss_mb": 900,
+    "max_cpu_percent": 300,
+    "cpu_grace": 600000000000
+  },
+  "mqtt": {
+    "enabled": false,
+    "url": "",
+    "version": "3.1.1",
+    "username": "",
+    "password": "",
+    "discovery": "homeassistant",
+    "base_topic": "kioskmate",
+    "node": "kioskmate",
+    "client_id": "",
+    "keepalive": 60000000000,
+    "force_disable_retain": false,
+    "ca_file": "",
+    "cert_file": "",
+    "key_file": "",
+    "server_name": "",
+    "reject_unauthorized": true,
+    "maximum_packet_size": 1048576,
+    "interval": 30000000000
+  },
+  "time": {
+    "ntp_server": "pool.ntp.org",
+    "timezone": ""
+  },
+  "update": {
+    "repository": "MickLesk/KioskMate",
+    "prerelease": false,
+    "service": "kioskmate.service"
+  }
+}

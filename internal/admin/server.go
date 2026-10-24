@@ -36,6 +36,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/integration"
 	"github.com/MickLesk/KioskMate/internal/mqttclient"
+	"github.com/MickLesk/KioskMate/internal/signals"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/systemtime"
 	"github.com/MickLesk/KioskMate/internal/updater"
@@ -90,6 +91,7 @@ type MQTTDiscoveryPublisher interface {
 }
 
 type Server struct {
+	feeds    fetchCache
 	cfg      *config.Config
 	browser  Browser
 	mqtt     MQTTDiscoveryPublisher
@@ -106,6 +108,15 @@ type Server struct {
 	sessions map[string]Session
 	attempts map[string][]time.Time
 	snapshot snapshotCache
+	configMu sync.Mutex
+	signals  *signals.Store
+}
+
+// SetSignals attaches the store that receives presence detections.
+func (s *Server) SetSignals(store *signals.Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signals = store
 }
 
 type snapshotCache struct {
@@ -244,6 +255,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/status", s.auth(s.status))
 	mux.HandleFunc("/api/time", s.auth(s.timeStatus))
 	mux.HandleFunc("/api/program/timeline", s.auth(s.programTimeline))
+	mux.HandleFunc("/api/presence", s.auth(s.presence))
+	mux.HandleFunc("/api/pages/thumbnails", s.auth(s.pageThumbnails))
+	mux.HandleFunc("/api/pages/thumbnails/", s.auth(s.pageThumbnails))
 	mux.HandleFunc("/api/time/zones", s.auth(s.timeZones))
 	mux.HandleFunc("/api/logs", s.auth(s.logs))
 	mux.HandleFunc("/api/events", s.auth(s.eventJournal))
@@ -316,6 +330,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	errc := make(chan error, 1)
 	close(s.ready)
+	go s.runThumbnails(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -874,11 +889,14 @@ func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
 	snap := s.cfg.Snapshot()
 	kiosk := snap.Kiosk
 	minutes := 60
+	wholeDay := false
 	if r.Method == http.MethodPost {
 		var body struct {
-			Pages   []config.KioskPage  `json:"pages"`
-			Inserts []config.PageInsert `json:"inserts"`
-			Minutes int                 `json:"minutes"`
+			Pages     []config.KioskPage     `json:"pages"`
+			Inserts   []config.PageInsert    `json:"inserts"`
+			Minutes   int                    `json:"minutes"`
+			Day       bool                   `json:"day"`
+			Scheduler *config.KioskScheduler `json:"scheduler"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -888,14 +906,21 @@ func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
 			kiosk.Pages = body.Pages
 		}
 		kiosk.Inserts = body.Inserts
+		if body.Scheduler != nil {
+			kiosk.Scheduler.Latitude, kiosk.Scheduler.Longitude = body.Scheduler.Latitude, body.Scheduler.Longitude
+		}
 		if body.Minutes > 0 {
 			minutes = body.Minutes
 		}
+		wholeDay = body.Day
 	} else if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
-	} else if value, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && value > 0 {
-		minutes = value
+	} else {
+		if value, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && value > 0 {
+			minutes = value
+		}
+		wholeDay = r.URL.Query().Get("day") == "1"
 	}
 	minutes = min(minutes, 24*60)
 	now := time.Now()
@@ -903,20 +928,82 @@ func (s *Server) programTimeline(w http.ResponseWriter, r *http.Request) {
 		now = now.In(loc)
 	}
 	from := now.Truncate(time.Minute)
+	// day=1 asks for today from midnight, for the overview's day bar.
+	if wholeDay {
+		from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		minutes = 24 * 60
+	}
 	upcoming := []config.ProgramSegment{}
-	for _, segment := range kiosk.ProgramTimeline(now, now.Add(24*time.Hour)) {
-		if segment.InsertID != "" {
+	// next holds each insert's next run within two days, also for inserts
+	// that run rarely and do not make it into the first eight upcoming runs.
+	next := map[string]time.Time{}
+	for _, segment := range kiosk.ProgramTimeline(now, now.Add(48*time.Hour)) {
+		if segment.InsertID == "" {
+			continue
+		}
+		if len(upcoming) < 8 && segment.Start.Before(now.Add(24*time.Hour)) {
 			upcoming = append(upcoming, segment)
 		}
-		if len(upcoming) == 8 {
-			break
+		if _, ok := next[segment.InsertID]; !ok {
+			next[segment.InsertID] = segment.Start
 		}
 	}
 	segments := kiosk.ProgramTimeline(from, from.Add(time.Duration(minutes)*time.Minute))
 	if segments == nil {
 		segments = []config.ProgramSegment{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"now": now, "from": from, "minutes": minutes, "segments": segments, "upcoming": upcoming})
+	// Conditional inserts are drawn as possible runs; conditions says
+	// whether each one holds right now.
+	s.mu.Lock()
+	store := s.signals
+	s.mu.Unlock()
+	conditions := map[string]bool{}
+	for _, insert := range kiosk.Inserts {
+		if insert.Condition != nil {
+			value, seen := store.Value(insert.Condition.Topic)
+			conditions[insert.ID] = insert.Condition.Holds(value, seen)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"now": now, "from": from, "minutes": minutes, "segments": segments, "upcoming": upcoming, "next": next, "conditions": conditions, "sun": sunDays(kiosk, from, 3), "location": kiosk.Scheduler.HasLocation()})
+}
+
+// presence records a presence detection (POST, for motion sensors and
+// automations) or reports the last one (GET).
+func (s *Server) presence(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	store := s.signals
+	s.mu.Unlock()
+	switch r.Method {
+	case http.MethodPost:
+		store.NotePresence(time.Now(), "api")
+		fallthrough
+	case http.MethodGet:
+		last, source := store.LastPresence()
+		presence := s.cfg.Snapshot().Kiosk.Presence
+		out := map[string]any{"enabled": presence.Enabled, "present": false}
+		if !last.IsZero() {
+			until := last.Add(presence.Timeout())
+			out["last"], out["source"], out["until"] = last, source, until
+			out["present"] = presence.Enabled && time.Now().Before(until)
+		}
+		writeJSON(w, http.StatusOK, out)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// sunDays lists sunrise and sunset (HH:MM) for the days around from, so the
+// Admin UI can place sun-based windows in the timeline.
+func sunDays(kiosk config.KioskConfig, from time.Time, days int) []map[string]string {
+	out := []map[string]string{}
+	clock := func(minute int) string { return fmt.Sprintf("%02d:%02d", minute/60, minute%60) }
+	for i := -1; i < days; i++ {
+		day := time.Date(from.Year(), from.Month(), from.Day()+i, 12, 0, 0, 0, from.Location())
+		rise, _ := kiosk.ResolveClock("sunrise", day)
+		set, _ := kiosk.ResolveClock("sunset", day)
+		out = append(out, map[string]string{"date": day.Format("2006-01-02"), "sunrise": clock(rise), "sunset": clock(set)})
+	}
+	return out
 }
 
 func (s *Server) timeStatus(w http.ResponseWriter, r *http.Request) {
@@ -1264,7 +1351,7 @@ func redactValue(key string, value any) any {
 		return out
 	case string:
 		lower := strings.ToLower(key)
-		if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "hash") {
+		if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "hash") || strings.Contains(lower, "api_key") {
 			if typed == "" {
 				return ""
 			}
@@ -1366,7 +1453,9 @@ func (s *Server) sshKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, publicConfig(s.cfg))
+		out := publicConfig(s.cfg)
+		out.Revision = configRevision(out)
+		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		data, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
 		if err != nil {
@@ -1378,12 +1467,25 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		// A save carries the revision it was based on; when the configuration
+		// changed since (another browser, Home Assistant, a workflow), refuse
+		// unless the user chose to overwrite.
+		var base struct {
+			Revision string `json:"revision"`
+		}
+		_ = json.Unmarshal(data, &base)
+		s.configMu.Lock()
+		defer s.configMu.Unlock()
+		if current := configRevision(publicConfig(s.cfg)); base.Revision != "" && base.Revision != current && r.URL.Query().Get("force") != "1" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "the configuration was changed elsewhere in the meantime", "code": "config_changed", "revision": current})
+			return
+		}
 		if err := s.cfg.Replace(next); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		s.audit("config_save", "ok", "configuration saved", nil)
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "conflicts": next.Kiosk.Conflicts()})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "conflicts": next.Kiosk.Conflicts(), "revision": configRevision(publicConfig(s.cfg))})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1570,10 +1672,33 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 		next.MQTT.Password = s.cfg.Snapshot().MQTT.Password
 	}
 	next.MQTT.PasswordConfigured = false
+	keepImmichKeys(&next, s.cfg.Snapshot())
+	next.Revision = ""
 	if err := config.Validate(&next); err != nil {
 		return nil, err
 	}
 	return &next, nil
+}
+
+// keepImmichKeys keeps the stored Immich API key of a page when the Admin UI
+// posts it back empty (it never receives the key).
+func keepImmichKeys(next, current *config.Config) {
+	stored := map[string]string{}
+	for _, page := range current.Kiosk.Pages {
+		if page.Local != nil && page.Local.ImmichAPIKey != "" {
+			stored[page.PageID] = page.Local.ImmichAPIKey
+		}
+	}
+	for index := range next.Kiosk.Pages {
+		page := &next.Kiosk.Pages[index]
+		if page.Local == nil {
+			continue
+		}
+		if page.Local.ImmichAPIKey == "" {
+			page.Local.ImmichAPIKey = stored[page.PageID]
+		}
+		page.Local.ImmichKeyConfigured = false
+	}
 }
 
 func (s *Server) backupFiles() []backupFile {
@@ -1943,9 +2068,13 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	add := func(id string, level string, message string, detail any) {
 		checks = append(checks, map[string]any{"id": id, "level": level, "message": message, "detail": detail})
 	}
+	model := ""
 	if s.hardware != nil {
-		hardwareDoctorChecks(s.hardware.Status(ctx), add)
+		hw := s.hardware.Status(ctx)
+		hardwareDoctorChecks(hw, add)
+		model, _ = hw.Device["model"].(string)
 	}
+	var h264HW *bool
 	command := status.Command
 	if command == "" {
 		add("browser_command", "error", "Browser command is empty.", "")
@@ -1999,16 +2128,28 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 		if gpu, ok := s.browser.(gpuBrowser); ok {
 			if info, err := gpu.GPUInfo(ctx); err != nil {
 				add("gpu", "warn", "GPU report is unavailable.", err.Error())
-			} else if info.SoftwareRaster {
-				add("gpu", "warn", "Chromium rasterizes in software. This costs a lot of CPU on small boards; try GPU mode \"hardware\" and compare with scripts/benchmark.sh.", info)
 			} else {
-				add("gpu", "ok", "Chromium uses GPU rasterization.", info)
+				if info.SoftwareRaster {
+					add("gpu", "warn", "Chromium rasterizes in software. This costs a lot of CPU on small boards; try GPU mode \"hardware\" and compare with scripts/benchmark.sh.", info)
+				} else {
+					add("gpu", "ok", "Chromium uses GPU rasterization.", info)
+				}
+				hw := false
+				for _, profile := range info.VideoDecode {
+					hw = hw || strings.Contains(strings.ToLower(profile), "h264")
+				}
+				h264HW = &hw
 			}
 		}
 	} else if status.LastError != "" {
 		add("browser_running", "error", "Browser is stopped with a last error.", status.LastError)
 	} else {
 		add("browser_running", "warn", "Browser is currently stopped.", "")
+	}
+	if strings.Contains(model, "Raspberry Pi") {
+		report := collectVideoDecode(ctx, model)
+		report.ChromiumH264HW = h264HW
+		videoDecodeCheck(report, add)
 	}
 	for _, arg := range s.cfg.Snapshot().Kiosk.ExtraArgs {
 		if strings.TrimSpace(arg) == "--disable-dev-shm-usage" {
@@ -2272,6 +2413,15 @@ func (s *Server) browserSafeMode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "config": publicConfig(s.cfg)})
 }
 
+// configRevision hashes a public configuration (without its revision).
+func configRevision(cfg *config.Config) string {
+	clone := *cfg
+	clone.Revision = ""
+	data, _ := json.Marshal(&clone)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
+}
+
 func publicConfig(cfg *config.Config) *config.Config {
 	return publicConfigSnapshot(cfg.Snapshot())
 }
@@ -2281,6 +2431,12 @@ func publicConfigSnapshot(out *config.Config) *config.Config {
 	out.Admin.Token = ""
 	out.Admin.PasswordHash = ""
 	out.MQTT.Password = ""
+	for index := range out.Kiosk.Pages {
+		if local := out.Kiosk.Pages[index].Local; local != nil {
+			local.ImmichKeyConfigured = local.ImmichAPIKey != ""
+			local.ImmichAPIKey = ""
+		}
+	}
 	return out
 }
 

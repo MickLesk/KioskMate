@@ -78,3 +78,56 @@ func TestLocalPageValidatesBeforeNormalize(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNewLocalPageTypesValidateAndClean(t *testing.T) {
+	check := func(page KioskPage) error {
+		cfg := &Config{Admin: AdminConfig{Port: 4000}, Kiosk: KioskConfig{Pages: []KioskPage{page}}}
+		normalize(cfg)
+		return Validate(cfg)
+	}
+	lat := 95.0
+	bad := []KioskPage{
+		{Name: "W", SourceType: SourceWeather, Local: &LocalPage{Latitude: &lat, Longitude: &lat}},
+		{Name: "C", SourceType: SourceCountdown, Local: &LocalPage{}},
+		{Name: "C", SourceType: SourceCountdown, Local: &LocalPage{Target: "24.12.2026"}},
+		{Name: "N", SourceType: SourceNews, Local: &LocalPage{}},
+		{Name: "N", SourceType: SourceNews, Local: &LocalPage{Feeds: []string{"ftp://x/feed"}}},
+		{Name: "N", SourceType: SourceNews, Local: &LocalPage{Feeds: []string{"https://a", "https://b", "https://c", "https://d", "https://e", "https://f"}}},
+		{Name: "K", SourceType: SourceCamera, Local: &LocalPage{Streams: []string{"rtsp://cam/1"}}},
+		{Name: "I", SourceType: SourceImmich, Local: &LocalPage{ImmichURL: "https://photos"}},
+		{Name: "I", SourceType: SourceImmich, Local: &LocalPage{ImmichURL: "https://photos", ImmichAPIKey: "k", ImmichAlbum: "../x"}},
+	}
+	for _, page := range bad {
+		if err := check(page); err == nil {
+			t.Errorf("accepted %s %#v", page.SourceType, page.Local)
+		}
+	}
+	good := []KioskPage{
+		{Name: "W", SourceType: SourceWeather},
+		{Name: "C", SourceType: SourceCountdown, Local: &LocalPage{Target: "2026-12-24T18:00"}},
+		{Name: "N", SourceType: SourceNews, Local: &LocalPage{Feeds: []string{" https://www.tagesschau.de/xml/rss2 ", ""}}},
+		{Name: "K", SourceType: SourceCamera, Local: &LocalPage{Streams: []string{"http://go2rtc:1984/stream.html?src=door"}}},
+		{Name: "I", SourceType: SourceImmich, Local: &LocalPage{ImmichURL: "https://photos/", ImmichAPIKey: "k", Folder: "/x"}},
+	}
+	for _, page := range good {
+		if err := check(page); err != nil {
+			t.Errorf("%s rejected: %v", page.SourceType, err)
+		}
+	}
+	cfg := &Config{Admin: AdminConfig{Port: 4000}, Kiosk: KioskConfig{Pages: good}}
+	normalize(cfg)
+	if news := cfg.Kiosk.Pages[2].Local; len(news.Feeds) != 1 || news.IntervalSeconds != 12 {
+		t.Fatalf("news defaults = %#v", news)
+	}
+	if immich := cfg.Kiosk.Pages[4].Local; immich.Folder != "" || immich.ImmichURL != "https://photos" || immich.IntervalSeconds != 10 {
+		t.Fatalf("immich cleaned = %#v", immich)
+	}
+	if weather := cfg.Kiosk.Pages[0].Local; weather.Units != "metric" {
+		t.Fatalf("weather defaults = %#v", weather)
+	}
+	snapshot := cfg.Snapshot()
+	snapshot.Kiosk.Pages[2].Local.Feeds[0] = "changed"
+	if cfg.Kiosk.Pages[2].Local.Feeds[0] == "changed" {
+		t.Fatal("snapshot shares local page settings")
+	}
+}

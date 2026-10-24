@@ -138,17 +138,23 @@ let pass = 0;
 let binding = false;
 
 function recordingAdd(type, listener, options) {
-  nativeAdd.call(this, type, listener, options);
-  if (!binding || !(this instanceof Element) || !listener) return;
+  if (!binding || !(this instanceof Element) || !listener) {
+    nativeAdd.call(this, type, listener, options);
+    return;
+  }
   let list = records.get(this);
   if (!list) {
     list = [];
     records.set(this, list);
   }
+  // Drop the previous render's listeners before adding: a named function
+  // bound again (same reference) would otherwise be added as a no-op and
+  // then removed with the old ones, leaving the element without it.
   if (list.length && list[0].pass !== pass) {
     for (const old of list) this.removeEventListener(old.type, old.listener, old.options);
     list.length = 0;
   }
+  nativeAdd.call(this, type, listener, options);
   list.push({ pass, type, listener, options });
   tracked.add(this);
 }

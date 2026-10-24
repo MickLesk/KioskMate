@@ -24,6 +24,7 @@ import (
 	"github.com/MickLesk/KioskMate/internal/hardware"
 	"github.com/MickLesk/KioskMate/internal/integration"
 	"github.com/MickLesk/KioskMate/internal/logutil"
+	"github.com/MickLesk/KioskMate/internal/signals"
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"github.com/MickLesk/KioskMate/internal/updater"
 	"github.com/MickLesk/KioskMate/internal/workflow"
@@ -88,8 +89,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	signalStore := signals.New()
 	browser := supervisor.NewBrowser(cfg, logger.With("component", "browser"))
 	browser.SetEventJournal(eventJournal)
+	browser.SetSignals(signalStore)
 	actionService := actions.New(cfg)
 	actionService.SetEventJournal(eventJournal)
 	updateService := updater.New(cfg, version, actionService)
@@ -100,7 +103,9 @@ func main() {
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"), eventJournal)
 	workflowEngine := workflow.New(cfg, browser, hardwareService, logger.With("component", "workflow"), eventJournal)
 	mqttService.SetWorkflow(workflowEngine)
+	mqttService.SetSignals(signalStore)
 	server.SetWorkflow(workflowEngine)
+	server.SetSignals(signalStore)
 
 	errc := make(chan error, 1)
 	go func() {

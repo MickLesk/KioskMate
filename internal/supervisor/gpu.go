@@ -17,6 +17,8 @@ type GPUInfo struct {
 	FeatureStatus   map[string]string `json:"feature_status"`
 	SoftwareRaster  bool              `json:"software_raster"`
 	SoftwareFeature []string          `json:"software_features,omitempty"`
+	// VideoDecode lists the codec profiles Chromium can decode in hardware.
+	VideoDecode []string `json:"video_decode,omitempty"`
 }
 
 // GPUInfo queries SystemInfo.getInfo on Chromium's browser target. The page
@@ -60,6 +62,9 @@ type systemInfoResult struct {
 			DriverVersion string `json:"driverVersion"`
 		} `json:"devices"`
 		FeatureStatus map[string]string `json:"featureStatus"`
+		VideoDecoding []struct {
+			Profile string `json:"profile"`
+		} `json:"videoDecoding"`
 	} `json:"gpu"`
 }
 
@@ -79,6 +84,11 @@ func (r systemInfoResult) gpuInfo() GPUInfo {
 		}
 	}
 	sort.Strings(info.SoftwareFeature)
+	for _, decoder := range r.GPU.VideoDecoding {
+		if profile := strings.TrimSpace(decoder.Profile); profile != "" {
+			info.VideoDecode = append(info.VideoDecode, profile)
+		}
+	}
 	raster := info.FeatureStatus["rasterization"]
 	info.SoftwareRaster = raster != "" && !strings.HasPrefix(raster, "enabled")
 	return info

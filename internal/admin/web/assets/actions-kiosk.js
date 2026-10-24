@@ -1,16 +1,12 @@
 import { bindBrowserButtons, clearSnapshot } from "./actions-core.js";
-import { KIOSK_VIEWS, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
-import { button, collectPages, collectRotation, collectRules, isLocalSource, normalizePages, sourceLabel, sourceMark, validatePages, validateScheduler, validationError } from "./renderers.js";
+import { KIOSK_VIEWS, checked, clearDirty, cloneConfig, closeModal, durationToNs, esc, field, getJSON, markDirty, modalRoot, offerUndo, openModal, postJSON, recordAction, refreshCore, renderApp, request, runAction, saveConfig, secondsToDuration, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { LOCAL_SOURCES, button, collectPages, collectRotation, collectRules, isLocalSource, normalizePages, sourceLabel, sourceMark, validatePages, validateScheduler, validationError } from "./renderers.js";
 import { bindWorkflows } from "./workflows.js";
+import { clockField, isSunClock, readClock } from "./clock.js";
 import { absolutePageIndexFromEnabled, displayModeLabel, enabledPageIndexFromAbsolute, pageTimingLabel, selectedKioskPageIndex } from "./view-kiosk.js";
 
 export function bindKiosk() {
         bindBrowserButtons();
-        document.querySelectorAll("[data-kiosk-mode]").forEach((button) => button.addEventListener("click", () => {
-          state.kioskEditorMode = button.dataset.kioskMode === "flow" ? "flow" : "storybook";
-          localStorage.setItem("kioskmate.kioskEditorMode", state.kioskEditorMode);
-          renderApp();
-        }));
         document.querySelectorAll("[data-page-select]").forEach((item) => item.addEventListener("click", (event) => {
           if (event.target.closest("[data-page-edit],[data-page-remove],[data-page-move]")) return;
           state.kioskSelectedPageIndex = Number(item.dataset.pageSelect);
@@ -47,15 +43,17 @@ export function bindKiosk() {
         });
         document.querySelectorAll("[data-page-remove]").forEach((button) => {
           button.addEventListener("click", () => {
-            if (!confirm(t("confirmRemovePage"))) return;
+            const before = cloneConfig();
             const cfg = cloneConfig();
             cfg.kiosk.pages = collectPages();
+            const removed = cfg.kiosk.pages[Number(button.dataset.pageRemove)];
             removePage(cfg.kiosk, Number(button.dataset.pageRemove));
             synchronizeKioskWorkflow(cfg.kiosk);
             state.config = cfg;
             state.kioskSelectedPageIndex = Math.max(0, Math.min(Number(button.dataset.pageRemove), cfg.kiosk.pages.length - 1));
             markDirty();
             renderApp();
+            offerUndo(before, t("pageRemoved"), removed?.name || removed?.url || "");
           });
         });
         document.querySelectorAll("[data-page-duplicate]").forEach((button) => {
@@ -124,7 +122,7 @@ export function bindKiosk() {
         const editing = index !== null && pages[index];
         const page = editing ? { ...pages[index], local: { ...(pages[index].local || {}) }, schedule: { ...(pages[index].schedule || {}) }, trigger: { ...(pages[index].trigger || {}) }, display_options: { ...(pages[index].display_options || {}) } } : {
           page_id: createPageID(),
-          name: sourceType === "home_assistant" ? "Home Assistant" : `${t("pages")} ${pages.length + 1}`,
+          name: sourceType === "home_assistant" ? "Home Assistant" : isLocalSource(sourceType) ? sourceLabel(sourceType) : `${t("pages")} ${pages.length + 1}`,
           url: sourceType === "home_assistant" ? "http://homeassistant.local:8123" : "https://",
           source_type: sourceType,
           local: {},
@@ -169,6 +167,22 @@ export function bindKiosk() {
           if (event.target.value === "home_assistant" && (!state.pageWizard.page.url || state.pageWizard.page.url === "https://")) state.pageWizard.page.url = "http://homeassistant.local:8123";
           renderPageWizard();
         });
+        document.querySelectorAll("[data-feed-add]").forEach((chip) => chip.addEventListener("click", () => {
+          const area = document.getElementById("wizard-local-feeds");
+          if (!area) return;
+          const lines = area.value.split("\n").map((line) => line.trim()).filter(Boolean);
+          if (!lines.includes(chip.dataset.feedAdd)) lines.push(chip.dataset.feedAdd);
+          area.value = lines.join("\n");
+        }));
+        document.querySelector("[data-local-geo]")?.addEventListener("click", () => {
+          if (!navigator.geolocation) return toast(t("failed"), t("locationUnavailable"), "warn");
+          navigator.geolocation.getCurrentPosition((position) => {
+            const lat = document.getElementById("wizard-local-lat");
+            const lon = document.getElementById("wizard-local-lon");
+            if (lat) lat.value = position.coords.latitude.toFixed(4);
+            if (lon) lon.value = position.coords.longitude.toFixed(4);
+          }, () => toast(t("failed"), t("locationUnavailable"), "warn"), { timeout: 10000 });
+        });
         document.getElementById("wizard-local-html-file")?.addEventListener("change", async (event) => {
           const file = event.target.files?.[0];
           if (!file) return;
@@ -186,7 +200,7 @@ export function bindKiosk() {
         const page = wizard.page;
         if (wizard.step === 1) return `<div class="wizard-step-grid">
           ${field("wizard-page-name", t("pageName"), "text", "", page.name || "")}
-          ${selectHtml("wizard-source-type", t("pageSource"), page.source_type || "url", ["url", "home_assistant", "clock", "slideshow", "html"].map((type) => [type, sourceLabel(type)]))}
+          ${selectHtml("wizard-source-type", t("pageSource"), page.source_type || "url", ["url", "home_assistant", ...LOCAL_SOURCES].map((type) => [type, sourceLabel(type)]))}
           ${isLocalSource(page.source_type) ? renderLocalPageFields(page) : `<div class="span-2">${field("wizard-page-url", t("pageUrl"), "url", "", page.url || "")}</div>`}
           <div class="span-2">${switchHtml("wizard-page-disabled", t("disablePage"), !!page.disabled)}</div>
           <div class="span-2">${switchHtml("wizard-page-preload", t("preloadPage"), !!page.preload)}<small class="hint">${esc(t(state.config?.kiosk?.page_switch === "tabs" ? "preloadPageHint" : "preloadPageNeedsTabs"))}</small></div>
@@ -197,7 +211,7 @@ export function bindKiosk() {
           return `<div class="wizard-step-grid">
             <div class="span-2">${selectHtml("wizard-display-mode", t("displayMode"), mode, [["duration", t("customDuration")], ["schedule", t("fixedSchedule")], ["insert", t("insertOnly")], ["mqtt", t("triggerBased")]])}</div>
             ${mode === "duration" ? field("wizard-duration", t("durationSeconds"), "number", "", page.duration_seconds || 60) : ""}
-            ${mode === "schedule" ? `${field("wizard-schedule-start", t("start"), "time", "", page.schedule?.start || "08:00")}${field("wizard-schedule-end", t("end"), "time", "", page.schedule?.end || "18:00")}<div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
+            ${mode === "schedule" ? `${clockField("wizard-schedule-start", t("start"), page.schedule?.start || "08:00", "08:00")}${clockField("wizard-schedule-end", t("end"), page.schedule?.end || "18:00", "18:00")}<small class="span-2 hint">${esc(t(state.config?.kiosk?.scheduler?.latitude || state.config?.kiosk?.scheduler?.longitude ? "sunTimesHint" : "sunTimesNeedLocation"))}</small><div class="span-2">${renderWizardDayPicker(page.schedule?.days || [])}</div>` : ""}
             ${mode === "mqtt" ? `${field("wizard-trigger-topic", t("mqttTopic"), "text", "", page.trigger?.topic || "")}${field("wizard-trigger-payload", t("mqttPayload"), "text", "", page.trigger?.payload || "ON")}` : ""}
             <details class="span-2 wizard-options" open><summary>${esc(t("advancedDisplayActions"))}</summary><div class="wizard-option-grid">
               ${switchHtml("wizard-power-off", t("powerOffAfterExpiry"), mode === "schedule" ? page.display_options?.power_off_after !== false : !!page.display_options?.power_off_after)}
@@ -227,6 +241,33 @@ export function bindKiosk() {
           ${field("wizard-local-interval", t("slideshowInterval"), "number", "", local.interval_seconds || 10)}
           ${selectHtml("wizard-local-fit", t("slideshowFit"), local.fit || "contain", [["contain", t("slideshowFitContain")], ["cover", t("slideshowFitCover")]])}
           <div class="span-2">${switchHtml("wizard-local-shuffle", t("slideshowShuffle"), !!local.shuffle)}</div>`;
+        if (page.source_type === "weather") {
+          const scheduler = state.config?.kiosk?.scheduler || {};
+          const kioskPlace = scheduler.latitude || scheduler.longitude ? `${Number(scheduler.latitude).toFixed(2)}, ${Number(scheduler.longitude).toFixed(2)}` : "";
+          return `${title}
+          <div class="span-2">${field("wizard-local-location", t("weatherLocationName"), "text", "", local.location || "", "Berlin")}</div>
+          ${field("wizard-local-lat", t("weatherLatitude"), "text", "", local.latitude ?? "", kioskPlace ? String(scheduler.latitude) : "52.52")}
+          ${field("wizard-local-lon", t("weatherLongitude"), "text", "", local.longitude ?? "", kioskPlace ? String(scheduler.longitude) : "13.40")}
+          <div class="span-2 local-hint-row"><small class="hint">${esc(kioskPlace ? t("weatherLocationHint").replace("{place}", kioskPlace) : t("weatherNoKioskLocation"))}</small><button type="button" class="link-button" data-local-geo>${esc(t("weatherUseDevice"))}</button></div>
+          ${selectHtml("wizard-local-units", t("weatherUnits"), local.units || "metric", [["metric", t("unitsMetric")], ["imperial", t("unitsImperial")]])}`;
+        }
+        if (page.source_type === "countdown") return `${title}
+          <div class="span-2"><label for="wizard-local-target">${esc(t("countdownTarget"))}</label><input id="wizard-local-target" type="datetime-local" value="${esc((local.target || "").slice(0, 16))}"></div>
+          <div class="span-2">${field("wizard-local-done", t("countdownDone"), "text", "", local.done_text || "", t("countdownDonePlaceholder"))}</div>
+          <div class="span-2">${switchHtml("wizard-local-countup", t("countdownCountUp"), !!local.count_up)}</div>`;
+        if (page.source_type === "news") return `${title}
+          <div class="span-2"><label for="wizard-local-feeds">${esc(t("newsFeeds"))}</label><textarea id="wizard-local-feeds" rows="4" spellcheck="false" placeholder="https://www.tagesschau.de/infoservices/alle-meldungen-100~rss2.xml">${esc((local.feeds || []).join("\n"))}</textarea><small class="hint">${esc(t("newsFeedsHint"))}</small>
+            <div class="feed-suggestions"><span>${esc(t("newsSuggestions"))}</span>${NEWS_SUGGESTIONS.map(([name, url]) => `<button type="button" class="chip" data-feed-add="${esc(url)}">${esc(name)}</button>`).join("")}</div></div>
+          ${field("wizard-local-interval", t("newsInterval"), "number", "", local.interval_seconds || 12)}`;
+        if (page.source_type === "camera") return `${title}
+          <div class="span-2"><label for="wizard-local-streams">${esc(t("cameraStreams"))}</label><textarea id="wizard-local-streams" rows="4" spellcheck="false" placeholder="http://192.168.1.10:1984/stream.html?src=haustuer">${esc((local.streams || []).join("\n"))}</textarea><small class="hint">${esc(t("cameraHint"))}</small></div>`;
+        if (page.source_type === "immich") return `${title}
+          <div class="span-2">${field("wizard-local-immich-url", t("immichUrl"), "url", "", local.immich_url || "", "http://immich.local:2283")}</div>
+          <div class="span-2">${field("wizard-local-immich-key", t("immichKey"), "password", "off", "", local.immich_key_configured ? t("immichKeySaved") : "")}<small class="hint">${esc(t("immichKeyHint"))}</small></div>
+          <div class="span-2">${field("wizard-local-immich-album", t("immichAlbum"), "text", "", local.immich_album || "", "http://immich.local:2283/albums/…")}<small class="hint">${esc(t("immichAlbumHint"))}</small></div>
+          ${field("wizard-local-interval", t("slideshowInterval"), "number", "", local.interval_seconds || 15)}
+          ${selectHtml("wizard-local-fit", t("slideshowFit"), local.fit || "contain", [["contain", t("slideshowFitContain")], ["cover", t("slideshowFitCover")]])}
+          <div class="span-2">${switchHtml("wizard-local-shuffle", t("slideshowShuffle"), local.shuffle !== false)}</div>`;
         return `
           <div class="span-2"><label for="wizard-local-html">${esc(t("localHtml"))}</label><textarea id="wizard-local-html" rows="10" spellcheck="false">${esc(local.html || "")}</textarea><small class="hint">${esc(t("localHtmlHint"))}</small></div>
           <div class="span-2"><label for="wizard-local-html-file">${esc(t("localHtmlUpload"))}</label><input id="wizard-local-html-file" type="file" accept=".html,.htm,text/html"></div>`;
@@ -248,12 +289,71 @@ export function bindKiosk() {
           if (validate && !/^(\/|[A-Za-z]:[\\/])/.test(local.folder)) validationError("wizard-local-folder", t("validationSlideshowFolder"));
           if (validate && (local.interval_seconds < 2 || local.interval_seconds > 86400)) validationError("wizard-local-interval", t("validationSlideshowInterval"));
         }
+        if (page.source_type === "weather" && document.getElementById("wizard-local-lat")) {
+          local.location = val("wizard-local-location").trim();
+          local.units = val("wizard-local-units") || "metric";
+          const lat = val("wizard-local-lat").trim();
+          const lon = val("wizard-local-lon").trim();
+          delete local.latitude;
+          delete local.longitude;
+          if (lat || lon) {
+            const latitude = Number(lat);
+            const longitude = Number(lon);
+            if (validate && (!lat || !lon || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180)) validationError("wizard-local-lat", t("validationWeatherLocation"));
+            if (lat && lon) Object.assign(local, { latitude, longitude });
+          }
+        }
+        if (page.source_type === "countdown" && document.getElementById("wizard-local-target")) {
+          local.target = val("wizard-local-target").slice(0, 16);
+          local.done_text = val("wizard-local-done").trim();
+          local.count_up = checked("wizard-local-countup");
+          if (validate && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local.target)) validationError("wizard-local-target", t("validationCountdownTarget"));
+        }
+        if (page.source_type === "news" && document.getElementById("wizard-local-feeds")) {
+          local.feeds = urlLines("wizard-local-feeds");
+          local.interval_seconds = Number(val("wizard-local-interval") || 12);
+          if (validate && (!local.feeds.length || local.feeds.length > 5 || !local.feeds.every(isWebURL))) validationError("wizard-local-feeds", t("validationNewsFeeds"));
+          if (validate && (local.interval_seconds < 4 || local.interval_seconds > 600)) validationError("wizard-local-interval", t("validationNewsInterval"));
+        }
+        if (page.source_type === "camera" && document.getElementById("wizard-local-streams")) {
+          local.streams = urlLines("wizard-local-streams");
+          if (validate && (!local.streams.length || local.streams.length > 4 || !local.streams.every(isWebURL))) validationError("wizard-local-streams", t("validationCameraStreams"));
+        }
+        if (page.source_type === "immich" && document.getElementById("wizard-local-immich-url")) {
+          local.immich_url = val("wizard-local-immich-url").trim().replace(/\/+$/, "");
+          const key = val("wizard-local-immich-key").trim();
+          if (key) local.immich_api_key = key;
+          const album = val("wizard-local-immich-album").trim();
+          local.immich_album = album.match(/\/albums\/([0-9A-Fa-f-]{8,64})/)?.[1] || album;
+          local.interval_seconds = Number(val("wizard-local-interval") || 15);
+          local.fit = val("wizard-local-fit") || "contain";
+          local.shuffle = checked("wizard-local-shuffle");
+          if (validate && !isWebURL(local.immich_url)) validationError("wizard-local-immich-url", t("validationImmichUrl"));
+          if (validate && !key && !local.immich_key_configured) validationError("wizard-local-immich-key", t("validationImmichKey"));
+          if (validate && local.immich_album && !/^[0-9A-Fa-f-]{8,64}$/.test(local.immich_album)) validationError("wizard-local-immich-album", t("validationImmichAlbum"));
+          if (validate && (local.interval_seconds < 2 || local.interval_seconds > 86400)) validationError("wizard-local-interval", t("validationSlideshowInterval"));
+        }
         if (page.source_type === "html" && document.getElementById("wizard-local-html")) {
           local.html = document.getElementById("wizard-local-html").value;
           if (validate && !local.html.trim()) validationError("wizard-local-html", t("validationLocalHtml"));
           if (validate && new Blob([local.html]).size > 256 * 1024) validationError("wizard-local-html", t("validationLocalHtmlSize"));
         }
         page.local = local;
+      }
+
+      const NEWS_SUGGESTIONS = [
+        ["tagesschau", "https://www.tagesschau.de/infoservices/alle-meldungen-100~rss2.xml"],
+        ["heise", "https://www.heise.de/rss/heise-atom.xml"],
+        ["SPIEGEL", "https://www.spiegel.de/schlagzeilen/index.rss"],
+        ["BBC", "https://feeds.bbci.co.uk/news/rss.xml"],
+      ];
+
+      function urlLines(id) {
+        return (document.getElementById(id)?.value || "").split(/\s*\n\s*/).map((line) => line.trim()).filter(Boolean);
+      }
+
+      function isWebURL(value) {
+        try { const parsed = new URL(value); return ["http:", "https:"].includes(parsed.protocol) && !!parsed.host; } catch { return false; }
       }
 
       function renderWizardDayPicker(selected) {
@@ -281,7 +381,8 @@ export function bindKiosk() {
         if (wizard.step === 2) {
           page.display_mode = val("wizard-display-mode") || page.display_mode || "duration";
           page.duration_seconds = Number(val("wizard-duration") || page.duration_seconds || 60);
-          page.schedule = { start: val("wizard-schedule-start") || page.schedule?.start || "08:00", end: val("wizard-schedule-end") || page.schedule?.end || "18:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].filter((day) => checked(`wizard-day-${day}`)) };
+          const scheduleField = (id, fallback) => (document.getElementById(`${id}-kind`) ? readClock(id) : "") || fallback;
+          page.schedule = { start: scheduleField("wizard-schedule-start", page.schedule?.start || "08:00"), end: scheduleField("wizard-schedule-end", page.schedule?.end || "18:00"), days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].filter((day) => checked(`wizard-day-${day}`)) };
           page.trigger = { topic: val("wizard-trigger-topic") || page.trigger?.topic || "", payload: val("wizard-trigger-payload") || page.trigger?.payload || "ON" };
           page.display_options = {
             power_off_after: page.display_mode === "schedule" ? (document.getElementById("wizard-power-off") ? checked("wizard-power-off") : true) : checked("wizard-power-off"),
@@ -528,6 +629,21 @@ export function bindKiosk() {
         });
       }
 
+	  // Shows a page for a while and then hands back to the programme. The
+	  // server counts enabled pages of the saved config, so the page is looked
+	  // up there by id: unsaved reordering does not change what is shown.
+	  export async function showPageNow(pageID, minutes = 60, busyKey = "page-show") {
+		await runAction(busyKey, async () => {
+		  const saved = normalizePages(state.persistedConfig?.kiosk?.pages, state.persistedConfig?.kiosk?.urls).filter((page) => !page.disabled && page.url);
+		  const page = saved.findIndex((item) => item.page_id === pageID);
+		  if (page < 0) throw new Error(t("showNowSaveFirst"));
+		  await postJSON("/api/browser/override", { page, duration_seconds: Math.max(1, Math.min(1440, minutes)) * 60, source: "admin-activate" });
+		  clearSnapshot();
+		  await refreshCore();
+		  renderApp();
+		}, t("overrideApplied"));
+	  }
+
 	  async function applyPageOverride() {
 		const pages = collectPages();
 		const page = enabledPageIndexFromAbsolute(pages, selectedKioskPageIndex(pages));
@@ -592,6 +708,7 @@ export function bindKiosk() {
       }
 
       function normalizeClock(value) {
+        if (isSunClock(value)) return String(value).trim().toLowerCase().replace(/\s+/g, "");
         const parts = String(value || "").trim().split(":");
         if (parts.length < 2) return "08:00";
         const hour = Math.max(0, Math.min(23, Number(parts[0]) || 0));

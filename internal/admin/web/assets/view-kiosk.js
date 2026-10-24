@@ -1,6 +1,7 @@
 // Page sequence helpers shared by the programme and pages views.
-import { esc, formatDuration, state, t } from "./app-core.js";
-import { isLocalSource, normalizePages, sourceLabel, sourceMark } from "./renderers.js";
+import { formatDuration, state, t } from "./app-core.js";
+import { sourceLabel } from "./renderers.js";
+import { describeClock } from "./clock.js";
 
       export function selectedKioskPageIndex(pages) {
         // state.status.browser.active is in enabled-page index space (matches backend
@@ -39,7 +40,7 @@ import { isLocalSource, normalizePages, sourceLabel, sourceMark } from "./render
       }
 
       export function pageTimingLabel(page) {
-        if (page.display_mode === "schedule") return `${page.schedule?.start || "--:--"} - ${page.schedule?.end || "--:--"}`;
+        if (page.display_mode === "schedule") return `${describeClock(page.schedule?.start, false)} - ${describeClock(page.schedule?.end, false)}`;
         if (page.display_mode === "mqtt") return t("mqttTrigger");
         if (page.display_mode === "insert") return t("insertOnlyShort");
         return formatDuration(Number(page.duration_seconds || 3600));
@@ -49,37 +50,23 @@ import { isLocalSource, normalizePages, sourceLabel, sourceMark } from "./render
         return t({ schedule: "fixedSchedule", mqtt: "triggerBased", insert: "insertOnly" }[mode] || "customDuration");
       }
 
-      export function renderKioskStorybook(pages, selected) {
-        if (!pages.length) return `<div class="sequence-empty"><strong>${esc(t("noPagesConfigured"))}</strong><span>${esc(t("addFirstPageHint"))}</span><button class="primary" data-action="page-wizard-new">+ ${esc(t("newPage"))}</button></div>`;
-        return `<div class="storybook-track" data-sequence-track>
-          ${pages.map((page, index) => `${index ? `<button class="insert-page" data-page-insert="${index}" title="${esc(t("insertPageHere"))}">+</button>` : ""}${renderSequenceCard(page, index, selected)}`).join("")}
-          <button class="add-page-card" data-page-insert="${pages.length}"><span>+</span><strong>${esc(t("addPage"))}</strong><small>${esc(t("addPageAtEnd"))}</small></button>
-        </div>`;
-      }
-
       export function localPageSummary(page) {
         const local = page.local || {};
         if (page.source_type === "slideshow") return local.folder || t("notConfigured");
+        if (page.source_type === "weather") return local.location || local.title || t("weatherKioskLocation");
+        if (page.source_type === "countdown") {
+          const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local.target || "");
+          if (!match) return t("notConfigured");
+          const date = new Date(+match[1], +match[2] - 1, +match[3], +match[4], +match[5]);
+          return `${local.title ? `${local.title} · ` : ""}${date.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+        }
+        if (page.source_type === "news" || page.source_type === "camera") {
+          const list = (page.source_type === "news" ? local.feeds : local.streams) || [];
+          const hosts = [...new Set(list.map((item) => { try { return new URL(item).hostname.replace(/^www\./, ""); } catch { return item; } }))];
+          return hosts.length ? hosts.join(", ") : t("notConfigured");
+        }
+        if (page.source_type === "immich") {
+          try { return `${new URL(local.immich_url).host} · ${local.immich_album ? t("immichAlbumShort") : t("immichRandom")}`; } catch { return t("notConfigured"); }
+        }
         return local.title || sourceLabel(page.source_type);
-      }
-
-      function renderSequenceCard(page, index, selected) {
-        let host = "";
-        if (isLocalSource(page.source_type)) host = sourceLabel(page.source_type);
-        else try { host = new URL(page.url).host; } catch { host = page.url || t("notConfigured"); }
-        return `<article class="sequence-card ${selected === index ? "selected" : ""} ${page.disabled ? "disabled" : ""}" draggable="true" data-sequence-index="${index}" data-page-select="${index}">
-          <div class="sequence-card-top"><span class="step-number">${index + 1}</span><span class="duration-badge">${esc(pageTimingLabel(page))}</span><button class="icon-button drag-handle" data-page-drag-handle title="${esc(t("dragToReorder"))}" aria-label="${esc(t("dragToReorder"))}">&#8942;&#8942;</button></div>
-          <button class="page-preview-tile" data-page-edit="${index}" title="${esc(t("editPage"))}">
-            <span class="source-mark">${esc(sourceMark(page.source_type))}</span>
-            <strong>${esc(host)}</strong>
-            <small>${esc(displayModeLabel(page.display_mode))}</small>
-          </button>
-          <div class="sequence-card-copy"><strong>${esc(page.name || `${t("pages")} ${index + 1}`)}</strong><span>${esc(isLocalSource(page.source_type) ? localPageSummary(page) : page.url || t("notConfigured"))}</span></div>
-          <div class="sequence-card-actions">
-            <button data-page-move="${index}" data-direction="-1" ${index === 0 ? "disabled" : ""} title="${esc(t("moveUp"))}" aria-label="${esc(t("moveUp"))}">&larr;</button>
-            <button data-page-move="${index}" data-direction="1" ${index === normalizePages(state.config?.kiosk?.pages, state.config?.kiosk?.urls).length - 1 ? "disabled" : ""} title="${esc(t("moveDown"))}" aria-label="${esc(t("moveDown"))}">&rarr;</button>
-            <button data-page-edit="${index}">${esc(t("edit"))}</button>
-            <button class="danger-ghost" data-page-remove="${index}" title="${esc(t("remove"))}">&times;</button>
-          </div>
-        </article>`;
       }

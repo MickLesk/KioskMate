@@ -55,6 +55,13 @@ export function bindView() {
         document.querySelector('[data-action="dashboard-preview-open"]')?.addEventListener("click", openDashboardPreview);
         document.querySelector('[data-action="dashboard-diagnostics"]')?.addEventListener("click", loadBrowserDiagnostics);
         document.querySelector('[data-action="dashboard-snapshot-refresh"]')?.addEventListener("click", refreshDashboardSnapshot);
+        document.getElementById("snapshot-auto")?.addEventListener("change", (event) => {
+          state.snapshotAuto = event.target.checked;
+          try { localStorage.setItem("kioskmate.snapshotAuto", state.snapshotAuto ? "1" : "0"); } catch (_) {}
+          if (state.snapshotAuto) scheduleAutoSnapshot();
+          renderApp();
+        });
+        if (state.snapshotAuto) scheduleAutoSnapshot();
         document.querySelector('[data-action="browser-doctor"]')?.addEventListener("click", loadBrowserDoctor);
         document.querySelector('[data-action="browser-recover"]')?.addEventListener("click", recoverBrowser);
 		document.querySelector('[data-action="browser-auto-recover"]')?.addEventListener("click", recoverBrowserQuick);
@@ -179,42 +186,97 @@ export function bindView() {
         if (out) out.textContent = url;
       }
 
+      async function fetchSnapshot() {
+        const response = await fetch("/api/browser/snapshot?refresh=1", { credentials: "same-origin" });
+        if (!response.ok) {
+          let detail = response.statusText;
+          try { detail = (await response.json()).error || detail; } catch (_) {}
+          throw new Error(detail || `HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
+        state.snapshotURL = URL.createObjectURL(blob);
+        state.snapshotTime = response.headers.get("X-KioskMate-Snapshot-Time") || new Date().toISOString();
+      }
+
       async function refreshDashboardSnapshot() {
         await runAction("dashboard-snapshot-refresh", async () => {
-          const response = await fetch("/api/browser/snapshot?refresh=1", { credentials: "same-origin" });
-          if (!response.ok) {
-            let detail = response.statusText;
-            try { detail = (await response.json()).error || detail; } catch (_) {}
-            throw new Error(detail || `HTTP ${response.status}`);
-          }
-          const blob = await response.blob();
-          if (state.snapshotURL) URL.revokeObjectURL(state.snapshotURL);
-          state.snapshotURL = URL.createObjectURL(blob);
-          state.snapshotTime = response.headers.get("X-KioskMate-Snapshot-Time") || new Date().toISOString();
+          await fetchSnapshot();
           renderApp();
         }, t("refreshSnapshot"));
       }
 
+      // With "automatic" on, the overview takes a new screenshot every 30 s
+      // while it is open and the tab is visible. A capture costs the Pi a
+      // little CPU, so it never runs in the background.
+      const SNAPSHOT_INTERVAL = 30000;
+      let snapshotTimer = null;
+      let snapshotBusy = false;
+
+      function scheduleAutoSnapshot() {
+        if (snapshotTimer) return;
+        const tick = async () => {
+          snapshotTimer = null;
+          const browser = state.status?.browser || {};
+          if (state.view !== "dashboard" || !state.snapshotAuto || !state.auth?.authenticated) return;
+          const age = state.snapshotTime ? Date.now() - new Date(state.snapshotTime).getTime() : Infinity;
+          if (!document.hidden && browser.running && browser.devtools && !snapshotBusy && age >= SNAPSHOT_INTERVAL - 1000) {
+            snapshotBusy = true;
+            try {
+              await fetchSnapshot();
+              if (state.view === "dashboard") renderApp({ background: true });
+            } catch (_) {
+              // The manual button shows errors; the automatic refresh stays quiet.
+            } finally {
+              snapshotBusy = false;
+            }
+          }
+          snapshotTimer = setTimeout(tick, SNAPSHOT_INTERVAL);
+        };
+        const age = state.snapshotTime ? Date.now() - new Date(state.snapshotTime).getTime() : Infinity;
+        snapshotTimer = setTimeout(tick, age >= SNAPSHOT_INTERVAL ? 300 : SNAPSHOT_INTERVAL - age);
+      }
+
+      // Doctor findings in plain language; the raw detail stays available
+      // under "Technical details".
+      export function doctorMessage(check) {
+        const detail = check.detail || {};
+        if (check.id === "video_decode" && detail.finding) {
+          return t(`videoDecode_${detail.finding}`)
+            .replace("{count}", detail.cma_failures || 0)
+            .replace("{mb}", detail.cma_total_mb || 0)
+            .replace("{gpu}", detail.gpu_mem_mb || 0)
+            .replace("{file}", detail.boot_config || "config.txt");
+        }
+        const key = `doctor_${check.id}_${check.level}`;
+        const text = t(key);
+        return text === key ? check.message || check.id || "-" : text;
+      }
+
       export async function loadBrowserDoctor() {
         await runAction("browser-doctor", async () => {
-          const report = await getJSON("/api/browser/doctor");
-          const checks = (report.checks || []).map((check) => `
-            <div class="recovery-step">
-              <strong>${esc(check.level || "-")} · ${esc(check.message || check.id || "-")}</strong>
-              <span class="hint">${esc(typeof check.detail === "string" ? check.detail : JSON.stringify(check.detail || ""))}</span>
-            </div>`).join("");
+          const report = await getJSON("/api/browser/doctor", { timeout: 30000 });
+          state.doctor = report;
+          const order = { error: 0, warn: 1, ok: 2 };
+          const sorted = [...(report.checks || [])].sort((a, b) => (order[a.level] ?? 3) - (order[b.level] ?? 3));
+          const problems = sorted.filter((check) => check.level !== "ok").length;
+          const checks = sorted.map((check) => `
+            <li class="health-check ${check.level === "error" ? "bad" : check.level === "warn" ? "warn" : "ok"}">
+              <span class="health-mark" aria-hidden="true">${check.level === "ok" ? "✓" : "!"}</span>
+              <div><strong>${esc(t(`doctorCheck_${check.id}`) === `doctorCheck_${check.id}` ? check.id : t(`doctorCheck_${check.id}`))}</strong><span>${esc(doctorMessage(check))}</span>
+              ${check.detail && check.level !== "ok" && typeof check.detail !== "string" ? `<details class="tech-details"><summary>${esc(t("technicalDetails"))}</summary><pre class="logbox">${esc(JSON.stringify(check.detail, null, 2))}</pre></details>` : ""}</div>
+            </li>`).join("");
           openModal(`
-            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
+            <div class="modal doctor-dialog" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
               <div class="modal-head">
                 <div>
                   <h3 id="doctor-title">${esc(t("browserDoctor"))}</h3>
-                  <div class="hint">${esc(t("doctorHint"))}</div>
+                  <div class="hint ${problems ? "warn-text" : "ok-text"}">${esc(problems ? t("healthProblems").replace("{count}", problems) : t("healthAllGood"))}</div>
                 </div>
                 <button data-modal-close>${esc(t("close"))}</button>
               </div>
-              <div class="modal-body grid">
-                <div class="recovery-list">${checks}</div>
-                <div><label>${esc(t("diagnostics"))}</label><pre class="logbox">${esc(JSON.stringify(report.advice || [], null, 2))}</pre></div>
+              <div class="modal-body">
+                <ul class="health-checks">${checks}</ul>
               </div>
               <div class="modal-foot"><button data-modal-close>${esc(t("close"))}</button></div>
             </div>`);

@@ -1,5 +1,14 @@
-import { checked, cloneConfig, closeModal, esc, field, formatDate, getJSON, isDirty, markDirty, modalRoot, openModal, postJSON, renderApp, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { checked, cloneConfig, closeModal, esc, field, formatDate, getJSON, isDirty, markDirty, modalRoot, offerUndo, openModal, postJSON, renderApp, selectHtml, state, switchHtml, t, toast, val } from "./app-core.js";
+import { icon } from "./icons.js";
 import { normalizePages } from "./renderers.js";
+
+const TRIGGER_ICONS = { mqtt: "automations", time: "clock", webhook: "link", touch: "touch", idle: "repeat" };
+
+function lastRun(rule) {
+  const run = (state.workflowHistory || []).find((item) => item.rule_id === rule.id);
+  if (!run) return "";
+  return `<span class="workflow-last ${run.error ? "bad" : run.skipped ? "muted" : "ok"}" title="${esc(run.error || run.skipped || run.result || "")}"><small>${esc(t("lastRun"))}</small>${esc(formatDate(run.at))}</span>`;
+}
 
 // Workflows are event rules on top of the page sequence: a trigger (MQTT
 // message, time of day, webhook), optional conditions and a list of actions.
@@ -60,11 +69,14 @@ export function renderWorkflows() {
     <div class="data-section-body">
       ${items.length ? `<div class="workflow-list">${items.map((rule, index) => `
         <article class="workflow-row ${rule.disabled ? "disabled" : ""}">
+          <span class="workflow-icon" aria-hidden="true">${icon(TRIGGER_ICONS[rule.trigger?.type] || "automations", 18)}</span>
           <div class="workflow-copy">
             <strong>${esc(rule.name || rule.id)}${rule.disabled ? ` <small class="muted">${esc(t("disabled"))}</small>` : ""}</strong>
             <span>${esc(t("workflowSummary").replace("{trigger}", triggerSummary(rule.trigger)).replace("{actions}", (rule.actions || []).map(actionSummary).join(" → ")))}</span>
           </div>
+          ${lastRun(rule)}
           <div class="actions">
+            <label class="inline-check"><input type="checkbox" data-workflow-toggle="${index}" ${rule.disabled ? "" : "checked"}><span>${esc(t("active"))}</span></label>
             <button data-workflow-test="${index}" ${rule.disabled ? "disabled" : ""} title="${esc(dirty ? t("workflowTestSaveFirst") : t("testWorkflowHint"))}">${esc(t("testWorkflow"))}</button>
             <button data-workflow-edit="${index}">${esc(t("edit"))}</button>
             <button class="danger-ghost" data-workflow-remove="${index}" title="${esc(t("remove"))}" aria-label="${esc(t("remove"))}">&times;</button>
@@ -98,19 +110,34 @@ async function loadHistory() {
     state.workflowHistory = [];
     toast(t("failed"), error.message, "error");
   }
-  const body = document.getElementById("workflow-history-body");
-  if (body) body.innerHTML = renderHistory();
+  if (state.view === "automations") renderApp({ background: true });
 }
 
 export function bindWorkflows() {
+  if (state.workflowHistory === undefined && state.view === "automations") {
+    state.workflowHistory = null;
+    loadHistory();
+  }
   document.querySelector('[data-action="workflow-new"]')?.addEventListener("click", () => openWorkflowEditor(null));
   document.querySelectorAll("[data-workflow-edit]").forEach((button) => button.addEventListener("click", () => openWorkflowEditor(Number(button.dataset.workflowEdit))));
   document.querySelectorAll("[data-workflow-remove]").forEach((button) => button.addEventListener("click", () => {
     const index = Number(button.dataset.workflowRemove);
     const rule = rules()[index];
-    if (!rule || !confirm(t("confirmRemoveWorkflow").replace("{name}", rule.name || rule.id))) return;
+    if (!rule) return;
+    const before = cloneConfig();
     const cfg = cloneConfig();
     cfg.kiosk.rules.splice(index, 1);
+    state.config = cfg;
+    markDirty();
+    renderApp();
+    offerUndo(before, t("workflowRemoved"), rule.name || rule.id);
+  }));
+  document.querySelectorAll("[data-workflow-template]").forEach((button) => button.addEventListener("click", () => openWorkflowEditor(null, button.dataset.workflowTemplate)));
+  document.querySelectorAll("[data-workflow-toggle]").forEach((input) => input.addEventListener("change", () => {
+    const cfg = cloneConfig();
+    const rule = cfg.kiosk?.rules?.[Number(input.dataset.workflowToggle)];
+    if (!rule) return;
+    rule.disabled = !input.checked;
     state.config = cfg;
     markDirty();
     renderApp();
@@ -151,8 +178,28 @@ function newRule() {
   };
 }
 
-function openWorkflowEditor(index) {
-  const source = index === null ? newRule() : rules()[index];
+// Ready-made starting points for the most common automations. They open
+// the editor prefilled; nothing is added until the user applies it.
+const TEMPLATES = {
+  doorbell: () => ({ name: t("tplDoorbell"), trigger: { type: "mqtt", topic: "home/doorbell", payload: "ON" }, actions: [{ type: "display", value: "ON" }, { type: "show_page", page_id: pages()[1]?.page_id || pages()[0]?.page_id || "", duration_seconds: 60 }], cooldown_seconds: 30 }),
+  night: () => ({ name: t("tplNight"), trigger: { type: "time", at: "23:00", days: [] }, actions: [{ type: "display", value: "OFF" }] }),
+  morning: () => ({ name: t("tplMorning"), trigger: { type: "time", at: "07:00", days: [] }, actions: [{ type: "display", value: "ON" }, { type: "resume_playlist" }] }),
+  idle: () => ({ name: t("tplIdle"), trigger: { type: "idle", idle_seconds: 300 }, actions: [{ type: "resume_playlist" }] }),
+  touch: () => ({ name: t("tplTouch"), trigger: { type: "touch" }, actions: [{ type: "display", value: "ON" }] }),
+  webhook: () => ({ name: t("tplWebhook"), trigger: { type: "webhook", token: randomHex(16) }, actions: [{ type: "show_page", page_id: pages()[0]?.page_id || "", duration_seconds: 60 }] }),
+};
+
+export const WORKFLOW_TEMPLATES = [
+  ["doorbell", "bell", "tplDoorbellHint"],
+  ["night", "moon", "tplNightHint"],
+  ["morning", "clock", "tplMorningHint"],
+  ["idle", "repeat", "tplIdleHint"],
+  ["touch", "touch", "tplTouchHint"],
+  ["webhook", "link", "tplWebhookHint"],
+];
+
+export function openWorkflowEditor(index, template = "") {
+  const source = index === null ? { ...newRule(), ...(TEMPLATES[template]?.() || {}) } : rules()[index];
   if (!source) return;
   state.workflowEditor = { index, rule: JSON.parse(JSON.stringify(source)) };
   state.workflowEditor.rule.conditions = state.workflowEditor.rule.conditions || {};
