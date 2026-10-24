@@ -65,6 +65,31 @@ func (s *Server) localPage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"images": slideshowImages(*page)})
 	case strings.HasPrefix(sub, "image/") && page.SourceType == config.SourceSlideshow:
 		serveSlideshowImage(w, r, page.Local.Folder, strings.TrimPrefix(sub, "image/"))
+	case sub == "images" && page.SourceType == config.SourceImmich:
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		images, err := s.immichImages(r, *page)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"images": []string{}, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"images": images})
+	case strings.HasPrefix(sub, "image/") && page.SourceType == config.SourceImmich:
+		s.serveImmichAsset(w, r, *page, strings.TrimPrefix(sub, "image/"))
+	case sub == "data" && (page.SourceType == config.SourceWeather || page.SourceType == config.SourceNews):
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Cache-Control", "no-store")
+		var data any
+		var err error
+		if page.SourceType == config.SourceWeather {
+			data, err = s.weatherData(r.Context(), cfg, *page)
+		} else {
+			data, err = s.newsData(r.Context(), *page)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, data)
 	default:
 		http.NotFound(w, r)
 	}
@@ -99,7 +124,7 @@ func (s *Server) renderLocalPage(w http.ResponseWriter, cfg *config.Config, page
 		_, _ = w.Write([]byte(page.Local.HTML))
 		return
 	}
-	w.Header().Set("Content-Security-Policy", "sandbox allow-scripts; default-src 'none'; img-src * data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *")
+	w.Header().Set("Content-Security-Policy", "sandbox allow-scripts; default-src 'none'; img-src * data: blob:; media-src * data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *")
 	settings := map[string]any{
 		"title":        page.Local.Title,
 		"reduceMotion": cfg.Performance.ReduceMotion,
@@ -117,6 +142,27 @@ func (s *Server) renderLocalPage(w http.ResponseWriter, cfg *config.Config, page
 		settings["shuffle"] = page.Local.Shuffle
 		settings["folder"] = page.Local.Folder
 		settings["images"] = slideshowImages(page)
+	case config.SourceImmich:
+		tmpl = slideshowTemplate
+		settings["interval"] = page.Local.IntervalSeconds
+		settings["fit"] = page.Local.Fit
+		settings["folder"] = page.Local.ImmichURL
+		settings["images"] = []string{}
+	case config.SourceWeather:
+		tmpl = weatherTemplate
+		settings["units"] = page.Local.Units
+		settings["location"] = page.Local.Location
+	case config.SourceCountdown:
+		tmpl = countdownTemplate
+		settings["target"] = page.Local.Target
+		settings["done"] = page.Local.DoneText
+		settings["countUp"] = page.Local.CountUp
+	case config.SourceNews:
+		tmpl = newsTemplate
+		settings["interval"] = page.Local.IntervalSeconds
+	case config.SourceCamera:
+		tmpl = cameraTemplate
+		settings["streams"] = page.Local.Streams
 	}
 	encoded, err := json.Marshal(settings)
 	if err != nil {
@@ -128,6 +174,22 @@ func (s *Server) renderLocalPage(w http.ResponseWriter, cfg *config.Config, page
 		title = page.Name
 	}
 	_ = tmpl.Execute(w, map[string]any{"Title": title, "Settings": template.JS(encoded)})
+}
+
+// immichImages lists the photos of an Immich page as URLs relative to the page.
+func (s *Server) immichImages(r *http.Request, page config.KioskPage) ([]string, error) {
+	ids, err := s.immichAssets(r.Context(), page)
+	if err != nil {
+		return nil, err
+	}
+	urls := make([]string, len(ids))
+	for index, id := range ids {
+		urls[index] = page.PageID + "/image/" + id
+	}
+	if page.Local.Shuffle {
+		rand.Shuffle(len(urls), func(i, j int) { urls[i], urls[j] = urls[j], urls[i] })
+	}
+	return urls, nil
 }
 
 // slideshowImages lists the image files in the slideshow folder as URLs
@@ -252,7 +314,7 @@ async function refresh(){
   try{const r=await fetch(location.pathname+"/images",{cache:"no-store"});if(r.ok)images=(await r.json()).images||[]}catch(e){}
 }
 async function show(){
-  if(!images.length){empty.hidden=false;for(const l of layers)l.classList.remove("shown");await refresh();setTimeout(show,30000);return}
+  if(!images.length){await refresh();if(images.length)return show();empty.hidden=false;for(const l of layers)l.classList.remove("shown");setTimeout(show,30000);return}
   empty.hidden=true;
   if(index>=images.length){index=0;await refresh();if(!images.length)return show()}
   const next=layers[1-front],src=base+images[index++];

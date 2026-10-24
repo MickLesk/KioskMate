@@ -5,7 +5,7 @@ import { synchronizeKioskWorkflow } from "./actions-kiosk.js";
 import { checked, cloneConfig, closeModal, esc, field, navigate, openModal, postJSON, refreshCore, renderApp, saveConfig, state, switchHtml, t, toast, val } from "./app-core.js";
 import { clockField, describeClock, readClock } from "./clock.js";
 import { icon } from "./icons.js";
-import { validationError } from "./renderers.js";
+import { isLocalSource, validationError } from "./renderers.js";
 
 const DISMISSED = "kioskmate.setupDismissed";
 const DEMO = ["https://demo.home-assistant.io", "http://homeassistant.local:8123"];
@@ -17,7 +17,7 @@ function isDemo(url) {
 // Fresh install: no page other than the demo page.
 export function needsSetup(cfg = state.config) {
   const pages = (cfg?.kiosk?.pages || []).filter((page) => !page.disabled);
-  return !pages.length || pages.every((page) => !page.source_type?.match(/^(clock|slideshow|html)$/) && isDemo(page.url));
+  return !pages.length || pages.every((page) => !isLocalSource(page.source_type) && isDemo(page.url));
 }
 
 export function maybeOpenSetupWizard() {

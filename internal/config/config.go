@@ -411,6 +411,7 @@ func (cfg *Config) Snapshot() *Config {
 	clone.Kiosk.Pages = slices.Clone(cfg.Kiosk.Pages)
 	for i := range clone.Kiosk.Pages {
 		clone.Kiosk.Pages[i].Schedule.Days = slices.Clone(cfg.Kiosk.Pages[i].Schedule.Days)
+		clone.Kiosk.Pages[i].Local = cfg.Kiosk.Pages[i].Local.Clone()
 		if brightness := cfg.Kiosk.Pages[i].DisplayOptions.Brightness; brightness != nil {
 			value := *brightness
 			clone.Kiosk.Pages[i].DisplayOptions.Brightness = &value

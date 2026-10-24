@@ -13,7 +13,7 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 - Performance profiles for Raspberry Pi and small kiosk hardware, including a `low-power` Chromium mode.
 - Optional tab mode (`kiosk.page_switch: "tabs"`) that keeps recent pages open and switches without reloading.
 - Workflows: rules that react to an MQTT message, a time of day or a webhook and show a page for a while, switch the display, set brightness, reload, show a banner or run a script.
-- Local pages without an extra server: a clock, an image slideshow from a folder, or your own HTML.
+- Local pages without an extra server: clock, weather, countdown, news headlines, camera grid, Immich photo frame, an image slideshow from a folder, or your own HTML.
 - Scheduled maintenance reloads (every N minutes, at a fixed time or after N rotation rounds) and preloaded pages in tab mode.
 - Optional desktop-free mode with the Cage compositor, see [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md).
 - Ready-to-flash Raspberry Pi OS Lite image with Cage, Chromium and first-boot setup from `kioskmate.txt`, see [docs/IMAGE.md](docs/IMAGE.md).
@@ -227,11 +227,21 @@ Besides web addresses and Home Assistant dashboards, a page can be rendered by K
 { "name": "Clock", "source_type": "clock", "local": { "title": "Lobby", "show_seconds": true } }
 { "name": "Photos", "source_type": "slideshow", "local": { "folder": "/home/pi/Pictures", "interval_seconds": 10, "fit": "contain", "shuffle": true } }
 { "name": "Notice", "source_type": "html", "local": { "html": "<h1>Welcome</h1>" } }
+{ "name": "Weather", "source_type": "weather", "local": { "location": "Berlin", "units": "metric" } }
+{ "name": "Holiday", "source_type": "countdown", "local": { "title": "Until the holiday", "target": "2027-07-01T08:00", "done_text": "Off we go" } }
+{ "name": "News", "source_type": "news", "local": { "feeds": ["https://www.tagesschau.de/infoservices/alle-meldungen-100~rss2.xml"], "interval_seconds": 12 } }
+{ "name": "Cameras", "source_type": "camera", "local": { "streams": ["http://192.168.1.10:1984/stream.html?src=frontdoor"] } }
+{ "name": "Photos", "source_type": "immich", "local": { "immich_url": "http://immich.local:2283", "immich_api_key": "…", "immich_album": "<album id>", "interval_seconds": 15 } }
 ```
 
 - `clock`: time and date in the browser's language; `hour12`, `show_seconds` and `hide_date` change the layout. It shifts slightly every minute against burn-in unless reduced motion is on.
 - `slideshow`: JPG, PNG, WebP, GIF, AVIF and BMP files from an absolute folder, sorted by name or shuffled, cross-faded every `interval_seconds` (2-86400). New files appear after one pass. Chromium decodes every image at full size, so images close to the screen resolution keep memory low on a Raspberry Pi.
 - `html`: up to 256 KB of your own HTML, pasted or loaded from a file in the wizard.
+- `weather`: current weather, the next eight hours and six days from [Open-Meteo](https://open-meteo.com) (no API key). It uses `latitude`/`longitude` of the page, or the kiosk location from Programme → Advanced; `units` is `metric` or `imperial`. KioskMate fetches the forecast every 15 minutes and keeps showing the last one while offline.
+- `countdown`: days, hours, minutes and seconds until `target` (local time, `YYYY-MM-DDTHH:MM`); afterwards `done_text`, or with `count_up` the time since.
+- `news`: headlines from up to five RSS or Atom `feeds`, newest first, one every `interval_seconds` (4-600). KioskMate fetches the feeds every 15 minutes.
+- `camera`: up to four `streams` in a grid. A go2rtc stream page (`…/stream.html?src=name`) is played as go2rtc's MP4 stream, which Chromium decodes in hardware; MJPEG and snapshot addresses work too. A stream that freezes for 15 seconds is reconnected. Browsers cannot play RTSP, so put go2rtc in front of RTSP cameras.
+- `immich`: a photo frame from an [Immich](https://immich.app) album (`immich_album`, the ID from the album address) or random photos from the library. KioskMate fetches the photos with the API key, so the key never reaches the kiosk browser; the Admin API only reports whether one is stored.
 - Local pages need no login but are only served to the device itself (and to a signed-in admin for a preview). They run in a sandbox with their own origin, so their scripts cannot use the Admin API, cookies or local storage.
 - With admin TLS the browser gets `--allow-insecure-localhost` so a self-signed certificate is accepted for these pages.
 

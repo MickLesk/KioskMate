@@ -2850,3 +2850,15 @@
     display: none;
   }
 }
+
+/* Local page templates in the page wizard */
+.local-hint-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.feed-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.feed-suggestions > span { color: var(--muted); font-size: 0.85rem; }
+.feed-suggestions .chip { cursor: pointer; }
+
+/* Wizards have a step bar between head and body; only the body scrolls. */
+.modal.page-wizard,
+.modal.setup-wizard {
+  grid-template-rows: auto max-content minmax(0, 1fr) auto;
+}

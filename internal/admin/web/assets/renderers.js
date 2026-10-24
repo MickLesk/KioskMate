@@ -517,18 +517,18 @@ function renderPages(pages) {
         return `<div class="unsupported-control"><label>${esc(label)}</label><span>${esc(t("notSupportedOnDevice"))}</span></div>`;
       }
 
-      export const LOCAL_SOURCES = ["clock", "slideshow", "html"];
+      export const LOCAL_SOURCES = ["clock", "weather", "countdown", "news", "camera", "slideshow", "immich", "html"];
 
       export function isLocalSource(type) {
         return LOCAL_SOURCES.includes(type);
       }
 
       export function sourceMark(type) {
-        return { home_assistant: "HA", clock: "CLK", slideshow: "IMG", html: "HTML" }[type] || "WEB";
+        return { home_assistant: "HA", clock: "CLK", slideshow: "IMG", html: "HTML", weather: "WX", countdown: "CNT", news: "RSS", camera: "CAM", immich: "IMM" }[type] || "WEB";
       }
 
       export function sourceLabel(type) {
-        return t({ home_assistant: "homeAssistantDashboard", clock: "sourceClock", slideshow: "sourceSlideshow", html: "sourceHtml" }[type] || "webAddress");
+        return t({ home_assistant: "homeAssistantDashboard", clock: "sourceClock", slideshow: "sourceSlideshow", html: "sourceHtml", weather: "sourceWeather", countdown: "sourceCountdown", news: "sourceNews", camera: "sourceCamera", immich: "sourceImmich" }[type] || "webAddress");
       }
 
       export function textarea(id, label, value = "") {

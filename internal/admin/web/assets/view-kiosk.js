@@ -53,5 +53,20 @@ import { describeClock } from "./clock.js";
       export function localPageSummary(page) {
         const local = page.local || {};
         if (page.source_type === "slideshow") return local.folder || t("notConfigured");
+        if (page.source_type === "weather") return local.location || local.title || t("weatherKioskLocation");
+        if (page.source_type === "countdown") {
+          const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local.target || "");
+          if (!match) return t("notConfigured");
+          const date = new Date(+match[1], +match[2] - 1, +match[3], +match[4], +match[5]);
+          return `${local.title ? `${local.title} · ` : ""}${date.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+        }
+        if (page.source_type === "news" || page.source_type === "camera") {
+          const list = (page.source_type === "news" ? local.feeds : local.streams) || [];
+          const hosts = [...new Set(list.map((item) => { try { return new URL(item).hostname.replace(/^www\./, ""); } catch { return item; } }))];
+          return hosts.length ? hosts.join(", ") : t("notConfigured");
+        }
+        if (page.source_type === "immich") {
+          try { return `${new URL(local.immich_url).host} · ${local.immich_album ? t("immichAlbumShort") : t("immichRandom")}`; } catch { return t("notConfigured"); }
+        }
         return local.title || sourceLabel(page.source_type);
       }

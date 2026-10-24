@@ -91,6 +91,7 @@ type MQTTDiscoveryPublisher interface {
 }
 
 type Server struct {
+	feeds    fetchCache
 	cfg      *config.Config
 	browser  Browser
 	mqtt     MQTTDiscoveryPublisher
@@ -1350,7 +1351,7 @@ func redactValue(key string, value any) any {
 		return out
 	case string:
 		lower := strings.ToLower(key)
-		if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "hash") {
+		if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "hash") || strings.Contains(lower, "api_key") {
 			if typed == "" {
 				return ""
 			}
@@ -1671,11 +1672,33 @@ func (s *Server) decodeConfig(data []byte) (*config.Config, error) {
 		next.MQTT.Password = s.cfg.Snapshot().MQTT.Password
 	}
 	next.MQTT.PasswordConfigured = false
+	keepImmichKeys(&next, s.cfg.Snapshot())
 	next.Revision = ""
 	if err := config.Validate(&next); err != nil {
 		return nil, err
 	}
 	return &next, nil
+}
+
+// keepImmichKeys keeps the stored Immich API key of a page when the Admin UI
+// posts it back empty (it never receives the key).
+func keepImmichKeys(next, current *config.Config) {
+	stored := map[string]string{}
+	for _, page := range current.Kiosk.Pages {
+		if page.Local != nil && page.Local.ImmichAPIKey != "" {
+			stored[page.PageID] = page.Local.ImmichAPIKey
+		}
+	}
+	for index := range next.Kiosk.Pages {
+		page := &next.Kiosk.Pages[index]
+		if page.Local == nil {
+			continue
+		}
+		if page.Local.ImmichAPIKey == "" {
+			page.Local.ImmichAPIKey = stored[page.PageID]
+		}
+		page.Local.ImmichKeyConfigured = false
+	}
 }
 
 func (s *Server) backupFiles() []backupFile {
@@ -2408,6 +2431,12 @@ func publicConfigSnapshot(out *config.Config) *config.Config {
 	out.Admin.Token = ""
 	out.Admin.PasswordHash = ""
 	out.MQTT.Password = ""
+	for index := range out.Kiosk.Pages {
+		if local := out.Kiosk.Pages[index].Local; local != nil {
+			local.ImmichKeyConfigured = local.ImmichAPIKey != ""
+			local.ImmichAPIKey = ""
+		}
+	}
 	return out
 }
 

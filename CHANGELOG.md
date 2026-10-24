@@ -9,6 +9,15 @@ Second pre-release: the redesigned Admin UI gets the depth it was missing. Confi
 - Presence: an MQTT topic, `POST /api/presence` or a touch counts as someone being there. Mode "wake" keeps the display on outside the schedule for a set time; mode "require" turns it off inside the schedule when nobody is there.
 - Time windows of pages, time rules and inserts accept sunrise and sunset with an offset (for example "sunset −30 min"). With the kiosk's location (Programme → Advanced, or "Use this device's location") they follow the real sun times; without it sunrise counts as 06:00 and sunset as 18:00.
 
+### Local page templates
+- Five new pages that KioskMate renders itself, chosen like the clock under Pages → Add page:
+  - **Weather** from Open-Meteo without an API key: now, the next eight hours and six days, for the page's own coordinates or the kiosk location.
+  - **Countdown** to a date, with a text or counting up once it has passed.
+  - **News**: headlines from up to five RSS or Atom feeds, rotating, with suggestions (tagesschau, heise, SPIEGEL, BBC).
+  - **Camera**: up to four go2rtc, MJPEG or snapshot streams in a grid; frozen streams reconnect.
+  - **Immich photos**: an album or random photos as a photo frame. The API key stays on the device and is never sent to the Admin UI.
+- Weather, news and Immich data is fetched and cached by KioskMate (15 minutes, the last answer is kept while a service is offline), so pages stay sandboxed and work behind CORS.
+
 ### Home Assistant
 - MQTT discovery adds a sensor for the active insert, a switch per insert, a presence button, an occupancy sensor (when presence is on) and an undervoltage problem sensor.
 
@@ -23,6 +32,7 @@ Second pre-release: the redesigned Admin UI gets the depth it was missing. Confi
 - Doctor shows a sorted, translated list of checks with technical details folded away, and on a Raspberry Pi checks hardware video decoding: CMA size and allocation failures, `gpu_mem`, the decoder Chromium reports. It recommends `dtoverlay=vc4-kms-v3d,cma-512` when the decoder is starved.
 
 ### Fixes
+- The page wizard and the setup assistant scrolled their content underneath the step bar.
 - Buttons whose handler was a named function could stop working after a re-render (the Doctor button among them).
 - Doctor no longer gives up after 12 seconds on slow devices.
 

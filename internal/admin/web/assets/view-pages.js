@@ -12,6 +12,11 @@ const NEW_TYPES = [
   ["home_assistant", "homeAssistantDashboard", "newHomeAssistantHint"],
   ["url", "webAddress", "newWebsiteHint"],
   ["clock", "sourceClock", "newClockHint"],
+  ["weather", "sourceWeather", "newWeatherHint"],
+  ["countdown", "sourceCountdown", "newCountdownHint"],
+  ["news", "sourceNews", "newNewsHint"],
+  ["camera", "sourceCamera", "newCameraHint"],
+  ["immich", "sourceImmich", "newImmichHint"],
   ["slideshow", "sourceSlideshow", "newSlideshowHint"],
   ["html", "sourceHtml", "newHtmlHint"],
 ];

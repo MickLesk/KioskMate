@@ -14,6 +14,8 @@ import { fileURLToPath } from "url";
 import admin from "./admin.mjs";
 import features from "./features.mjs";
 import setup from "./setup.mjs";
+import templates from "./templates.mjs";
+import { startFakes } from "./fakes.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const binary = path.resolve(process.argv[2] || "kioskmate");
@@ -42,7 +44,8 @@ async function withServer(fixture, port, run) {
   const configPath = path.join(dir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
   const log = fs.openSync(path.join(out, `server-${port}.log`), "w");
-  const server = spawn(binary, ["-config", configPath], { cwd: dir, stdio: ["ignore", log, log] });
+  const env = { ...process.env, KIOSKMATE_OPEN_METEO_URL: `${fakes.url}/forecast` };
+  const server = spawn(binary, ["-config", configPath], { cwd: dir, env, stdio: ["ignore", log, log] });
   const base = `http://127.0.0.1:${port}`;
   try {
     let up = false;
@@ -56,16 +59,17 @@ async function withServer(fixture, port, run) {
       const response = await fetch(base + p, { ...options, headers: { "X-KioskMate-Token": token, "Content-Type": "application/json", ...(options.headers || {}) } });
       return { status: response.status, body: await response.json().catch(() => ({})) };
     };
-    await run({ base, api, dir });
+    await run({ base, api, dir, fakes });
   } finally {
     server.kill();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
+const fakes = await startFakes();
 const { chromium } = loadPlaywright();
 const browser = await chromium.launch();
-const suites = [["config.json", 33481, admin], ["config.json", 33482, features], ["config-fresh.json", 33483, setup]];
+const suites = [["config.json", 33481, admin], ["config.json", 33482, features], ["config-fresh.json", 33483, setup], ["config.json", 33484, templates]];
 try {
   for (const [fixture, port, suite] of suites) {
     const before = results.length;
@@ -78,6 +82,7 @@ try {
   }
 } finally {
   await browser.close();
+  await fakes.close();
 }
 
 const failed = results.filter((r) => r.startsWith("FAIL"));
