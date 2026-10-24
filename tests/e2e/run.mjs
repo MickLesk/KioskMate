@@ -61,8 +61,12 @@ async function withServer(fixture, port, run) {
     };
     await run({ base, api, dir, fakes });
   } finally {
+    // Wait for the server to exit: it may still write into dir while it shuts
+    // down, and removing dir then fails with ENOTEMPTY.
+    const exited = server.exitCode !== null || server.signalCode !== null ? Promise.resolve() : new Promise((resolve) => server.once("exit", resolve));
     server.kill();
-    fs.rmSync(dir, { recursive: true, force: true });
+    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 
