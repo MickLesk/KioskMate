@@ -69,7 +69,10 @@ jobs:
             found && /^## / && $0 != "## " version { exit }
             found { print }
           ' CHANGELOG.md > /tmp/release-notes.md
-          test -s /tmp/release-notes.md
+          if ! test -s /tmp/release-notes.md; then
+            echo "::error::CHANGELOG.md has no '## $GITHUB_REF_NAME' section. Add it on main and tag that commit."
+            exit 1
+          fi
 
       - name: Publish release
         env:
@@ -79,8 +82,18 @@ jobs:
           case "$GITHUB_REF_NAME" in
             *alpha*|*beta*|*rc*|*pre*) PRERELEASE="--prerelease" ;;
           esac
-          gh release create "$GITHUB_REF_NAME" \
-            --title "KioskMate ${GITHUB_REF_NAME#v}" \
-            --notes-file /tmp/release-notes.md \
-            $PRERELEASE \
-            dist/*.deb dist/*.zip dist/SHA256SUMS
+          # A release created by hand on GitHub (also a draft) for this tag is
+          # completed instead of failing with "release already exists".
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/*.deb dist/*.zip dist/SHA256SUMS
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "KioskMate ${GITHUB_REF_NAME#v}" \
+              --notes-file /tmp/release-notes.md \
+              $PRERELEASE --draft=false
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "KioskMate ${GITHUB_REF_NAME#v}" \
+              --notes-file /tmp/release-notes.md \
+              $PRERELEASE \
+              dist/*.deb dist/*.zip dist/SHA256SUMS
+          fi
