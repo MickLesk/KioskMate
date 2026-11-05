@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/MickLesk/KioskMate/internal/supervisor"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,5 +157,58 @@ func videoDecodeCheck(report videoDecodeReport, add func(id, level, message stri
 	default:
 		report.Finding = "ok"
 		add("video_decode", "ok", "Hardware video decoding is available and video memory looks sufficient.", report)
+	}
+}
+
+// pageVideoReport summarises the videos on the page on screen.
+type pageVideoReport struct {
+	// Finding: none, webrtc_large, many or ok.
+	Finding string                 `json:"finding"`
+	Videos  int                    `json:"videos"`
+	Playing int                    `json:"playing"`
+	WebRTC  int                    `json:"webrtc"`
+	Largest string                 `json:"largest,omitempty"`
+	Pixels  int                    `json:"pixels"`
+	List    []supervisor.PageVideo `json:"list,omitempty"`
+}
+
+// largeVideoPixels is roughly 720p; above it a software-decoded stream costs
+// most of a Raspberry Pi 4 core.
+const largeVideoPixels = 1280 * 720
+
+func pageVideoCheck(videos []supervisor.PageVideo, add func(id, level, message string, detail any)) {
+	report := pageVideoReport{Videos: len(videos), List: videos}
+	largest := 0
+	for _, video := range videos {
+		pixels := video.Width * video.Height
+		if video.Playing {
+			report.Playing++
+			report.Pixels += pixels
+		}
+		if video.Kind == "webrtc" {
+			report.WebRTC++
+		}
+		if pixels > largest {
+			largest = pixels
+			report.Largest = fmt.Sprintf("%dx%d", video.Width, video.Height)
+		}
+	}
+	largeWebRTC := false
+	for _, video := range videos {
+		largeWebRTC = largeWebRTC || (video.Kind == "webrtc" && video.Width*video.Height > largeVideoPixels)
+	}
+	switch {
+	case len(videos) == 0:
+		report.Finding = "none"
+		add("page_video", "ok", "The page on screen plays no video.", report)
+	case largeWebRTC:
+		report.Finding = "webrtc_large"
+		add("page_video", "warn", fmt.Sprintf("The page on screen plays %d WebRTC video(s), the largest %s. WebRTC streams are often decoded by the CPU in Chromium on a Raspberry Pi. Use the camera's substream (for example 640x360) or MSE/HLS mode in the camera card.", report.WebRTC, report.Largest), report)
+	case report.Playing >= 4 || report.Pixels > 4*largeVideoPixels:
+		report.Finding = "many"
+		add("page_video", "warn", fmt.Sprintf("The page on screen plays %d videos at once (%s largest). Show fewer streams at a time or use substreams.", report.Playing, report.Largest), report)
+	default:
+		report.Finding = "ok"
+		add("page_video", "ok", fmt.Sprintf("The page on screen plays %d video(s) in a size the board handles.", len(videos)), report)
 	}
 }

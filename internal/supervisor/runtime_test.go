@@ -56,14 +56,31 @@ func TestTelemetryPersistsAndRestoresRuntimeCounters(t *testing.T) {
 	browser.mu.Lock()
 	browser.startCount = 7
 	browser.restartCount = 3
-	browser.recordTelemetryLocked(system.ProcessTreeStats{PIDs: []int{1, 2, 3}, RSSMB: 512, CPUPercent: 88.5})
+	browser.version = "1.0.0-pre.3"
+	stats := system.ProcessTreeStats{PIDs: []int{1, 2, 3}, RSSMB: 512, CPUPercent: 88.5, Groups: []system.ProcessGroup{{Name: "pages", CPUPercent: 60}, {Name: "graphics", CPUPercent: 20}}}
+	if !browser.recordTelemetryLocked(stats, TelemetrySample{CoreCPU: 1.5, CoreMB: 30, MemoryPercent: 55}) {
+		t.Fatal("the first sample must be written to disk")
+	}
+	// A second sample a minute later stays in memory until the next
+	// persistence slot, so telemetry does not rewrite the file every minute.
+	browser.telemetry[0].At = browser.telemetry[0].At.Add(-time.Minute)
+	if browser.recordTelemetryLocked(stats, TelemetrySample{}) {
+		t.Fatal("telemetry must not request a write every minute")
+	}
 	browser.mu.Unlock()
 	browser.persistRuntimeState()
 
 	restored := NewBrowser(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	history := restored.Telemetry()
-	if history.Summary.Samples != 1 || history.Summary.RSSMaximumMB != 512 || history.Summary.ProcessMaximum != 3 {
+	if history.Summary.Samples != 2 || history.Summary.RSSMaximumMB != 512 || history.Summary.ProcessMaximum != 3 {
 		t.Fatalf("restored telemetry = %#v", history)
+	}
+	first := history.Samples[0]
+	if first.PagesCPU != 60 || first.GraphicsCPU != 20 || first.CoreMB != 30 || first.MemoryPercent != 55 {
+		t.Fatalf("sample split = %#v", first)
+	}
+	if len(history.Versions) != 1 || history.Versions[0].Version != "1.0.0-pre.3" || history.Versions[0].Samples != 2 || history.Versions[0].PagesCPUAverage != 60 {
+		t.Fatalf("versions = %#v", history.Versions)
 	}
 	if history.Summary.BrowserStartCount != 7 || history.Summary.RestartCount != 3 {
 		t.Fatalf("restored counters = %#v", history.Summary)

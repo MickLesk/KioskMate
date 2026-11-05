@@ -23,11 +23,26 @@ import (
 
 const defaultMaxTabs = 3
 
+// lowPowerMaxTabs is the default on small boards: every kept Home Assistant
+// tab costs 150-250 MB, which a 2 GB Raspberry Pi feels.
+const lowPowerMaxTabs = 2
+
 func maxTabs(cfg *config.Config) int {
 	if cfg.Kiosk.MaxTabs >= 1 && cfg.Kiosk.MaxTabs <= 8 {
 		return cfg.Kiosk.MaxTabs
 	}
+	if lowPowerProfile(cfg.Performance.Profile) {
+		return lowPowerMaxTabs
+	}
 	return defaultMaxTabs
+}
+
+func lowPowerProfile(profile string) bool {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "raspberry", "low-power", "minimal", "conservative":
+		return true
+	}
+	return false
 }
 
 // resetTabsLocked forgets all tab bookkeeping; called whenever a new browser
@@ -40,6 +55,7 @@ func (b *Browser) resetTabsLocked() {
 	b.pendingBlank = map[string]bool{}
 	b.tabURL = map[int]string{}
 	b.insertTab = false
+	b.revealTarget = ""
 }
 
 // keepTabForInsertLocked prepares navigate mode for an insert: the tab now
@@ -170,7 +186,10 @@ func (b *Browser) switchTab(ctx context.Context, cfg *config.Config, index int) 
 		var result struct {
 			TargetID string `json:"targetId"`
 		}
-		if err := browser.command(ctx, "Target.createTarget", map[string]any{"url": "about:blank"}, &result); err != nil {
+		// The new tab opens in the background: the page on screen stays
+		// visible while it loads and the control loop brings it to the
+		// front afterwards (see revealWhenLoaded).
+		if err := browser.command(ctx, "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, &result); err != nil {
 			return err
 		}
 		if result.TargetID == "" {
@@ -194,6 +213,11 @@ func (b *Browser) switchTab(ctx context.Context, cfg *config.Config, index int) 
 	want := activeURL(cfg, index)
 	if created || b.tabURL[index] != want {
 		b.pendingBlank[id] = true
+	}
+	if created {
+		b.revealTarget = id
+	} else {
+		b.revealTarget = ""
 	}
 	b.tabURL[index] = want
 	b.touchTabLocked(index)
@@ -325,4 +349,66 @@ func dialBrowserTarget(ctx context.Context, profile string) (*cdpSession, error)
 	}
 	conn.SetReadLimit(8 << 20)
 	return newCDPSession(conn), nil
+}
+
+// revealLoadTimeout bounds how long a background tab may load before it is
+// shown anyway; revealSettle gives the page a moment to paint after load.
+var (
+	revealLoadTimeout = 8 * time.Second
+	revealSettle      = 300 * time.Millisecond
+	revealPoll        = 150 * time.Millisecond
+)
+
+// pendingReveal reports whether target is a background tab still waiting to
+// be shown.
+func (b *Browser) pendingReveal(target string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return target != "" && b.revealTarget == target
+}
+
+// revealWhenLoaded waits until the page in session has loaded (or
+// revealLoadTimeout passed) and then brings its tab to the front.
+func (b *Browser) revealWhenLoaded(ctx context.Context, session cdpCommander, target string) {
+	deadline := time.Now().Add(revealLoadTimeout)
+	for time.Now().Before(deadline) && ctx.Err() == nil && b.pendingReveal(target) {
+		var result struct {
+			Result struct {
+				Value bool `json:"value"`
+			} `json:"result"`
+		}
+		err := session.command(ctx, "Runtime.evaluate", map[string]any{
+			"expression":    `document.readyState === "complete" && location.href !== "about:blank"`,
+			"returnByValue": true,
+		}, &result)
+		if err == nil && result.Result.Value {
+			timer := time.NewTimer(revealSettle)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			break
+		}
+		timer := time.NewTimer(revealPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+	if ctx.Err() != nil || !b.pendingReveal(target) {
+		return
+	}
+	if err := session.command(ctx, "Page.bringToFront", map[string]any{}, nil); err != nil {
+		b.logger.Debug("bringing loaded tab to front failed", "error", err)
+		return
+	}
+	b.mu.Lock()
+	if b.revealTarget == target {
+		b.revealTarget = ""
+	}
+	b.mu.Unlock()
 }

@@ -5,6 +5,19 @@
 ### Fixes
 - Inserts no longer turn the display off and on. With a time rule as base programme (or hybrid mode with schedule pages) an insert counted as "outside the schedule": the display was switched off, the page blanked, and after the insert the base page (for example a Home Assistant dashboard) loaded from scratch.
 - An insert now opens in its own tab, also in the default "navigate" page switch mode. The base page stays loaded underneath and comes back without a reload when the insert ends; the insert tab is closed again afterwards.
+- No more white flash when a page or insert opens in a new tab: the tab now loads in the background while the current page stays on screen, and comes to the front once the page has loaded (at most after 8 seconds).
+- With the dark kiosk theme (the default) Chromium's default page background is black instead of white, so loading pages and reloads no longer flash white.
+
+### Performance
+- Telemetry shows where the load goes: browser CPU and memory split into pages (renderers, where software video decoding shows up), graphics, browser and helper processes, plus KioskMate's own process, system memory and temperature (Device → Display → Runtime telemetry, and the browser row on the health page).
+- Averages per installed version are kept across updates, so the load before and after an update can be compared.
+- The Browser Doctor lists the videos on the page on screen (WebRTC, MSE, resolution, also inside Home Assistant cards) and warns about large WebRTC streams, which Chromium on a Raspberry Pi often decodes with the CPU.
+- Telemetry rewrote the runtime state file on the SD card every minute (indented JSON with a day of samples); it now writes at most every 10 minutes, compact.
+- The low-power profiles keep 2 tabs open by default instead of 3 (each kept Home Assistant tab costs 150–250 MB). An explicit "Maximum open tabs" still wins; the field now shows the automatic value when empty.
+- Page thumbnails are refreshed every 6 hours instead of every 30 minutes in the low-power profiles.
+- The page is reloaded between 03:00 and 05:00 (once a night) when the browser's memory grew by 50 % since the page settled, before the watchdog would have to restart the whole browser. Adjustable or off under Device → Display → Page switching and maintenance (`kiosk.maintenance.reload_on_growth_percent`, negative = off).
+- The Browser Doctor checks swap: swap on the SD card that is in use is reported with the commands to switch to zram.
+- When Chromium rasterizes in software, the Browser Doctor offers "Try hardware mode" (saves the GPU mode and restarts the browser). The version comparison in the telemetry starts a new row per GPU mode, so both modes can be compared.
 
 ## v1.0.0-pre.2
 

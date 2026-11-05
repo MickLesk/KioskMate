@@ -18,11 +18,14 @@ import (
 // a Raspberry Pi negligible.
 
 const (
-	thumbnailWidth   = 320
-	thumbnailSettle  = 20 * time.Second
-	thumbnailMaxAge  = 30 * time.Minute
-	thumbnailTick    = 15 * time.Second
-	thumbnailTimeout = 10 * time.Second
+	thumbnailWidth  = 320
+	thumbnailSettle = 20 * time.Second
+	thumbnailMaxAge = 30 * time.Minute
+	// lowPowerThumbnailAge spaces captures out on small boards; a screenshot
+	// of a dashboard with camera streams is a noticeable CPU spike there.
+	lowPowerThumbnailAge = 6 * time.Hour
+	thumbnailTick        = 15 * time.Second
+	thumbnailTimeout     = 10 * time.Second
 )
 
 var thumbnailID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -69,7 +72,7 @@ func (s *Server) runThumbnails(ctx context.Context) {
 		if time.Since(shownSince) < thumbnailSettle {
 			continue
 		}
-		if info, err := os.Stat(s.thumbnailPath(pageID)); err == nil && time.Since(info.ModTime()) < thumbnailMaxAge {
+		if info, err := os.Stat(s.thumbnailPath(pageID)); err == nil && time.Since(info.ModTime()) < thumbnailAge(s.cfg.Snapshot().Performance.Profile) {
 			continue
 		}
 		captureCtx, cancel := context.WithTimeout(ctx, thumbnailTimeout)
@@ -126,4 +129,12 @@ func (s *Server) pageThumbnails(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	_, _ = w.Write(data)
+}
+
+func thumbnailAge(profile string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "raspberry", "low-power", "minimal", "conservative":
+		return lowPowerThumbnailAge
+	}
+	return thumbnailMaxAge
 }

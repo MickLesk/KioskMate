@@ -104,11 +104,12 @@ export function bindSettings() {
           cfg.performance.reduce_motion = checked("perf-reduce");
           cfg.performance.auth_monitor = val("perf-auth-monitor") === "always" ? "always" : "";
           cfg.kiosk.page_switch = val("kiosk-page-switch") === "tabs" ? "tabs" : "";
-          cfg.kiosk.max_tabs = Math.min(8, Math.max(1, Number(val("kiosk-max-tabs") || 3)));
+          cfg.kiosk.max_tabs = val("kiosk-max-tabs") ? Math.min(8, Math.max(1, Number(val("kiosk-max-tabs")))) : 0;
           cfg.kiosk.maintenance = {
             reload_every_minutes: Number(val("kiosk-reload-every") || 0),
             reload_at: val("kiosk-reload-at"),
             reload_after_cycles: Math.max(0, Number(val("kiosk-reload-cycles") || 0)),
+            reload_on_growth_percent: Number(val("kiosk-reload-growth") || 0),
           };
           cfg.watchdog.enabled = checked("watchdog-enabled");
           cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);
