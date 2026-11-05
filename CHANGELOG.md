@@ -5,6 +5,8 @@
 ### Fixes
 - Inserts no longer turn the display off and on. With a time rule as base programme (or hybrid mode with schedule pages) an insert counted as "outside the schedule": the display was switched off, the page blanked, and after the insert the base page (for example a Home Assistant dashboard) loaded from scratch.
 - An insert now opens in its own tab, also in the default "navigate" page switch mode. The base page stays loaded underneath and comes back without a reload when the insert ends; the insert tab is closed again afterwards.
+- No more white flash when a page or insert opens in a new tab: the tab now loads in the background while the current page stays on screen, and comes to the front once the page has loaded (at most after 8 seconds).
+- With the dark kiosk theme (the default) Chromium's default page background is black instead of white, so loading pages and reloads no longer flash white.
 
 ## v1.0.0-pre.2
 

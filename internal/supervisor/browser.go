@@ -83,6 +83,10 @@ type Browser struct {
 	tabUse           []int
 	retarget         bool
 	pendingBlank     map[string]bool
+	// revealTarget is a tab created in the background that is brought to
+	// the front once its page has loaded, so the screen never shows the
+	// blank (white) tab in between.
+	revealTarget string
 	tabURL           map[int]string
 	devTools         bool
 	requiresControl  bool

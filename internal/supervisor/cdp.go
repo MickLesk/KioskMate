@@ -277,6 +277,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 	if err := session.command(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
 		return err
 	}
+	if err := configurePageBackground(ctx, session, theme); err != nil {
+		b.logger.Debug("dark page background unavailable", "error", err)
+	}
 	if err := configureHomeAssistantTheme(ctx, session, theme); err != nil {
 		b.setThemeError(theme, err)
 	}
@@ -320,6 +323,9 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			b.lastError = ""
 		}
 		b.mu.Unlock()
+	}
+	if b.pendingReveal(session.target.ID) {
+		go b.revealWhenLoaded(ctx, session, session.target.ID)
 	}
 	sockets := map[string]string{}
 	tokenFailures := map[string]authEvidence{}
@@ -478,6 +484,21 @@ func homeAssistantAuthFailureResponse(status int, kind string, rawURL string) bo
 	}
 	evidence := classifyHAResponse(status, kind, rawURL)
 	return evidence.Kind != "" && evidence.Kind != "token_response"
+}
+
+// configurePageBackground makes the default page background dark for the
+// dark kiosk themes. Chromium otherwise paints white while a page loads and
+// behind pages without a background of their own, which shows as a white
+// flash on a dark dashboard.
+func configurePageBackground(ctx context.Context, session cdpCommander, theme string) error {
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "dark", "force-dark":
+	default:
+		return nil
+	}
+	return session.command(ctx, "Emulation.setDefaultBackgroundColorOverride", map[string]any{
+		"color": map[string]any{"r": 0, "g": 0, "b": 0, "a": 1},
+	}, nil)
 }
 
 func configureHomeAssistantTheme(ctx context.Context, session cdpCommander, theme string) error {
