@@ -70,23 +70,23 @@ type Browser struct {
 	insertReturn  int
 	// insertTab is set while an insert runs in its own tab in navigate
 	// mode; insertBase is the page whose tab waits underneath it.
-	insertTab        bool
-	insertBase       int
-	rotationCycles   int
-	lastMaintenance  time.Time
-	lastActivity     time.Time
-	activityHandler  func()
-	rebootHandler    func(context.Context) error
-	rebootRequested  bool
-	activeTarget     string
-	tabs             map[int]string
-	tabUse           []int
-	retarget         bool
-	pendingBlank     map[string]bool
+	insertTab       bool
+	insertBase      int
+	rotationCycles  int
+	lastMaintenance time.Time
+	lastActivity    time.Time
+	activityHandler func()
+	rebootHandler   func(context.Context) error
+	rebootRequested bool
+	activeTarget    string
+	tabs            map[int]string
+	tabUse          []int
+	retarget        bool
+	pendingBlank    map[string]bool
 	// revealTarget is a tab created in the background that is brought to
 	// the front once its page has loaded, so the screen never shows the
 	// blank (white) tab in between.
-	revealTarget string
+	revealTarget     string
 	tabURL           map[int]string
 	devTools         bool
 	requiresControl  bool
