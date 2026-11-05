@@ -134,3 +134,44 @@ func TestEvictTabsKeepsPreloadedPages(t *testing.T) {
 		t.Fatal("preloaded tab was evicted")
 	}
 }
+
+func TestMemoryGrowthReloadsOnceAtNight(t *testing.T) {
+	start := time.Date(2026, 11, 5, 8, 0, 0, 0, time.Local)
+	browser := runningTestBrowser(t, start)
+	browser.baselineAfter = start.Add(memoryBaselineDelay)
+	maintenance := config.KioskMaintenance{}
+
+	browser.mu.Lock()
+	browser.noteMemoryLocked(start.Add(5*time.Minute), 400)
+	if browser.memoryBaseline != 0 {
+		t.Fatal("baseline must wait until the page settled")
+	}
+	browser.noteMemoryLocked(start.Add(11*time.Minute), 400)
+	browser.lastStat.RSSMB = 650
+	browser.mu.Unlock()
+	if browser.memoryBaseline != 400 {
+		t.Fatalf("baseline = %d", browser.memoryBaseline)
+	}
+	if browser.maintenanceReloadDue(start.Add(4*time.Hour), maintenance) {
+		t.Fatal("growth reloads only run at night")
+	}
+	night := time.Date(2026, 11, 6, 3, 30, 0, 0, time.Local)
+	if !browser.maintenanceReloadDue(night, maintenance) {
+		t.Fatal("62 % growth over the default 50 % must reload at night")
+	}
+	browser.mu.Lock()
+	browser.memoryBaseline = 400
+	browser.mu.Unlock()
+	if browser.maintenanceReloadDue(night.Add(30*time.Minute), maintenance) {
+		t.Fatal("only one growth reload per night")
+	}
+	if browser.maintenanceReloadDue(night.Add(24*time.Hour), config.KioskMaintenance{ReloadOnGrowthPercent: -1}) {
+		t.Fatal("a negative threshold turns growth reloads off")
+	}
+	browser.mu.Lock()
+	browser.lastStat.RSSMB = 500
+	browser.mu.Unlock()
+	if browser.maintenanceReloadDue(night.Add(24*time.Hour), maintenance) {
+		t.Fatal("25 % growth stays below the default threshold")
+	}
+}

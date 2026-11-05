@@ -15,6 +15,9 @@
 - Telemetry rewrote the runtime state file on the SD card every minute (indented JSON with a day of samples); it now writes at most every 10 minutes, compact.
 - The low-power profiles keep 2 tabs open by default instead of 3 (each kept Home Assistant tab costs 150–250 MB). An explicit "Maximum open tabs" still wins; the field now shows the automatic value when empty.
 - Page thumbnails are refreshed every 6 hours instead of every 30 minutes in the low-power profiles.
+- The page is reloaded between 03:00 and 05:00 (once a night) when the browser's memory grew by 50 % since the page settled, before the watchdog would have to restart the whole browser. Adjustable or off under Device → Display → Page switching and maintenance (`kiosk.maintenance.reload_on_growth_percent`, negative = off).
+- The Browser Doctor checks swap: swap on the SD card that is in use is reported with the commands to switch to zram.
+- When Chromium rasterizes in software, the Browser Doctor offers "Try hardware mode" (saves the GPU mode and restarts the browser). The version comparison in the telemetry starts a new row per GPU mode, so both modes can be compared.
 
 ## v1.0.0-pre.2
 

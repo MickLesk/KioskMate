@@ -82,6 +82,7 @@ export function renderSettingsAdmin() {
                 ${field("kiosk-reload-every", t("reloadEveryMinutes"), "number", "", kiosk.maintenance?.reload_every_minutes || "", "0")}
                 ${field("kiosk-reload-at", t("reloadAtTime"), "time", "", kiosk.maintenance?.reload_at || "")}
                 ${field("kiosk-reload-cycles", t("reloadAfterCycles"), "number", "", kiosk.maintenance?.reload_after_cycles || "", "0")}
+                ${selectHtml("kiosk-reload-growth", t("reloadOnGrowth"), String(kiosk.maintenance?.reload_on_growth_percent || 0), [["-1", t("off")], ["30", "30 %"], ["0", t("reloadOnGrowthDefault")], ["100", "100 %"]])}
                 <p class="hint span-2">${esc(t("scheduledReloadHint"))}</p>
                 ${selectHtml("perf-auth-monitor", t("authMonitor"), perf.auth_monitor || "window", [["window", t("authMonitorWindow")], ["always", t("authMonitorAlways")]])}
                 <p class="hint span-2">${esc(t("authMonitorHint"))}</p>

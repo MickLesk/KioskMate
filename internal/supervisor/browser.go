@@ -74,6 +74,12 @@ type Browser struct {
 	insertBase      int
 	rotationCycles  int
 	lastMaintenance time.Time
+	// memoryBaseline is the browser memory once the page settled
+	// (baselineAfter); growthReloadDay stops a second growth reload the
+	// same night.
+	memoryBaseline  uint64
+	baselineAfter   time.Time
+	growthReloadDay string
 	lastActivity    time.Time
 	activityHandler func()
 	rebootHandler   func(context.Context) error
@@ -362,6 +368,8 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	done := b.done
 	b.resetTabsLocked()
 	b.started = time.Now()
+	b.memoryBaseline = 0
+	b.baselineAfter = b.started.Add(memoryBaselineDelay)
 	b.generation++
 	b.startCount++
 	b.lastStat = system.ProcessTreeStats{}
@@ -846,11 +854,54 @@ func (b *Browser) maintenanceReloadDue(now time.Time, maintenance config.KioskMa
 			due = true
 		}
 	}
+	if !due && b.memoryGrowthDueLocked(now, maintenance.GrowthPercent()) {
+		b.logger.Info("browser memory grew since the page settled; reloading at night", "baseline_mb", b.memoryBaseline, "now_mb", b.lastStat.RSSMB)
+		b.growthReloadDay = now.Format("2006-01-02")
+		due = true
+	}
 	if due {
 		b.lastMaintenance = now
 		b.rotationCycles = 0
+		// Measure the reloaded page again once it settled.
+		b.memoryBaseline = 0
+		b.baselineAfter = now.Add(memoryBaselineDelay)
 	}
 	return due
+}
+
+// memoryBaselineDelay lets a dashboard finish loading before its memory is
+// taken as the baseline for growth reloads.
+const memoryBaselineDelay = 10 * time.Minute
+
+// memoryGrowthDueLocked reports whether the browser memory grew by percent
+// over the baseline during the night window. Callers hold b.mu.
+func (b *Browser) memoryGrowthDueLocked(now time.Time, percent int) bool {
+	if percent <= 0 || b.memoryBaseline == 0 || b.lastStat.RSSMB == 0 {
+		return false
+	}
+	if hour := now.Hour(); hour < 3 || hour >= 5 {
+		return false
+	}
+	if b.growthReloadDay == now.Format("2006-01-02") {
+		return false
+	}
+	return b.lastStat.RSSMB*100 >= b.memoryBaseline*uint64(100+percent)
+}
+
+// noteMemoryLocked records the baseline once the page settled. Callers hold
+// b.mu.
+func (b *Browser) noteMemoryLocked(now time.Time, rssMB uint64) {
+	if b.memoryBaseline != 0 || rssMB == 0 || b.started.IsZero() {
+		return
+	}
+	after := b.baselineAfter
+	if after.Before(b.started) {
+		after = b.started.Add(memoryBaselineDelay)
+	}
+	if now.Before(after) {
+		return
+	}
+	b.memoryBaseline = rssMB
 }
 
 func (b *Browser) blankIdleDisplay(ctx context.Context) error {
@@ -1152,7 +1203,7 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 			b.mu.Lock()
 			previousCore := b.coreStat
 			b.mu.Unlock()
-			extra := TelemetrySample{MemoryPercent: system.MemoryUsagePercent(), TemperatureC: system.ProcessorTemperature()}
+			extra := TelemetrySample{MemoryPercent: system.MemoryUsagePercent(), TemperatureC: system.ProcessorTemperature(), GPUMode: b.cfg.Snapshot().Performance.GPUMode}
 			if core, err := system.ReadProcessStats(os.Getpid(), previousCore); err == nil {
 				extra.CoreCPU, extra.CoreMB = core.CPUPercent, core.RSSMB
 				b.mu.Lock()
@@ -1161,6 +1212,7 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 			}
 			b.mu.Lock()
 			b.lastStat = stats
+			b.noteMemoryLocked(time.Now(), stats.RSSMB)
 			if !b.started.IsZero() && time.Since(b.started) >= stableRuntime && b.recovery.Attempts > 0 {
 				b.recovery.Attempts = 0
 				b.recovery.BackoffUntil = nil

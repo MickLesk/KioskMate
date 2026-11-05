@@ -700,7 +700,7 @@
   "pageSwitchIsolatedHint": "Separate browser profiles per page are enabled: every page switch restarts the browser, and tab mode is not used.",
   "reloadEveryMinutes": "Reload page every (minutes, 0 = off)",
   "reloadAtTime": "Daily reload at",
-  "scheduledReloadHint": "A scheduled reload clears memory that long-running dashboards accumulate. It keeps the session and is much cheaper than a watchdog browser restart.",
+  "scheduledReloadHint": "A scheduled reload clears memory that long-running dashboards accumulate. It keeps the session and is much cheaper than a watchdog browser restart. KioskMate also reloads the page between 3 and 5 am when the browser uses much more memory than after loading.",
   "authMonitor": "Home Assistant login monitoring",
   "authMonitorWindow": "After page loads (recommended)",
   "authMonitorAlways": "Always",
@@ -1269,5 +1269,15 @@
   "browserCpuColumn": "Browser CPU",
   "pagesCpuColumn": "Pages CPU",
   "browserMemoryColumn": "Browser RAM",
-  "systemMemoryColumn": "System memory"
+  "systemMemoryColumn": "System memory",
+  "reloadOnGrowth": "Reload at night when memory grew",
+  "reloadOnGrowthDefault": "50 % (default)",
+  "doctorCheck_swap": "Swap",
+  "swap_none": "The system has no swap.",
+  "swap_zram": "Swap uses zram (compressed RAM), not the SD card.",
+  "swap_disk": "Swap lives on the SD card but is hardly used. zram (sudo apt install zram-tools) would be gentler on the card.",
+  "swap_disk_used": "{used} MB are swapped to the SD card. The dashboard stutters and the card wears. Use zram instead: sudo apt install zram-tools, then sudo dphys-swapfile swapoff && sudo systemctl disable dphys-swapfile and reboot.",
+  "gpuTryHardware": "Try hardware mode",
+  "gpuHardwareStarted": "Hardware mode is on and the browser restarted. Runtime telemetry shows the comparison after a few hours.",
+  "gpuShort": "GPU"
 }

@@ -109,6 +109,7 @@ export function bindSettings() {
             reload_every_minutes: Number(val("kiosk-reload-every") || 0),
             reload_at: val("kiosk-reload-at"),
             reload_after_cycles: Math.max(0, Number(val("kiosk-reload-cycles") || 0)),
+            reload_on_growth_percent: Number(val("kiosk-reload-growth") || 0),
           };
           cfg.watchdog.enabled = checked("watchdog-enabled");
           cfg.watchdog.max_rss_mb = Number(val("watchdog-rss") || 900);

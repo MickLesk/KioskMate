@@ -308,6 +308,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/api/browser/safe-mode", s.auth(s.browserSafeMode))
 	mux.HandleFunc("/api/update", s.auth(s.update))
 	mux.HandleFunc("/api/update/channel", s.auth(s.updateChannel))
+	mux.HandleFunc("/api/browser/gpu-mode", s.auth(s.browserGPUMode))
 	mux.HandleFunc("/api/update/preflight", s.auth(s.updatePreflight))
 	mux.HandleFunc("/api/update/history", s.auth(s.updateHistory))
 	mux.HandleFunc("/api/update/install", s.auth(s.updateInstall))
@@ -1796,6 +1797,43 @@ func (s *Server) updateChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.updater.Status())
 }
 
+// browserGPUMode switches Chromium's GPU mode and restarts the browser, so
+// the Doctor can offer hardware rendering with one click. The telemetry
+// starts a new comparison row for the new mode.
+func (s *Server) browserGPUMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(body.Mode))
+	if mode != "auto" && mode != "hardware" && mode != "software" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be auto, hardware or software"})
+		return
+	}
+	if err := s.cfg.Mutate(func(next *config.Config) error {
+		next.Performance.GPUMode = mode
+		return nil
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit("gpu_mode", "ok", "GPU mode changed", map[string]string{"mode": mode})
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if err := s.browser.Restart(ctx); err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"mode": mode, "restart_error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
+}
+
 func (s *Server) updateInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -2184,6 +2222,9 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 		add("browser_running", "error", "Browser is stopped with a last error.", status.LastError)
 	} else {
 		add("browser_running", "warn", "Browser is currently stopped.", "")
+	}
+	if report, ok := collectSwap(); ok {
+		swapCheck(report, add)
 	}
 	if strings.Contains(model, "Raspberry Pi") {
 		report := collectVideoDecode(ctx, model)

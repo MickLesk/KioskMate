@@ -89,6 +89,25 @@ type KioskMaintenance struct {
 	ReloadAt           string `json:"reload_at,omitempty"`
 	// ReloadAfterCycles reloads after the rotation ran this many full rounds.
 	ReloadAfterCycles int `json:"reload_after_cycles,omitempty"`
+	// ReloadOnGrowthPercent reloads the page at night (03:00-05:00, at most
+	// once a day) when the browser's memory grew this much since the page
+	// settled. 0 uses the default of 50 %, a negative value turns it off.
+	ReloadOnGrowthPercent int `json:"reload_on_growth_percent,omitempty"`
+}
+
+// DefaultReloadGrowthPercent is used when ReloadOnGrowthPercent is 0.
+const DefaultReloadGrowthPercent = 50
+
+// GrowthPercent returns the effective memory growth threshold, or 0 when off.
+func (m KioskMaintenance) GrowthPercent() int {
+	switch {
+	case m.ReloadOnGrowthPercent < 0:
+		return 0
+	case m.ReloadOnGrowthPercent == 0:
+		return DefaultReloadGrowthPercent
+	default:
+		return m.ReloadOnGrowthPercent
+	}
 }
 
 type KioskPage struct {

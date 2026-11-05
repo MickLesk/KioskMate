@@ -52,12 +52,16 @@ type TelemetrySample struct {
 	// System memory in use and processor temperature.
 	MemoryPercent float64 `json:"memory_percent,omitempty"`
 	TemperatureC  float64 `json:"temperature_c,omitempty"`
+	// GPUMode is the configured GPU mode; it starts a new comparison row
+	// like an update does, so a GPU mode trial can be compared.
+	GPUMode string `json:"-"`
 }
 
 // VersionTelemetry keeps running sums per app version so the load before and
 // after an update can be compared after the 24 h samples have rotated out.
 type VersionTelemetry struct {
 	Version     string    `json:"version"`
+	GPUMode     string    `json:"gpu_mode,omitempty"`
 	Since       time.Time `json:"since"`
 	Until       time.Time `json:"until"`
 	Samples     int       `json:"samples"`
@@ -71,6 +75,7 @@ type VersionTelemetry struct {
 // VersionSummary is the averaged view of VersionTelemetry.
 type VersionSummary struct {
 	Version         string    `json:"version"`
+	GPUMode         string    `json:"gpu_mode,omitempty"`
 	Since           time.Time `json:"since"`
 	Until           time.Time `json:"until"`
 	Samples         int       `json:"samples"`
@@ -82,7 +87,7 @@ type VersionSummary struct {
 }
 
 func (v VersionTelemetry) summary() VersionSummary {
-	out := VersionSummary{Version: v.Version, Since: v.Since, Until: v.Until, Samples: v.Samples}
+	out := VersionSummary{Version: v.Version, GPUMode: v.GPUMode, Since: v.Since, Until: v.Until, Samples: v.Samples}
 	if v.Samples > 0 {
 		n := float64(v.Samples)
 		out.CPUAverage, out.PagesCPUAverage, out.RSSAverageMB = v.CPUSum/n, v.PagesCPUSum/n, v.RSSSum/n
@@ -416,8 +421,8 @@ func (b *Browser) addVersionTelemetryLocked(sample TelemetrySample) {
 	if version == "" {
 		version = "dev"
 	}
-	if n := len(b.telemetryVersions); n == 0 || b.telemetryVersions[n-1].Version != version {
-		b.telemetryVersions = append(b.telemetryVersions, VersionTelemetry{Version: version, Since: sample.At})
+	if n := len(b.telemetryVersions); n == 0 || b.telemetryVersions[n-1].Version != version || b.telemetryVersions[n-1].GPUMode != sample.GPUMode {
+		b.telemetryVersions = append(b.telemetryVersions, VersionTelemetry{Version: version, GPUMode: sample.GPUMode, Since: sample.At})
 		if len(b.telemetryVersions) > telemetryVersions {
 			b.telemetryVersions = b.telemetryVersions[len(b.telemetryVersions)-telemetryVersions:]
 		}

@@ -700,7 +700,7 @@
   "pageSwitchIsolatedHint": "Getrennte Browser-Profile pro Seite sind aktiv: Jeder Seitenwechsel startet den Browser neu, der Tab-Modus wird nicht verwendet.",
   "reloadEveryMinutes": "Seite neu laden alle (Minuten, 0 = aus)",
   "reloadAtTime": "Täglich neu laden um",
-  "scheduledReloadHint": "Ein geplantes Neuladen gibt Speicher frei, den lange laufende Dashboards ansammeln. Die Sitzung bleibt erhalten, und es ist viel günstiger als ein Browser-Neustart durch den Watchdog.",
+  "scheduledReloadHint": "Ein geplantes Neuladen gibt Speicher frei, den lange laufende Dashboards ansammeln. Die Sitzung bleibt erhalten, und es ist viel günstiger als ein Browser-Neustart durch den Watchdog. Außerdem lädt KioskMate die Seite zwischen 3 und 5 Uhr neu, wenn der Browser seit dem Laden deutlich mehr Speicher braucht.",
   "authMonitor": "Home-Assistant-Login-Überwachung",
   "authMonitorWindow": "Nach dem Laden einer Seite (empfohlen)",
   "authMonitorAlways": "Immer",
@@ -1269,5 +1269,15 @@
   "browserCpuColumn": "Browser-CPU",
   "pagesCpuColumn": "Seiten-CPU",
   "browserMemoryColumn": "Browser-RAM",
-  "systemMemoryColumn": "Systemspeicher"
+  "systemMemoryColumn": "Systemspeicher",
+  "reloadOnGrowth": "Nachts neu laden bei Speicherzuwachs",
+  "reloadOnGrowthDefault": "50 % (Standard)",
+  "doctorCheck_swap": "Auslagerung (Swap)",
+  "swap_none": "Das System hat keinen Swap.",
+  "swap_zram": "Swap liegt in zram (komprimiert im RAM), nicht auf der SD-Karte.",
+  "swap_disk": "Swap liegt auf der SD-Karte, wird aber kaum genutzt. zram (sudo apt install zram-tools) wäre schonender für die Karte.",
+  "swap_disk_used": "{used} MB sind auf die SD-Karte ausgelagert. Das Dashboard ruckelt dadurch und die Karte nutzt sich ab. Besser zram: sudo apt install zram-tools, dann sudo dphys-swapfile swapoff && sudo systemctl disable dphys-swapfile und neu starten.",
+  "gpuTryHardware": "Hardware-Modus testen",
+  "gpuHardwareStarted": "Hardware-Modus aktiv, der Browser wurde neu gestartet. Den Vergleich zeigt die Laufzeit-Telemetrie nach ein paar Stunden.",
+  "gpuShort": "GPU"
 }

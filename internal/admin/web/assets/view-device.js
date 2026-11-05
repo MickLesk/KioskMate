@@ -51,6 +51,8 @@ export function healthChecks() {
   if (state.time) checks.push(check(state.time.synchronized ? "ok" : "warn", t("time"), state.time.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"), state.time.synchronized ? "" : t("checkTimeHint")));
   const video = (state.doctor?.checks || []).find((item) => item.id === "video_decode");
   if (video) checks.push(check(video.level === "error" ? "bad" : video.level === "warn" ? "warn" : "ok", t("doctorCheck_video_decode"), doctorMessage(video)));
+  const swap = (state.doctor?.checks || []).find((item) => item.id === "swap");
+  if (swap) checks.push(check(swap.level === "warn" ? "warn" : "ok", t("doctorCheck_swap"), doctorMessage(swap)));
   const pageVideo = (state.doctor?.checks || []).find((item) => item.id === "page_video");
   if (pageVideo) checks.push(check(pageVideo.level === "error" ? "bad" : pageVideo.level === "warn" ? "warn" : "ok", t("doctorCheck_page_video"), doctorMessage(pageVideo)));
   return checks;

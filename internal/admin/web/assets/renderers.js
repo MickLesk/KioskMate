@@ -508,7 +508,7 @@ function renderPages(pages) {
 		  ${statusTile(t("averageTemperature"), formatValue(average("temperature_c"), " °C"), Number(average("temperature_c") || 0) >= 75 ? "warn" : "", "")}
 		</div>` : "";
 		const rows = versions.slice().reverse().map((item) => [
-		  item.version,
+		  item.gpu_mode ? `${item.version} · ${t("gpuShort")} ${item.gpu_mode}` : item.version,
 		  `${shortDay(item.since)} – ${shortDay(item.until)}`,
 		  cpuShare(item.cpu_average),
 		  cpuShare(item.pages_cpu_average),
