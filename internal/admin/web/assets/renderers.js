@@ -407,6 +407,14 @@ function renderPages(pages) {
         return formatValue(cpuShareValue(percent), " %");
       }
 
+      // Browser load per process role, so a busy page renderer (software
+      // video decoding) can be told apart from the GPU process.
+      export function processSplit(groups) {
+        const list = (groups || []).filter((group) => group && group.name);
+        if (!list.length) return "";
+        return `${t("processSplit")}: ${list.map((group) => `${t(`processGroup_${group.name}`)} ${cpuShare(group.cpu_percent)} (${formatValue(group.mb, " MB")})`).join(" · ")}`;
+      }
+
       export function cpuCoresUsed(percent) {
         const cores = cpuCores();
         const value = Number(percent);
@@ -481,6 +489,39 @@ function renderPages(pages) {
 		  const level = Math.max(4, Math.round(Math.max(Number(item.cpu_percent || 0) / cpuMax, Number(item.rss_mb || 0) / rssMax) * 100));
 		  return `<i data-height="${level}" title="${esc(`${formatDate(item.at)} · ${cpuShare(item.cpu_percent)} CPU · ${formatValue(item.rss_mb, " MB")}`)}"></i>`;
 		}).join("")}</div>`;
+	  }
+
+	  // Averages of the split fields over the kept samples, plus the
+	  // per-version comparison that survives updates.
+	  export function renderTelemetrySplit(history) {
+		const samples = (history?.samples || []).filter((item) => item.pages_cpu != null || item.core_mb != null || item.memory_percent != null);
+		const average = (key) => {
+		  const values = samples.map((item) => Number(item[key])).filter((value) => Number.isFinite(value) && value > 0);
+		  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+		};
+		const versions = history?.versions || [];
+		if (!samples.length && !versions.length) return "";
+		const tiles = samples.length ? `<div class="telemetry-panel">
+		  ${statusTile(t("averagePagesCpu"), cpuShare(average("pages_cpu")), Number(cpuShareValue(average("pages_cpu")) || 0) >= 40 ? "warn" : "", t("averagePagesCpuHint"))}
+		  ${statusTile(t("averageCoreMemory"), formatValue(average("core_mb"), " MB"), "", `${cpuShare(average("core_cpu"))} CPU`)}
+		  ${statusTile(t("averageSystemMemory"), formatValue(average("memory_percent"), " %"), Number(average("memory_percent") || 0) >= 85 ? "warn" : "", "")}
+		  ${statusTile(t("averageTemperature"), formatValue(average("temperature_c"), " °C"), Number(average("temperature_c") || 0) >= 75 ? "warn" : "", "")}
+		</div>` : "";
+		const rows = versions.slice().reverse().map((item) => [
+		  item.version,
+		  `${shortDay(item.since)} – ${shortDay(item.until)}`,
+		  cpuShare(item.cpu_average),
+		  cpuShare(item.pages_cpu_average),
+		  formatValue(item.rss_average_mb, " MB"),
+		  item.memory_average ? formatValue(item.memory_average, " %") : "-",
+		]);
+		const comparison = versions.length ? `<div class="body"><h4>${esc(t("versionComparison"))}</h4><p class="hint">${esc(t("versionComparisonHint"))}</p>${table([t("versionColumn"), t("periodColumn"), t("browserCpuColumn"), t("pagesCpuColumn"), t("browserMemoryColumn"), t("systemMemoryColumn")], rows)}</div>` : "";
+		return `<div class="telemetry-split">${tiles ? `<div class="body"><h4>${esc(t("telemetrySplit"))}</h4>${tiles}</div>` : ""}${comparison}</div>`;
+	  }
+
+	  function shortDay(value) {
+		const date = new Date(value);
+		return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(undefined, { day: "numeric", month: "numeric" });
 	  }
 
       export function stateBanner(tone, title, message, action = "") {

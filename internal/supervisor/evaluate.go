@@ -78,3 +78,62 @@ func (b *Browser) ActivePage() int {
 	defer b.mu.Unlock()
 	return b.active
 }
+
+// PageVideo describes one <video> element on the page on screen.
+type PageVideo struct {
+	// Kind is webrtc (a MediaStream, as Home Assistant's WebRTC players
+	// use), mse (Media Source, for example HLS or go2rtc MSE) or file.
+	Kind    string `json:"kind"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Playing bool   `json:"playing"`
+}
+
+// pageVideosScript lists the videos of the page, including those inside
+// shadow roots (Home Assistant cards) and same-origin iframes.
+const pageVideosScript = `(() => {
+  const out = [];
+  const seen = new Set();
+  const visit = (root, depth) => {
+    if (!root || depth > 40 || seen.has(root)) return;
+    seen.add(root);
+    for (const el of root.querySelectorAll("*")) {
+      if (el.tagName === "VIDEO") {
+        const kind = el.srcObject && typeof MediaStream !== "undefined" && el.srcObject instanceof MediaStream ? "webrtc"
+          : String(el.currentSrc || el.src || "").startsWith("blob:") ? "mse" : "file";
+        out.push({kind, width: el.videoWidth || 0, height: el.videoHeight || 0, playing: !el.paused && !el.ended && el.readyState > 2});
+        if (out.length >= 32) return;
+      }
+      if (el.shadowRoot) visit(el.shadowRoot, depth + 1);
+      if (el.tagName === "IFRAME") { try { visit(el.contentDocument, depth + 1); } catch (e) {} }
+    }
+  };
+  visit(document, 0);
+  return out;
+})()`
+
+// PageVideos reports the videos on the page currently shown.
+func (b *Browser) PageVideos(ctx context.Context) ([]PageVideo, error) {
+	session, err := b.controlSession()
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Result struct {
+			Value []PageVideo `json:"value"`
+		} `json:"result"`
+		ExceptionDetails *struct {
+			Text string `json:"text"`
+		} `json:"exceptionDetails"`
+	}
+	if err := session.command(ctx, "Runtime.evaluate", map[string]any{
+		"expression":    pageVideosScript,
+		"returnByValue": true,
+	}, &result); err != nil {
+		return nil, err
+	}
+	if result.ExceptionDetails != nil {
+		return nil, fmt.Errorf("video scan failed: %s", result.ExceptionDetails.Text)
+	}
+	return result.Result.Value, nil
+}

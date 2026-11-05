@@ -2,7 +2,7 @@
 // memory) with a fix for every warning, above the hardware controls.
 import { doctorMessage, loadBrowserDoctor } from "./actions-core.js";
 import { esc, formatValue, getJSON, formatMQTTState, renderApp, runAction, state, t } from "./app-core.js";
-import { cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage } from "./renderers.js";
+import { cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage, processSplit } from "./renderers.js";
 import { renderHardware } from "./view-system.js";
 
 function check(level, title, detail, fix = "", value = "") {
@@ -29,7 +29,9 @@ export function healthChecks() {
   if (state.status?.browser) {
     const share = cpuShareValue(browser.stats?.cpu_percent);
     const detail = browser.ready ? t("checkBrowserReady").replace("{page}", browser.page_name || "-") : browser.running ? t("displayConnecting") : (humanizeMessage(browser.last_error) || t("displayStoppedHint"));
-    checks.push(check(browser.ready ? (Number(share || 0) > 75 ? "warn" : "ok") : browser.running ? "warn" : "bad", t("checkBrowser"), detail, Number(share || 0) > 75 ? t("checkBrowserLoadHint") : "", browser.running ? `${cpuShare(browser.stats?.cpu_percent)} · ${cpuCoresUsed(browser.stats?.cpu_percent)}` : ""));
+    const split = processSplit(browser.stats?.groups);
+    const fix = [Number(share || 0) > 75 ? t("checkBrowserLoadHint") : "", split].filter(Boolean).join(" ");
+    checks.push(check(browser.ready ? (Number(share || 0) > 75 ? "warn" : "ok") : browser.running ? "warn" : "bad", t("checkBrowser"), detail, fix, browser.running ? `${cpuShare(browser.stats?.cpu_percent)} · ${cpuCoresUsed(browser.stats?.cpu_percent)}` : ""));
   }
   if (browser.auth_guard?.tripped) checks.push(check("bad", t("authGuard"), browser.auth_guard.reason || t("blocked"), t("checkAuthGuardHint")));
   const recovery = browser.recovery || {};
@@ -49,6 +51,8 @@ export function healthChecks() {
   if (state.time) checks.push(check(state.time.synchronized ? "ok" : "warn", t("time"), state.time.synchronized ? t("timeSynchronized") : t("timeNotSynchronized"), state.time.synchronized ? "" : t("checkTimeHint")));
   const video = (state.doctor?.checks || []).find((item) => item.id === "video_decode");
   if (video) checks.push(check(video.level === "error" ? "bad" : video.level === "warn" ? "warn" : "ok", t("doctorCheck_video_decode"), doctorMessage(video)));
+  const pageVideo = (state.doctor?.checks || []).find((item) => item.id === "page_video");
+  if (pageVideo) checks.push(check(pageVideo.level === "error" ? "bad" : pageVideo.level === "warn" ? "warn" : "ok", t("doctorCheck_page_video"), doctorMessage(pageVideo)));
   return checks;
 }
 

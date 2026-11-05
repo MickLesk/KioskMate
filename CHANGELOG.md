@@ -8,6 +8,14 @@
 - No more white flash when a page or insert opens in a new tab: the tab now loads in the background while the current page stays on screen, and comes to the front once the page has loaded (at most after 8 seconds).
 - With the dark kiosk theme (the default) Chromium's default page background is black instead of white, so loading pages and reloads no longer flash white.
 
+### Performance
+- Telemetry shows where the load goes: browser CPU and memory split into pages (renderers, where software video decoding shows up), graphics, browser and helper processes, plus KioskMate's own process, system memory and temperature (Device → Display → Runtime telemetry, and the browser row on the health page).
+- Averages per installed version are kept across updates, so the load before and after an update can be compared.
+- The Browser Doctor lists the videos on the page on screen (WebRTC, MSE, resolution, also inside Home Assistant cards) and warns about large WebRTC streams, which Chromium on a Raspberry Pi often decodes with the CPU.
+- Telemetry rewrote the runtime state file on the SD card every minute (indented JSON with a day of samples); it now writes at most every 10 minutes, compact.
+- The low-power profiles keep 2 tabs open by default instead of 3 (each kept Home Assistant tab costs 150–250 MB). An explicit "Maximum open tabs" still wins; the field now shows the automatic value when empty.
+- Page thumbnails are refreshed every 6 hours instead of every 30 minutes in the low-power profiles.
+
 ## v1.0.0-pre.2
 
 Second pre-release: the redesigned Admin UI gets the depth it was missing. Configs from 1.0.0-pre and 0.9.x keep working unchanged.

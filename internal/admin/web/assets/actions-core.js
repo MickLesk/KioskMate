@@ -248,6 +248,13 @@ export function bindView() {
             .replace("{gpu}", detail.gpu_mem_mb || 0)
             .replace("{file}", detail.boot_config || "config.txt");
         }
+        if (check.id === "page_video" && detail.finding) {
+          return t(`pageVideo_${detail.finding}`)
+            .replace("{count}", detail.videos || 0)
+            .replace("{playing}", detail.playing || 0)
+            .replace("{webrtc}", detail.webrtc || 0)
+            .replace("{largest}", (detail.largest || "-").replace("x", "×"));
+        }
         const key = `doctor_${check.id}_${check.level}`;
         const text = t(key);
         return text === key ? check.message || check.id || "-" : text;

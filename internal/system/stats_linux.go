@@ -27,24 +27,60 @@ func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats
 	if len(pids) == 0 {
 		return ProcessTreeStats{}, os.ErrProcessDone
 	}
+	return collectStats(pids, stats, previous, true), nil
+}
+
+// ReadProcessStats measures a single process without its children, for
+// example KioskMate itself, whose child is the browser.
+func ReadProcessStats(pid int, previous ProcessTreeStats) (ProcessTreeStats, error) {
+	if pid <= 0 {
+		return ProcessTreeStats{}, errors.New("invalid pid")
+	}
+	stat, err := readStat(pid)
+	if err != nil {
+		return ProcessTreeStats{}, err
+	}
+	return collectStats([]int{pid}, map[int]procStat{pid: stat}, previous, false), nil
+}
+
+func collectStats(pids []int, stats map[int]procStat, previous ProcessTreeStats, grouped bool) ProcessTreeStats {
 	now := time.Now()
 	var ticks uint64
+	groupTicks := map[string]uint64{}
+	groupCount := map[string]int{}
+	groupOf := map[int]string{}
 	for _, pid := range pids {
 		ticks += stats[pid].ticks
+		if grouped {
+			name := ProcessGroupName(readCmdline(pid))
+			groupOf[pid] = name
+			groupTicks[name] += stats[pid].ticks
+			groupCount[name]++
+		}
 	}
 	reusePSS := !previous.pssAt.IsZero() && now.Sub(previous.pssAt) < pssInterval && samePIDs(previous.PIDs, pids)
 	rssMB, pssAt := previous.RSSMB, previous.pssAt
-	if !reusePSS {
+	groupMB := map[string]uint64{}
+	if reusePSS {
+		for _, group := range previous.Groups {
+			groupMB[group.Name] = group.MB
+		}
+	} else {
 		var rssKB uint64
+		groupKB := map[string]uint64{}
 		for _, pid := range pids {
 			// Prefer PSS so Chromium shared mappings aren't counted once per process.
-			if pss, ok := readPSSKB(pid); ok {
-				rssKB += pss
-				continue
+			kb, ok := readPSSKB(pid)
+			if !ok {
+				kb = stats[pid].rssPages * uint64(os.Getpagesize()) / 1024
 			}
-			rssKB += stats[pid].rssPages * uint64(os.Getpagesize()) / 1024
+			rssKB += kb
+			groupKB[groupOf[pid]] += kb
 		}
 		rssMB, pssAt = rssKB/1024, now
+		for name, kb := range groupKB {
+			groupMB[name] = kb / 1024
+		}
 	}
 	result := ProcessTreeStats{
 		PIDs:       pids,
@@ -53,14 +89,34 @@ func ReadProcessTreeStats(root int, previous ProcessTreeStats) (ProcessTreeStats
 		UpdatedAt:  &now,
 		totalTicks: ticks,
 		pssAt:      pssAt,
+		groupTicks: groupTicks,
 	}
-	if !previous.Updated.IsZero() && ticks >= previous.totalTicks {
-		elapsed := now.Sub(previous.Updated).Seconds()
-		if elapsed > 0 {
-			result.CPUPercent = float64(ticks-previous.totalTicks) / clockTicks / elapsed * 100
+	elapsed := 0.0
+	if !previous.Updated.IsZero() {
+		elapsed = now.Sub(previous.Updated).Seconds()
+	}
+	if elapsed > 0 && ticks >= previous.totalTicks {
+		result.CPUPercent = float64(ticks-previous.totalTicks) / clockTicks / elapsed * 100
+	}
+	if grouped {
+		for name, count := range groupCount {
+			group := ProcessGroup{Name: name, Processes: count, MB: groupMB[name]}
+			if before, ok := previous.groupTicks[name]; ok && elapsed > 0 && groupTicks[name] >= before {
+				group.CPUPercent = float64(groupTicks[name]-before) / clockTicks / elapsed * 100
+			}
+			result.Groups = append(result.Groups, group)
 		}
+		sortGroups(result.Groups)
 	}
-	return result, nil
+	return result
+}
+
+func readCmdline(pid int) string {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func samePIDs(a, b []int) bool {
@@ -158,4 +214,52 @@ func readPSSKB(pid int) (uint64, bool) {
 		return value, true
 	}
 	return 0, false
+}
+
+// MemoryUsagePercent is the share of memory in use (not available), or 0.
+func MemoryUsagePercent() float64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	var total, available float64
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, _ := strconv.ParseFloat(fields[1], 64)
+		switch fields[0] {
+		case "MemTotal:":
+			total = value
+		case "MemAvailable:":
+			available = value
+		}
+	}
+	if total <= 0 {
+		return 0
+	}
+	return (total - available) / total * 100
+}
+
+// ProcessorTemperature is the CPU temperature in °C, or 0 when unknown.
+func ProcessorTemperature() float64 {
+	entries, _ := os.ReadDir("/sys/class/thermal")
+	for _, wanted := range []string{"cpu-thermal", "x86_pkg_temp", "k10temp", "TCPU", "cpu", "acpitz"} {
+		for _, entry := range entries {
+			dir := filepath.Join("/sys/class/thermal", entry.Name())
+			kind, err := os.ReadFile(filepath.Join(dir, "type"))
+			if err != nil || strings.TrimSpace(string(kind)) != wanted {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, "temp"))
+			if err != nil {
+				continue
+			}
+			if value, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64); err == nil && value > 0 {
+				return value / 1000
+			}
+		}
+	}
+	return 0
 }

@@ -1,5 +1,5 @@
 import { checked, esc, field, formatDate, formatValue, isDirty, secondsToDuration, selectHtml, state, switchHtml, t } from "./app-core.js";
-import { browserPresetOptions, button, cpuCoresUsed, cpuShare, cpuShareValue, kvTable, objectEntries, renderBackups, renderSessions, renderTelemetryChart, renderUpdateHistory, renderUpdateJobsHTML, renderUpdatePreflight, statusTile, textarea } from "./renderers.js";
+import { browserPresetOptions, button, cpuCoresUsed, cpuShare, cpuShareValue, kvTable, objectEntries, renderBackups, renderSessions, renderTelemetryChart, renderTelemetrySplit, renderUpdateHistory, renderUpdateJobsHTML, renderUpdatePreflight, statusTile, textarea } from "./renderers.js";
 
 export function renderSettingsAdmin() {
         const cfg = state.config || {};
@@ -77,7 +77,7 @@ export function renderSettingsAdmin() {
               <div class="head"><div><h3>${esc(t("pageSwitching"))}</h3><span class="section-kicker">${esc(t("pageSwitchingKicker"))}</span></div></div>
               <div class="body form-grid">
                 ${selectHtml("kiosk-page-switch", t("pageSwitchMode"), kiosk.page_switch || "navigate", [["navigate", t("pageSwitchNavigate")], ["tabs", t("pageSwitchTabs")]])}
-                ${field("kiosk-max-tabs", t("maxOpenTabs"), "number", "", kiosk.max_tabs || 3)}
+                ${field("kiosk-max-tabs", t("maxOpenTabs"), "number", "", kiosk.max_tabs || "", t("maxOpenTabsAuto").replace("{count}", ["raspberry", "low-power", "minimal", "conservative"].includes(perf.profile || "low-power") ? 2 : 3))}
                 <p class="hint span-2">${esc(t(kiosk.isolate_page_sessions ? "pageSwitchIsolatedHint" : "pageSwitchHint"))}</p>
                 ${field("kiosk-reload-every", t("reloadEveryMinutes"), "number", "", kiosk.maintenance?.reload_every_minutes || "", "0")}
                 ${field("kiosk-reload-at", t("reloadAtTime"), "time", "", kiosk.maintenance?.reload_at || "")}
@@ -95,6 +95,7 @@ export function renderSettingsAdmin() {
 				${statusTile(t("samples"), telemetry.samples || 0, "", `${t("processes")}: ${telemetry.process_maximum || 0}`)}
 				${renderTelemetryChart(state.telemetry?.samples || [])}
 			  </div>
+			  ${renderTelemetrySplit(state.telemetry)}
 			</div>
             <div class="card">
               <div class="head"><div><h3>${esc(t("watchdog"))}</h3><span class="section-kicker">${esc(t("browserProtection"))}</span></div>${switchHtml("watchdog-enabled", t("enabled"), watchdog.enabled !== false)}</div>

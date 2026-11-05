@@ -23,11 +23,26 @@ import (
 
 const defaultMaxTabs = 3
 
+// lowPowerMaxTabs is the default on small boards: every kept Home Assistant
+// tab costs 150-250 MB, which a 2 GB Raspberry Pi feels.
+const lowPowerMaxTabs = 2
+
 func maxTabs(cfg *config.Config) int {
 	if cfg.Kiosk.MaxTabs >= 1 && cfg.Kiosk.MaxTabs <= 8 {
 		return cfg.Kiosk.MaxTabs
 	}
+	if lowPowerProfile(cfg.Performance.Profile) {
+		return lowPowerMaxTabs
+	}
 	return defaultMaxTabs
+}
+
+func lowPowerProfile(profile string) bool {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "raspberry", "low-power", "minimal", "conservative":
+		return true
+	}
+	return false
 }
 
 // resetTabsLocked forgets all tab bookkeeping; called whenever a new browser

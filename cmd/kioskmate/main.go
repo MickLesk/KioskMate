@@ -91,6 +91,7 @@ func main() {
 
 	signalStore := signals.New()
 	browser := supervisor.NewBrowser(cfg, logger.With("component", "browser"))
+	browser.SetVersion(version)
 	browser.SetEventJournal(eventJournal)
 	browser.SetSignals(signalStore)
 	actionService := actions.New(cfg)

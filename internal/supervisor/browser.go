@@ -86,23 +86,27 @@ type Browser struct {
 	// revealTarget is a tab created in the background that is brought to
 	// the front once its page has loaded, so the screen never shows the
 	// blank (white) tab in between.
-	revealTarget     string
-	tabURL           map[int]string
-	devTools         bool
-	requiresControl  bool
-	readySince       time.Time
-	controlFailures  int
-	controlError     string
-	controlConnected time.Time
-	control          *cdpSession
-	themeStatus      ThemeStatus
-	authGuard        AuthGuardStatus
-	authEvidenceSeen map[string][]time.Time
-	recovery         RecoveryStatus
-	telemetry        []TelemetrySample
-	override         ManualOverride
-	displayPower     string
-	idleBlanked      bool
+	revealTarget       string
+	tabURL             map[int]string
+	devTools           bool
+	requiresControl    bool
+	readySince         time.Time
+	controlFailures    int
+	controlError       string
+	controlConnected   time.Time
+	control            *cdpSession
+	themeStatus        ThemeStatus
+	authGuard          AuthGuardStatus
+	authEvidenceSeen   map[string][]time.Time
+	recovery           RecoveryStatus
+	telemetry          []TelemetrySample
+	telemetryVersions  []VersionTelemetry
+	telemetryPersisted time.Time
+	version            string
+	coreStat           system.ProcessTreeStats
+	override           ManualOverride
+	displayPower       string
+	idleBlanked        bool
 	// signals carries MQTT condition values and presence (may be nil).
 	signals *signals.Store
 }
@@ -1146,12 +1150,22 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 				return
 			}
 			b.mu.Lock()
+			previousCore := b.coreStat
+			b.mu.Unlock()
+			extra := TelemetrySample{MemoryPercent: system.MemoryUsagePercent(), TemperatureC: system.ProcessorTemperature()}
+			if core, err := system.ReadProcessStats(os.Getpid(), previousCore); err == nil {
+				extra.CoreCPU, extra.CoreMB = core.CPUPercent, core.RSSMB
+				b.mu.Lock()
+				b.coreStat = core
+				b.mu.Unlock()
+			}
+			b.mu.Lock()
 			b.lastStat = stats
 			if !b.started.IsZero() && time.Since(b.started) >= stableRuntime && b.recovery.Attempts > 0 {
 				b.recovery.Attempts = 0
 				b.recovery.BackoffUntil = nil
 			}
-			persist := b.recordTelemetryLocked(stats)
+			persist := b.recordTelemetryLocked(stats, extra)
 			cfg := b.cfg.Snapshot()
 			if !cfg.Watchdog.Enabled {
 				b.mu.Unlock()

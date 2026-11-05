@@ -104,7 +104,7 @@ export function bindSettings() {
           cfg.performance.reduce_motion = checked("perf-reduce");
           cfg.performance.auth_monitor = val("perf-auth-monitor") === "always" ? "always" : "";
           cfg.kiosk.page_switch = val("kiosk-page-switch") === "tabs" ? "tabs" : "";
-          cfg.kiosk.max_tabs = Math.min(8, Math.max(1, Number(val("kiosk-max-tabs") || 3)));
+          cfg.kiosk.max_tabs = val("kiosk-max-tabs") ? Math.min(8, Math.max(1, Number(val("kiosk-max-tabs")))) : 0;
           cfg.kiosk.maintenance = {
             reload_every_minutes: Number(val("kiosk-reload-every") || 0),
             reload_at: val("kiosk-reload-at"),

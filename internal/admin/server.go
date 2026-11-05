@@ -84,6 +84,10 @@ type gpuBrowser interface {
 	GPUInfo(context.Context) (supervisor.GPUInfo, error)
 }
 
+type videoBrowser interface {
+	PageVideos(context.Context) ([]supervisor.PageVideo, error)
+}
+
 type MQTTDiscoveryPublisher interface {
 	PublishNow() error
 	ResetDiscovery() (int, error)
@@ -2169,6 +2173,11 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 					hw = hw || strings.Contains(strings.ToLower(profile), "h264")
 				}
 				h264HW = &hw
+			}
+		}
+		if scanner, ok := s.browser.(videoBrowser); ok && status.DevTools {
+			if videos, err := scanner.PageVideos(ctx); err == nil {
+				pageVideoCheck(videos, add)
 			}
 		}
 	} else if status.LastError != "" {

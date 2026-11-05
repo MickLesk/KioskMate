@@ -17,7 +17,13 @@ import (
 const (
 	telemetryRetention = 24 * time.Hour
 	telemetryInterval  = time.Minute
-	stableRuntime      = 10 * time.Minute
+	// telemetryPersistEvery bounds how often telemetry alone rewrites the
+	// runtime state file; on a Raspberry Pi it lives on the SD card.
+	telemetryPersistEvery = 10 * time.Minute
+	// telemetryVersions is how many app versions keep averages for a
+	// before/after comparison across updates.
+	telemetryVersions = 5
+	stableRuntime     = 10 * time.Minute
 )
 
 type RecoveryStatus struct {
@@ -36,6 +42,53 @@ type TelemetrySample struct {
 	CPUPercent   float64   `json:"cpu_percent"`
 	RSSMB        uint64    `json:"rss_mb"`
 	ProcessCount int       `json:"process_count"`
+	// Browser CPU split: pages (renderers, where software video decoding
+	// shows up) and graphics (GPU process).
+	PagesCPU    float64 `json:"pages_cpu,omitempty"`
+	GraphicsCPU float64 `json:"graphics_cpu,omitempty"`
+	// KioskMate's own process, without the browser.
+	CoreCPU float64 `json:"core_cpu,omitempty"`
+	CoreMB  uint64  `json:"core_mb,omitempty"`
+	// System memory in use and processor temperature.
+	MemoryPercent float64 `json:"memory_percent,omitempty"`
+	TemperatureC  float64 `json:"temperature_c,omitempty"`
+}
+
+// VersionTelemetry keeps running sums per app version so the load before and
+// after an update can be compared after the 24 h samples have rotated out.
+type VersionTelemetry struct {
+	Version     string    `json:"version"`
+	Since       time.Time `json:"since"`
+	Until       time.Time `json:"until"`
+	Samples     int       `json:"samples"`
+	CPUSum      float64   `json:"cpu_sum"`
+	PagesCPUSum float64   `json:"pages_cpu_sum"`
+	RSSSum      float64   `json:"rss_sum"`
+	CoreMBSum   float64   `json:"core_mb_sum"`
+	MemorySum   float64   `json:"memory_sum"`
+}
+
+// VersionSummary is the averaged view of VersionTelemetry.
+type VersionSummary struct {
+	Version         string    `json:"version"`
+	Since           time.Time `json:"since"`
+	Until           time.Time `json:"until"`
+	Samples         int       `json:"samples"`
+	CPUAverage      float64   `json:"cpu_average"`
+	PagesCPUAverage float64   `json:"pages_cpu_average"`
+	RSSAverageMB    float64   `json:"rss_average_mb"`
+	CoreAverageMB   float64   `json:"core_average_mb"`
+	MemoryAverage   float64   `json:"memory_average"`
+}
+
+func (v VersionTelemetry) summary() VersionSummary {
+	out := VersionSummary{Version: v.Version, Since: v.Since, Until: v.Until, Samples: v.Samples}
+	if v.Samples > 0 {
+		n := float64(v.Samples)
+		out.CPUAverage, out.PagesCPUAverage, out.RSSAverageMB = v.CPUSum/n, v.PagesCPUSum/n, v.RSSSum/n
+		out.CoreAverageMB, out.MemoryAverage = v.CoreMBSum/n, v.MemorySum/n
+	}
+	return out
 }
 
 type TelemetrySummary struct {
@@ -52,8 +105,9 @@ type TelemetrySummary struct {
 }
 
 type TelemetryHistory struct {
-	Summary TelemetrySummary  `json:"summary"`
-	Samples []TelemetrySample `json:"samples"`
+	Summary  TelemetrySummary  `json:"summary"`
+	Samples  []TelemetrySample `json:"samples"`
+	Versions []VersionSummary  `json:"versions,omitempty"`
 }
 
 type ManualOverride struct {
@@ -65,15 +119,16 @@ type ManualOverride struct {
 }
 
 type runtimeState struct {
-	RecoveryRuns []time.Time       `json:"recovery_runs,omitempty"`
-	StartCount   int               `json:"start_count"`
-	RestartCount int               `json:"restart_count"`
-	Recovery     RecoveryStatus    `json:"recovery"`
-	Override     ManualOverride    `json:"override"`
-	Telemetry    []TelemetrySample `json:"telemetry"`
-	Operations   []Operation       `json:"operations,omitempty"`
-	LastExit     ExitStatus        `json:"last_exit,omitempty"`
-	ExitCounts   map[string]int    `json:"exit_reason_counts,omitempty"`
+	RecoveryRuns []time.Time        `json:"recovery_runs,omitempty"`
+	StartCount   int                `json:"start_count"`
+	RestartCount int                `json:"restart_count"`
+	Recovery     RecoveryStatus     `json:"recovery"`
+	Override     ManualOverride     `json:"override"`
+	Telemetry    []TelemetrySample  `json:"telemetry"`
+	Versions     []VersionTelemetry `json:"telemetry_versions,omitempty"`
+	Operations   []Operation        `json:"operations,omitempty"`
+	LastExit     ExitStatus         `json:"last_exit,omitempty"`
+	ExitCounts   map[string]int     `json:"exit_reason_counts,omitempty"`
 }
 
 func (b *Browser) Recover(ctx context.Context, reason string) error {
@@ -300,18 +355,32 @@ func (b *Browser) Telemetry() TelemetryHistory {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	samples := append([]TelemetrySample(nil), b.telemetry...)
-	return TelemetryHistory{Summary: b.telemetrySummaryLocked(), Samples: samples}
+	history := TelemetryHistory{Summary: b.telemetrySummaryLocked(), Samples: samples}
+	for _, version := range b.telemetryVersions {
+		history.Versions = append(history.Versions, version.summary())
+	}
+	return history
+}
+
+// SetVersion names the running app version for the per-version telemetry.
+func (b *Browser) SetVersion(version string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.version = strings.TrimSpace(version)
 }
 
 func (b *Browser) ResetTelemetry() error {
 	b.mu.Lock()
 	b.telemetry = nil
+	b.telemetryVersions = nil
 	b.mu.Unlock()
 	b.persistRuntimeState()
 	return nil
 }
 
-func (b *Browser) recordTelemetryLocked(stats system.ProcessTreeStats) bool {
+// recordTelemetryLocked adds a sample at most once per telemetryInterval and
+// reports whether the runtime state should be written now.
+func (b *Browser) recordTelemetryLocked(stats system.ProcessTreeStats, extra TelemetrySample) bool {
 	now := time.Now()
 	if len(b.telemetry) > 0 && now.Sub(b.telemetry[len(b.telemetry)-1].At) < telemetryInterval {
 		return false
@@ -323,8 +392,44 @@ func (b *Browser) recordTelemetryLocked(stats system.ProcessTreeStats) bool {
 			kept = append(kept, sample)
 		}
 	}
-	b.telemetry = append(kept, TelemetrySample{At: now, CPUPercent: stats.CPUPercent, RSSMB: stats.RSSMB, ProcessCount: len(stats.PIDs)})
+	sample := extra
+	sample.At, sample.CPUPercent, sample.RSSMB, sample.ProcessCount = now, stats.CPUPercent, stats.RSSMB, len(stats.PIDs)
+	for _, group := range stats.Groups {
+		switch group.Name {
+		case "pages":
+			sample.PagesCPU = group.CPUPercent
+		case "graphics":
+			sample.GraphicsCPU = group.CPUPercent
+		}
+	}
+	b.telemetry = append(kept, sample)
+	b.addVersionTelemetryLocked(sample)
+	if now.Sub(b.telemetryPersisted) < telemetryPersistEvery {
+		return false
+	}
+	b.telemetryPersisted = now
 	return true
+}
+
+func (b *Browser) addVersionTelemetryLocked(sample TelemetrySample) {
+	version := b.version
+	if version == "" {
+		version = "dev"
+	}
+	if n := len(b.telemetryVersions); n == 0 || b.telemetryVersions[n-1].Version != version {
+		b.telemetryVersions = append(b.telemetryVersions, VersionTelemetry{Version: version, Since: sample.At})
+		if len(b.telemetryVersions) > telemetryVersions {
+			b.telemetryVersions = b.telemetryVersions[len(b.telemetryVersions)-telemetryVersions:]
+		}
+	}
+	current := &b.telemetryVersions[len(b.telemetryVersions)-1]
+	current.Until = sample.At
+	current.Samples++
+	current.CPUSum += sample.CPUPercent
+	current.PagesCPUSum += sample.PagesCPU
+	current.RSSSum += float64(sample.RSSMB)
+	current.CoreMBSum += float64(sample.CoreMB)
+	current.MemorySum += sample.MemoryPercent
 }
 
 func (b *Browser) telemetrySummaryLocked() TelemetrySummary {
@@ -368,11 +473,13 @@ func (b *Browser) persistRuntimeState() {
 	state := runtimeState{
 		RecoveryRuns: append([]time.Time(nil), b.recoveryRuns...), StartCount: b.startCount, RestartCount: b.restartCount,
 		Recovery: b.recovery, Override: b.override, Telemetry: append([]TelemetrySample(nil), b.telemetry...),
+		Versions:   append([]VersionTelemetry(nil), b.telemetryVersions...),
 		Operations: append([]Operation(nil), b.operationHistory...),
 		LastExit:   b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts),
 	}
 	b.mu.Unlock()
-	data, err := json.MarshalIndent(state, "", "  ")
+	// Compact JSON: the file holds up to a day of telemetry samples.
+	data, err := json.Marshal(state)
 	if err != nil {
 		return
 	}
@@ -411,6 +518,7 @@ func (b *Browser) loadRuntimeState() {
 	if len(b.operationHistory) > 50 {
 		b.operationHistory = b.operationHistory[len(b.operationHistory)-50:]
 	}
+	b.telemetryVersions = state.Versions
 	cutoff := time.Now().Add(-telemetryRetention)
 	for _, sample := range state.Telemetry {
 		if sample.At.After(cutoff) {
