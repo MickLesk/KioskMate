@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v1.0.0-pre.3
+
+Third pre-release: inserts switch without blanking the display, no more white flashes, and telemetry that shows where the CPU goes. Configs from 1.0.0-pre.2 keep working unchanged.
+
+### Updates
+- "Check for updates" on the Update page now reports the result (newest version, up to date, or the error) instead of only repeating its own label.
+- New switch "Offer pre-releases" on the Update page (Device → Maintenance). It sets `update.prerelease` and checks again right away.
+- The updater picks the highest version of the channel instead of the most recently published release.
+- The release workflow uploads to an existing GitHub release instead of failing with "release already exists".
+
 ### Fixes
 - Inserts no longer turn the display off and on. With a time rule as base programme (or hybrid mode with schedule pages) an insert counted as "outside the schedule": the display was switched off, the page blanked, and after the insert the base page (for example a Home Assistant dashboard) loaded from scratch.
 - An insert now opens in its own tab, also in the default "navigate" page switch mode. The base page stays loaded underneath and comes back without a reload when the insert ends; the insert tab is closed again afterwards.
