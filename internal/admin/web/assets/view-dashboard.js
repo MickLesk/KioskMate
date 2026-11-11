@@ -2,7 +2,7 @@
 // every day, and today's programme at a glance. Troubleshooting tools stay
 // one click away in a disclosure.
 import { formatThemeStatus } from "./actions-core.js";
-import { esc, formatMQTTState, formatValue, selectHtml, state, t } from "./app-core.js";
+import { esc, formatMQTTState, formatValue, relativeTime, selectHtml, state, t } from "./app-core.js";
 import { icon } from "./icons.js";
 import { button, cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage, normalizePages, powerBanner, stateBanner, statusTile } from "./renderers.js";
 import { baseRuns, clock, insertTone, renderTimeline, visibleInserts } from "./timeline.js";
@@ -88,7 +88,9 @@ export function renderDashboard() {
           ? statusTile(t("processorLoad"), cpuShare(stats.cpu_percent), Number(cpuShareValue(stats.cpu_percent) || 0) > 75 ? "warn" : "", `${cpuCoresUsed(stats.cpu_percent)} · ${formatValue(stats.rss_mb, " MB RAM")}`)
           : statusTile(t("processorLoad"), "–", "", t("browserNotRunningShort"))}
         ${statusTile(t("memory"), formatValue(hw.system?.memory_usage_percent, " %"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
-        ${statusTile(t("temperature"), formatValue(hw.system?.processor_temperature_c, " °C"), Number(hw.system?.processor_temperature_c || 0) >= 75 ? "warn" : "", hw.device?.model || "")}
+        ${hw.system?.processor_temperature_c == null
+          ? statusTile(t("temperature"), "–", "", t("noTemperatureSensor"))
+          : statusTile(t("temperature"), formatValue(hw.system.processor_temperature_c, " °C"), Number(hw.system.processor_temperature_c) >= 75 ? "warn" : "", hw.device?.model && hw.device.model !== "Generic" ? hw.device.model : "")}
         ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.enabled ? cfg.mqtt?.url || "" : t("notConfigured")))}
       </section>
 
@@ -112,11 +114,22 @@ export function renderDashboard() {
           <dl class="mini-facts">
             <div><dt>${esc(t("haThemeSync"))}</dt><dd>${esc(formatThemeStatus(browser.theme_status))}</dd></div>
             <div><dt>${esc(t("browserGeneration"))}</dt><dd>${esc(String(browser.generation || 0))}</dd></div>
-            ${browser.last_error ? `<div><dt>${esc(t("lastError"))}</dt><dd>${esc(humanizeMessage(browser.last_error))}</dd></div>` : ""}
+            ${lastErrorRow(browser)}
           </dl>
         </div>
       </details>
     </div>`;
+}
+
+// The last browser error with its age. Once the browser has run fine for a
+// day after it, the old error is history and no longer shown.
+function lastErrorRow(browser) {
+  if (!browser.last_error) return "";
+  const at = browser.last_exit_details?.at || browser.last_exit;
+  const age = at ? Date.now() - new Date(at).getTime() : 0;
+  if (browser.ready && age > 24 * 3600 * 1000) return "";
+  const when = relativeTime(at);
+  return `<div><dt>${esc(t("lastError"))}</dt><dd>${esc(humanizeMessage(browser.last_error))}${when ? ` <small class="muted" title="${esc(new Date(at).toLocaleString())}">(${esc(when)})</small>` : ""}</dd></div>`;
 }
 
 // Up next: each insert once with its next run and rhythm, plus the next

@@ -17,6 +17,18 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - The performance profile setting explains what the selected profile changes.
 - The overview shows "–" for the browser load while the display browser is stopped instead of "0 % · 0 MB".
 
+### Admin UI
+- A touchscreen that was detected before and is missing now is reported as an error on the device page, in the problem banner and in the Browser Doctor, with the time it was last seen. KioskMate remembers touch devices in `touch-devices.json` next to the configuration.
+- Processor: real usage from `/proc/stat` with one bar per core on the device page, so a single saturated core shows. Before, "processor usage" was the load average divided by the cores, which also counts processes waiting for the SD card. The MQTT/Home Assistant sensor "Processor Usage" now reports the real usage too.
+- Browser Doctor: technical details are a readable list ("Undervoltage since boot: yes") instead of raw JSON, and "Copy report" copies all findings (also on plain http, where the browser clipboard API is unavailable).
+- Toasts: at most three at once, the same message again raises a counter instead of stacking up, successes disappear after 4 s, errors stay 9 s. Common English messages from the kiosk (display power unsupported, wrong password, too many attempts …) are translated.
+- The last browser error shows how long ago it happened and is no longer listed once the browser has run fine for a day after it.
+- A banner says when the connection to the kiosk is lost (restart, Wi-Fi) and a toast when it is back.
+- A view that fails to render shows an error card with the message instead of an empty page.
+- Accessibility: "Skip to content" link, dialogs keep the keyboard focus inside, close on Escape and return the focus to the button that opened them; light theme text colours raised to WCAG AA contrast.
+- The browser tab title names the area and the kiosk and starts with ⚠ while the display browser is stopped.
+- The temperature tile says "No temperature sensor" instead of "-".
+
 ## v1.0.0-pre.3
 
 Third pre-release: inserts switch without blanking the display, no more white flashes, and telemetry that shows where the CPU goes. Configs from 1.0.0-pre.2 keep working unchanged.

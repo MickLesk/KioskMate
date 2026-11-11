@@ -2864,7 +2864,9 @@ func hardwareDoctorChecks(status hardware.Status, add func(id, level, message st
 			add("power_supply", "ok", "No undervoltage reported.", power)
 		}
 	}
-	if devices, ok := status.System["touch_devices"].([]string); ok {
+	if missing, ok := status.System["touch_devices_missing"].([]string); ok && len(missing) > 0 {
+		add("touch_input", "error", "The touchscreen ("+strings.Join(missing, ", ")+") was detected before and is missing now. Its USB controller dropped out or the cable is loose; undervoltage is the most common cause. Re-plug the touch USB cable or reboot, and check the power supply.", missing)
+	} else if devices, ok := status.System["touch_devices"].([]string); ok {
 		if len(devices) == 0 {
 			add("touch_input", "warn", "No touch input device is registered with the kernel. If the screen should react to touch, check its USB cable and the power supply (see sudo libinput debug-events).", "")
 		} else {

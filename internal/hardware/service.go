@@ -20,6 +20,8 @@ type Service struct {
 	cached   Status
 	cachedAt time.Time
 	fastAt   time.Time
+	stateDir string
+	touch    touchMemory
 }
 
 // Status is split into a slow part (display, audio, disk, network, session),
@@ -66,10 +68,12 @@ func (s *Service) Status(ctx context.Context) Status {
 		s.cached = collectStatus(ctx)
 		s.cachedAt = now
 		s.fastAt = now
+		s.noteTouchLocked(s.cached.System, now)
 	} else if now.Sub(s.fastAt) >= fastStatusTTL {
 		s.cached.System = refreshFastSystem(s.cached.System)
 		s.cached.Runtime = runtimeStatus()
 		s.fastAt = now
+		s.noteTouchLocked(s.cached.System, now)
 	}
 	return s.cached
 }

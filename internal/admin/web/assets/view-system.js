@@ -15,7 +15,7 @@ export function renderHardware() {
         return `
           <div class="page-stack">
             <section class="status-strip">
-              ${statusTile(t("systemLoad"), formatValue(load), cores && Number(load || 0) > cores ? "warn" : "", `${cores ? `${cores} ${t("cpuCoresUnit")} · ` : ""}${t("temperature")} ${formatValue(hw.system?.processor_temperature_c, " °C")}`)}
+              ${renderProcessorTile(hw.system || {}, cores, load)}
               ${statusTile("RAM", formatValue(hw.system?.memory_usage_percent, "%"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
               ${statusTile(t("storage"), formatValue(hw.system?.disk_usage?.percent, "%"), "", formatValue(hw.system?.disk_usage?.available_gb, " GB " + t("available")))}
               ${support.display_status ? statusTile(t("display"), String(hw.display?.power || "").toUpperCase() === "OFF" ? t("off") : t("on"), String(hw.display?.power || "").toUpperCase() === "OFF" ? "" : "ok", support.display_brightness ? `${t("brightness")} ${formatValue(hw.display?.brightness, "%")}` : t("brightnessNotControllable")) : statusTile(t("display"), t("notControllable"), "", t("displayControlHint"))}
@@ -149,3 +149,20 @@ export function renderHardware() {
             </div>
           </div>`;
       }
+
+// Processor: real busy share from /proc/stat with one small bar per core, so
+// a single saturated core (a software-decoded video, a stuck script) is
+// visible even when the average looks harmless. Falls back to the load
+// average where per-core figures are unavailable (Windows, first reading).
+function renderProcessorTile(system, cores, load) {
+  const perCore = Array.isArray(system.processor_cores_percent) ? system.processor_cores_percent : [];
+  const usage = system.processor_usage_percent;
+  const temperature = `${t("temperature")} ${formatValue(system.processor_temperature_c, " °C")}`;
+  if (usage == null || !perCore.length) {
+    return statusTile(t("systemLoad"), formatValue(load), cores && Number(load || 0) > cores ? "warn" : "", `${cores ? `${cores} ${t("cpuCoresUnit")} · ` : ""}${temperature}`);
+  }
+  const busiest = Math.max(...perCore.map(Number));
+  const tone = Number(usage) >= 80 || busiest >= 95 ? "warn" : "";
+  const bars = perCore.map((value, index) => `<i class="${Number(value) >= 90 ? "hot" : ""}" title="${esc(`${t("cpuCore")} ${index + 1}: ${formatValue(value, " %")}`)}"><b data-height="${Math.max(3, Math.round(Number(value)))}"></b></i>`).join("");
+  return `<div class="status-tile processor-tile ${tone}"><span>${esc(t("processorUsage"))}</span><strong>${esc(formatValue(usage, " %"))}</strong><div class="core-bars" role="img" aria-label="${esc(perCore.map((value, index) => `${t("cpuCore")} ${index + 1}: ${Math.round(Number(value))} %`).join(", "))}">${bars}</div><small>${esc(`${t("loadAverageShort")} ${formatValue(load)} · ${temperature}`)}</small></div>`;
+}

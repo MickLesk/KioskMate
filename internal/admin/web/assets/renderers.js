@@ -1,5 +1,5 @@
 import { formatSchedulerReason } from "./actions-core.js";
-import { checked, esc, field, formatDate, formatDuration, formatValue, secondsToDuration, selectHtml, state, t, val } from "./app-core.js";
+import { checked, esc, field, setMessageFilter, formatDate, formatDuration, formatValue, secondsToDuration, selectHtml, state, t, val } from "./app-core.js";
 import { KioskMateUI } from "./ui-components.js";
 
 function renderPages(pages) {
@@ -452,6 +452,12 @@ function renderPages(pages) {
             return Number(value) < 1440 ? `${formatValue(Number(value) / 60)} h` : `${formatValue(Number(value) / 1440)} ${t("days")}`;
           case "memory_size_gib":
             return formatValue(value, " GiB");
+          case "processor_cores_percent":
+            return Array.isArray(value) && value.length ? value.map((item) => formatValue(item, " %")).join(" · ") : "-";
+          case "touch_devices_missing":
+            return Array.isArray(value) ? value.join(", ") : "-";
+          case "touch_last_seen":
+            return value ? new Date(value).toLocaleString() : "-";
           case "memory_usage_percent":
           case "processor_usage_percent":
           case "battery_level":
@@ -633,7 +639,32 @@ function renderPages(pages) {
         [/^rss (\d+)MB > (\d+)MB$/, "msgMemoryLimit"],
         [/^cpu ([\d.]+)% > ([\d.]+)%$/, "msgCPULimit"],
         [/Missing X server/i, "msgMissingXServer"],
+        [/^display power control unsupported: install wlopm/, "msgDisplayPowerWlopm"],
+        [/^display power control unsupported$/, "msgDisplayPowerUnsupported"],
+        [/^brightness control unsupported$/, "msgBrightnessUnsupported"],
+        [/^too many attempts$/, "msgTooManyAttempts"],
+        [/^invalid credentials$/, "msgInvalidCredentials"],
+        [/^invalid current password$/, "msgInvalidCurrentPassword"],
+        [/^password required$/, "msgPasswordRequired"],
+        [/^page index out of range$/, "msgPageIndexOutOfRange"],
+        [/^mqtt service unavailable$/, "msgMQTTUnavailable"],
+        [/^the running Chromium session is not connected to DevTools$/, "msgNoDevTools"],
+        [/^only http and https URLs can be (checked|rendered)$/, "msgOnlyHTTP"],
+        [/^request body too large/, "msgBodyTooLarge"],
+        [/^Failed to fetch$|^NetworkError|^Load failed$/, "msgNetwork"],
       ];
+
+      // Workflow and job results list failures as "2 display: <message>";
+      // each part is translated on its own.
+      export function humanizeMessages(message) {
+        const text = String(message || "");
+        const parts = text.split(/;\s+/);
+        return parts.map((part) => {
+          const match = /^(\d+) ([a-z_]+): (.+)$/.exec(part);
+          return match ? `${match[1]} ${match[2]}: ${humanizeMessage(match[3])}` : humanizeMessage(part);
+        }).join("; ");
+      }
+      setMessageFilter(humanizeMessages);
 
       export function humanizeMessage(message) {
         const text = String(message || "").trim();

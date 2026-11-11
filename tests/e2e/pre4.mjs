@@ -35,11 +35,66 @@ export default async function pre4({ browser, base, ok, errors, out, api }) {
   ok("profile: effect explained", (await page.textContent("#perf-profile-hint")).startsWith("Ausgewogen"), await page.textContent("#perf-profile-hint"));
   await page.locator(".page-cpu").screenshot({ path: `${out}/pre4-page-cpu.png` });
 
+  // ---- Toasts: capped, repeats folded, API errors translated ----
+  await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.remove()));
+  await page.evaluate(async () => {
+    const core = await import("/assets/app-core.js");
+    for (let i = 0; i < 3; i++) core.toast("Fehlgeschlagen", "1 display: display power control unsupported", "error");
+    for (const name of ["a", "b", "c", "d"]) core.toast(name);
+  });
+  const toastTexts = await page.locator(".toast").allInnerTexts();
+  ok("toasts: at most three on screen", toastTexts.length === 3, toastTexts.join(" | "));
+  await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.remove()));
+  await page.evaluate(async () => {
+    const core = await import("/assets/app-core.js");
+    for (let i = 0; i < 3; i++) core.toast("Fehlgeschlagen", "1 display: display power control unsupported", "error");
+  });
+  const folded = await page.locator(".toast").allInnerTexts();
+  ok("toasts: repeats folded with a counter", folded.length === 1 && folded[0].includes("×3"), folded.join(" | "));
+  ok("toasts: backend error translated", folded[0]?.includes("Dieses Gerät kann den Bildschirm nicht ein- und ausschalten"), folded[0]);
+  await page.evaluate(() => document.querySelectorAll(".toast").forEach((t) => t.remove()));
+
+  // ---- Device health: missing touchscreen, processor per core ----
+  await page.click('.nav [data-view="device"]');
+  await page.waitForSelector(".health-checks");
+  await page.click('[data-action="health-refresh"]');
+  await page.waitForTimeout(6000);
+  await page.click('[data-action="health-refresh"]');
+  await page.waitForTimeout(1500);
+  const health = await page.locator(".health-check").allInnerTexts();
+  ok("health: touchscreen seen before is reported missing", health.some((text) => text.includes("Testpanel Touch") && text.includes("fehlt jetzt")), health.find((text) => text.includes("Touch")) || "none");
+  await page.locator(".status-strip").first().screenshot({ path: `${out}/pre4-processor.png` });
+  const cores = await page.locator(".processor-tile .core-bars i").count();
+  ok("device: processor tile with one bar per core", cores >= 1, `${cores} bars`);
+
+  // ---- Doctor: readable details, focus trap, Escape, copy ----
+  const doctorButton = page.locator('[data-action="browser-doctor"]').first();
+  await doctorButton.focus();
+  await doctorButton.click();
+  await page.waitForSelector(".doctor-dialog", { timeout: 30000 });
+  await page.locator(".doctor-dialog details.tech-details").first().evaluate((d) => { d.open = true; });
+  ok("doctor: technical details as a list", await page.locator(".doctor-dialog .detail-list dt").count() > 0 && await page.locator(".doctor-dialog pre.logbox").count() === 0);
+  ok("doctor: touch details translated", (await page.locator(".doctor-dialog").innerText()).includes("Der Touchscreen war schon erkannt"));
+  for (let i = 0; i < 40; i++) await page.keyboard.press("Tab");
+  ok("dialog: focus stays inside", await page.evaluate(() => !!document.activeElement?.closest(".modal")));
+  await page.click("[data-doctor-copy]");
+  await page.waitForTimeout(200);
+  ok("doctor: copy gives feedback", (await page.locator(".toast").allInnerTexts()).some((text) => /kopiert|Kopieren/i.test(text)));
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  ok("dialog: Escape closes", await page.locator(".doctor-dialog").count() === 0);
+  ok("dialog: focus returns to the opener", await page.evaluate(() => document.activeElement?.dataset?.action === "browser-doctor"));
+
+  // ---- Shell: skip link and tab title ----
+  ok("shell: skip link targets the content", await page.locator('.skip-link[href="#main-content"]').count() === 1 && await page.locator("#main-content").count() === 1);
+  ok("shell: tab title warns while the display is stopped", (await page.title()).startsWith("⚠ Gerät · KioskMate"), await page.title());
+
   await ctx.close();
 }
 
 // Seed a runtime state with per-page telemetry before the server starts.
 pre4.prepare = (dir) => {
+  fs.writeFileSync(path.join(dir, "touch-devices.json"), JSON.stringify({ devices: ["Testpanel Touch"], last_seen: new Date(Date.now() - 3 * 3600e3).toISOString() }));
   const now = new Date().toISOString();
   const entry = (id, name, samples, pages) => ({ page_id: id, name, samples, cpu_sum: samples * (pages + 15), pages_cpu_sum: samples * pages, rss_sum: samples * 420, last_seen: now });
   fs.writeFileSync(path.join(dir, "runtime-state.json"), JSON.stringify({

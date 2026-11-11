@@ -102,6 +102,7 @@ func main() {
 	updateService := updater.New(cfg, version, actionService)
 	updateService.SetEventJournal(eventJournal)
 	hardwareService := hardware.New()
+	hardwareService.SetStateDir(config.ConfigDir(cfg.Path))
 	browser.SetDisplayPower(hardwareService)
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"), eventJournal)
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"), eventJournal)

@@ -204,11 +204,41 @@ const NAV = [
         if (!on) updateDirtyUI();
       }
 
+      // Messages from the API are terse English; renderers.js installs a
+      // translator here (it cannot be imported without a module cycle).
+      // var without initializer: renderers.js runs before this module's
+      // body, and a let would still be in its temporal dead zone then.
+      var messageFilter;
+      export function setMessageFilter(fn) { messageFilter = fn; }
+
+      // At most this many toasts are on screen; the oldest goes first.
+      const MAX_TOASTS = 3;
+
       // options.action = { label, run } adds a button (for example "Undo");
-      // options.timeout overrides how long the toast stays.
+      // options.timeout overrides how long the toast stays. A toast with the
+      // same title and message as one on screen replaces it with a counter
+      // instead of stacking up.
       export function toast(title, message = "", type = "ok", options = {}) {
+        message = message ? (messageFilter ? messageFilter(String(message)) : String(message)) : "";
+        const key = `${type}\u0000${title}\u0000${message}`;
+        const same = [...toasts.children].find((item) => item.dataset.key === key && !options.action);
+        if (same) {
+          const count = Number(same.dataset.count || 1) + 1;
+          same.dataset.count = count;
+          let badge = same.querySelector(".toast-count");
+          if (!badge) {
+            badge = document.createElement("span");
+            badge.className = "toast-count";
+            same.querySelector("strong")?.after(badge);
+          }
+          badge.textContent = `×${count}`;
+          clearTimeout(Number(same.dataset.timer));
+          same.dataset.timer = setTimeout(() => same.remove(), toastTimeout(type, options));
+          return;
+        }
         const item = document.createElement("div");
         item.className = "toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "") + (options.action ? " with-action" : "");
+        item.dataset.key = key;
         item.setAttribute("role", type === "error" ? "alert" : "status");
         item.innerHTML = `<div><strong>${esc(title)}</strong>${message ? `<div class="muted">${esc(message)}</div>` : ""}</div>${options.action ? `<button class="toast-action">${esc(options.action.label)}</button>` : ""}<button class="toast-close" title="${esc(t("close"))}" aria-label="${esc(t("close"))}">&times;</button>`;
         item.querySelector(".toast-close")?.addEventListener("click", () => item.remove());
@@ -217,7 +247,15 @@ const NAV = [
           options.action.run();
         });
         toasts.appendChild(item);
-        setTimeout(() => item.remove(), options.timeout || (options.action ? 8000 : 5200));
+        while (toasts.children.length > MAX_TOASTS) toasts.firstElementChild.remove();
+        item.dataset.timer = setTimeout(() => item.remove(), toastTimeout(type, options));
+      }
+
+      // Successes go quickly, problems stay long enough to be read.
+      function toastTimeout(type, options) {
+        if (options.timeout) return options.timeout;
+        if (options.action) return 8000;
+        return type === "error" ? 9000 : type === "warn" ? 7000 : 4000;
       }
 
       // Applies an unsaved removal right away and offers to undo it, instead
@@ -233,14 +271,48 @@ const NAV = [
 
       let modalKeyHandler = null;
 
+      // Dialogs keep the keyboard inside (Tab wraps around), close on
+      // Escape and give the focus back to the control that opened them.
+      let modalReturnFocus = null;
+      const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+      // The opener is often disabled while its action runs (busy state) and
+      // has lost focus by the time the dialog opens, so remember the last
+      // control focused outside dialogs.
+      let lastFocused = null;
+      document.addEventListener("focusin", (event) => {
+        if (event.target instanceof HTMLElement && !event.target.closest("#modal-root, .modal")) lastFocused = event.target;
+      });
       export function openModal(html) {
+        if (!modalKeyHandler) {
+          const active = document.activeElement;
+          modalReturnFocus = active instanceof HTMLElement && active !== document.body ? active : lastFocused;
+        }
+        if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
         modalRoot.innerHTML = `<div class="modal-backdrop" data-modal-backdrop>${html}</div>`;
         modalRoot.querySelectorAll("[data-modal-close]").forEach((button) => button.addEventListener("click", closeModal));
         modalRoot.querySelector("[data-modal-backdrop]")?.addEventListener("click", (event) => {
           if (event.target?.dataset?.modalBackdrop !== undefined) closeModal();
         });
         modalKeyHandler = (event) => {
-          if (event.key === "Escape") closeModal();
+          if (event.key === "Escape") {
+            closeModal();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const items = [...modalRoot.querySelectorAll(FOCUSABLE)].filter((element) => element.offsetParent !== null || element === document.activeElement);
+          if (!items.length) return;
+          const first = items[0];
+          const last = items[items.length - 1];
+          if (!modalRoot.contains(document.activeElement)) {
+            event.preventDefault();
+            first.focus();
+          } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
         };
         document.addEventListener("keydown", modalKeyHandler);
         requestAnimationFrame(() => modalRoot.querySelector("[data-modal-close], button, input, select, textarea")?.focus());
@@ -250,6 +322,12 @@ const NAV = [
         if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
         modalKeyHandler = null;
         modalRoot.innerHTML = "";
+        const target = modalReturnFocus;
+        modalReturnFocus = null;
+        // A live render may have replaced the opener: find its successor.
+        const action = target?.dataset?.action;
+        const successor = target && !document.contains(target) && action ? document.querySelector(`[data-action="${CSS.escape(action)}"]`) : target;
+        if (successor && document.contains(successor)) successor.focus();
       }
 
       export function openMQTTTestDialog() {
@@ -346,6 +424,20 @@ const NAV = [
         const n = Number(value);
         if (!Number.isFinite(n) || n <= 0) return fallback;
         return Math.round(n / 1_000_000_000);
+      }
+
+      // "vor 5 Minuten" / "5 minutes ago" for a date in the past (or "in …"
+      // for the future), in the Admin UI language; "" for missing dates.
+      export function relativeTime(value, now = Date.now()) {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime()) || date.getFullYear() < 2000) return "";
+        const seconds = Math.round((date.getTime() - now) / 1000);
+        const format = new Intl.RelativeTimeFormat(state.lang || undefined, { numeric: "auto" });
+        const abs = Math.abs(seconds);
+        if (abs < 45) return format.format(0, "second");
+        if (abs < 3600) return format.format(Math.round(seconds / 60), "minute");
+        if (abs < 86400) return format.format(Math.round(seconds / 3600), "hour");
+        return format.format(Math.round(seconds / 86400), "day");
       }
 
       export function formatDuration(seconds) {
@@ -816,8 +908,13 @@ const NAV = [
         const area = activeNavItem();
         if (!root.querySelector(":scope > .layout")) root.innerHTML = "";
         const running = !!browser.running;
+        // The tab title names the area and the kiosk and warns while the
+        // display browser is down, so a background tab shows trouble.
+        const attention = !!state.status?.browser && !running;
+        document.title = `${attention ? "⚠ " : ""}${t(area.label)} · KioskMate${host ? ` (${host})` : ""}`;
         const html = `
           <div class="layout ${state.mobileNavOpen ? "nav-open" : ""}">
+            <a class="skip-link" href="#main-content">${esc(t("skipToContent"))}</a>
             <aside class="sidebar" id="sidebar" aria-label="${esc(t("navigationMenu"))}">
               <div class="brand">
                 <div class="mark">K</div>
@@ -848,7 +945,8 @@ const NAV = [
                   <button class="icon-command" title="${esc(t("refresh"))}" aria-label="${esc(t("refresh"))}" data-busy="refresh" data-action="refresh">${icon("reload", 18)}</button>
                 </div>
               </header>
-              <section class="content">
+              <section class="content" id="main-content" tabindex="-1">
+                ${state.connectionLost ? `<div class="connection-lost" role="alert">${stateBanner("bad", t("connectionLost"), t("connectionLostHint"))}</div>` : ""}
                 ${state.status?.config?.load_warning ? stateBanner("warn", t("configurationRecovered"), state.status.config.load_warning) : ""}
                 ${area.children ? renderAreaTabs(area) : ""}
                 ${renderView()}
@@ -898,6 +996,7 @@ const NAV = [
 
       let liveSource = null;
       let liveRenderTimer = null;
+      let connectionTimer = null;
 
       // Live updates over Server-Sent Events while the Admin tab is visible.
       // The server samples nothing for the stream when no tab is connected.
@@ -905,7 +1004,24 @@ const NAV = [
         stopLiveUpdates();
         if (typeof EventSource === "undefined" || document.hidden || !state.auth?.authenticated) return;
         liveSource = new EventSource("/api/stream");
+        // EventSource reconnects by itself; a gap longer than a few seconds
+        // is shown as a banner until the next status arrives.
+        liveSource.addEventListener("error", () => {
+          if (connectionTimer || state.connectionLost) return;
+          connectionTimer = setTimeout(() => {
+            connectionTimer = null;
+            if (!liveSource || liveSource.readyState === EventSource.OPEN) return;
+            state.connectionLost = true;
+            renderApp({ background: true });
+          }, 6000);
+        });
         liveSource.addEventListener("status", (event) => {
+          clearTimeout(connectionTimer);
+          connectionTimer = null;
+          if (state.connectionLost) {
+            state.connectionLost = false;
+            toast(t("connectionBack"), "", "ok");
+          }
           try {
             applyCoreState({ status: JSON.parse(event.data) });
           } catch {
@@ -936,6 +1052,8 @@ const NAV = [
       export function stopLiveUpdates() {
         if (liveSource) liveSource.close();
         liveSource = null;
+        clearTimeout(connectionTimer);
+        connectionTimer = null;
       }
 
       function scheduleLiveRender() {
@@ -966,7 +1084,19 @@ const NAV = [
         return NAV.find(isNavActive) || NAV[0];
       }
 
+      // A bug in one view (unexpected data from an older or newer kiosk)
+      // shows an error card with the message instead of an empty page, and
+      // the rest of the Admin UI keeps working.
       function renderView() {
+        try {
+          return renderViewUnsafe();
+        } catch (error) {
+          console.warn("view render failed", error);
+          return `<section class="card view-error" role="alert"><div class="head"><div><h3>${esc(t("viewFailed"))}</h3><span class="section-kicker">${esc(t("viewFailedHint"))}</span></div><button data-view="dashboard">${esc(t("openDashboard"))}</button></div><div class="body"><pre class="logbox">${esc(String(error?.stack || error))}</pre></div></section>`;
+        }
+      }
+
+      function renderViewUnsafe() {
         switch (state.view) {
           case "program":
             return renderProgram();
