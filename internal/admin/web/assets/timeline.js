@@ -94,12 +94,17 @@ export function renderTimeline({ timeline, kiosk, pageName = (id) => id, showNow
     const wide = (run.end - run.start) / span > 0.12;
     return `<span class="tl-base ${run.kind}" data-left="${pct(run.start - from)}" data-width="${pct(run.end - run.start)}" title="${esc(label)}">${wide && !compact ? `<em>${esc(run.name)}</em>` : ""}</span>`;
   }).join("");
+  // The blocks only carry tooltips; screen readers and keyboard users get the
+  // same entries as a list (first 40, a 24 h view can hold hundreds).
+  const spoken = [];
+  for (const run of runs) spoken.push([run.start, `${clock(run.start)}–${clock(run.end)} ${run.name}`]);
   const insertBlocks = shown.map((segment) => {
     const start = new Date(segment.start).getTime();
     const end = new Date(segment.end).getTime();
     const name = segment.name || pageName(segment.page_id);
     const conditional = segment.insert_id in conditions;
     const label = `${clock(start)}–${clock(end)} ${name} (${formatDuration(Math.round((end - start) / 1000))})${conditional ? ` · ${t("insertConditionalShort")}` : ""}`;
+    spoken.push([start, `${t("insert")}: ${label}`]);
     return `<span class="tl-insert ${insertTone(segment.insert_id, inserts)}${conditional ? " conditional" : ""}${conditional && !conditions[segment.insert_id] ? " unmet" : ""}" data-left="${pct(start - from)}" data-width="${Math.max(minutes > 360 ? 0.18 : 0.5, (end - start) / span * 100).toFixed(3)}" title="${esc(label)}"></span>`;
   }).join("");
   const step = tickStep(minutes);
@@ -114,7 +119,8 @@ export function renderTimeline({ timeline, kiosk, pageName = (id) => id, showNow
   return {
     share: span ? insertTime / span : 0,
     html: `<div class="tl ${compact ? "compact" : ""}">
-      <div class="tl-track" role="img" aria-label="${esc(t("programmeTimeline"))}">${baseBlocks}${insertBlocks}${nowMarker}</div>
+      <div class="tl-track" aria-hidden="true">${baseBlocks}${insertBlocks}${nowMarker}</div>
+      <ul class="offscreen" aria-label="${esc(t("programmeTimeline"))}">${spoken.sort((a, b) => a[0] - b[0]).slice(0, 40).map(([, text]) => `<li>${esc(text)}</li>`).join("")}</ul>
       <div class="tl-ticks" aria-hidden="true">${ticks.join("")}</div>
       <div class="tl-legend">
         ${kinds.map((kind) => `<span class="legend-item base-${kind}"><i></i>${esc(t(`timelineKind_${kind}`))}</span>`).join("")}

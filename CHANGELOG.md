@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+## v1.0.0-pre.4
+
+Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry that names the page that costs the most. Configs from 1.0.0-pre.3 keep working unchanged.
+
+### Performance
+- CPU per page: the telemetry credits the browser load to the page on screen (without the first 30 seconds after loading and while the display is off) and lists the pages by cost under Device → Display → Runtime telemetry. The Browser Doctor names a page that keeps 40 % or more of the processor busy.
+- Camera page: streams are disconnected while the page is hidden (a background tab during an insert, or the display is blanked) and reconnect when it is shown again. A paused video keeps downloading and decoding; only removing the source stops it. The editor now recommends substreams.
+- The low-power profiles cap Chromium's disk cache at 64 MB (it grew to several hundred MB and was rewritten constantly on the SD card) and turn off the back-forward cache, which kept the previous page in memory after every page switch.
+- Chromium no longer runs crash upload, domain reliability beacons, hyperlink auditing pings or the phishing model download.
+- KioskMate itself runs with a soft 48 MB memory limit in the low-power profiles, so the garbage collector returns memory earlier. A `GOMEMLIMIT` in the environment wins.
+- The browser log folds identical Chromium lines into one "repeated N times" line and stays below 5 MB while the browser runs (before, it was only rotated at browser start and could grow for weeks). Fewer writes to the SD card and the journal.
+- The processor temperature sensor is looked up once instead of scanning sysfs on every sample.
+- The performance profile setting explains what the selected profile changes.
+- The overview shows "–" for the browser load while the display browser is stopped instead of "0 % · 0 MB".
+
+### Admin UI
+- A touchscreen that was detected before and is missing now is reported as an error on the device page, in the problem banner and in the Browser Doctor, with the time it was last seen. KioskMate remembers touch devices in `touch-devices.json` next to the configuration.
+- Processor: real usage from `/proc/stat` with one bar per core on the device page, so a single saturated core shows. Before, "processor usage" was the load average divided by the cores, which also counts processes waiting for the SD card. The MQTT/Home Assistant sensor "Processor Usage" now reports the real usage too.
+- Browser Doctor: technical details are a readable list ("Undervoltage since boot: yes") instead of raw JSON, and "Copy report" copies all findings (also on plain http, where the browser clipboard API is unavailable).
+- Toasts: at most three at once, the same message again raises a counter instead of stacking up, successes disappear after 4 s, errors stay 9 s. Common English messages from the kiosk (display power unsupported, wrong password, too many attempts …) are translated.
+- The last browser error shows how long ago it happened and is no longer listed once the browser has run fine for a day after it.
+- A banner says when the connection to the kiosk is lost (restart, Wi-Fi) and a toast when it is back.
+- A view that fails to render shows an error card with the message instead of an empty page.
+- Accessibility: "Skip to content" link, dialogs keep the keyboard focus inside, close on Escape and return the focus to the button that opened them; light theme text colours raised to WCAG AA contrast.
+- The browser tab title names the area and the kiosk and starts with ⚠ while the display browser is stopped.
+- The temperature tile says "No temperature sensor" instead of "-".
+- An expired session (kiosk restarted, signed out elsewhere) returns to the login with a short note instead of failing every click with "Unauthorized".
+- Dates and times follow the language chosen in the admin UI instead of the browser language.
+- The programme timeline is also available as a list for screen readers (the coloured blocks only had tooltips).
+
+### Robustness and security
+- Offline page: when a page cannot be loaded (no network, DNS, server down), the kiosk shows a dark offline page with clock, target and countdown instead of Chromium's error page, checks the target with growing pauses (5 s up to 60 s) and opens it again as soon as it answers.
+- Scheduled actions wait up to two minutes after boot for the clock to be synchronised (the Pi has no real-time clock), so a schedule does not switch the display at a wrong time right after a power cut.
+- systemd: the service reports ready and sends watchdog pings while the admin server and configuration respond; a hung KioskMate is restarted by systemd after two minutes. Existing installations get this with `install.sh update`.
+- Request size limits: login, setup and webhook triggers accept at most 64 KB, the API at most 8 MB.
+- Configuration saves also sync the directory, so a power cut right after saving cannot lose the renamed file.
+- Terminal commands from the admin UI are written to the journal with the program name, exit code and duration (not the full command line), and the real exit code is shown.
+- MQTT reconnects with growing pauses (5 s up to 2 min, with jitter) and logs repeated failures less often. TLS and connection errors (unknown certificate authority, wrong host name, expired certificate, refused, timeout, wrong credentials) are explained in German and English.
+- The Browser Doctor warns when the configured time zone does not exist (schedules would silently use the system time zone).
+- A crash in a background part (scheduler, MQTT, workflows, updater) no longer takes the whole kiosk down: the stack goes to the log and that part restarts with a growing pause (it stays stopped after five crashes).
+- The Browser Doctor warns when less than 1 GB is free on the system disk and reports an error below 200 MB, with the commands to free space.
+
+### Home Assistant
+- New sensor "Page CPU": the measured browser CPU of the page on screen, with the page and the most expensive page as attributes.
+- Sensors with a unit get a `device_class` (temperature, duration, data size, battery, illuminance), so Home Assistant converts units and keeps long-term statistics.
+
+### Raspberry Pi image
+- Based on Raspberry Pi OS Trixie (pi-gen `2026-10-06-raspios-trixie-arm64`) instead of Bookworm.
+- Fewer SD card writes: the journal stays in RAM (48 MB; `PERSISTENT_LOGS=yes` in `kioskmate.txt` keeps it on the card) and swap is compressed in RAM (zram) instead of a swap file.
+- `VIDEO_MEMORY=auto` (default): boards with 2 GB RAM or more get `dtoverlay=vc4-kms-v3d,cma-512`, so camera streams keep hardware decoding.
+- Not built on real hardware yet: please test before relying on it.
+
+### Development and documentation
+- CI: Windows job (tests, `install.ps1` syntax, start plus `/healthz`), shellcheck for all shell scripts, tests for the first-boot script, browser tests also against the minified UI, an accessibility check (button names, field labels, image alt texts) on every Admin view, a CHANGELOG check, and the translation check now also rejects hard-coded texts in the Admin UI. The release workflow checks the CHANGELOG section before building.
+- New workflows: "Image packages" checks the pinned pi-gen tag and every image package against the Trixie archives (weekly and on image changes), "Security" runs govulncheck (weekly and on dependency changes). Dependabot keeps Go modules, actions and the test tooling current.
+- New documentation: [HARDWARE](docs/HARDWARE.md), [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [MQTT](docs/MQTT.md), [API](docs/API.md), [CONTRIBUTING](CONTRIBUTING.md), [RELEASE](docs/RELEASE.md); README brought up to date.
+
 ## v1.0.0-pre.3
 
 Third pre-release: inserts switch without blanking the display, no more white flashes, and telemetry that shows where the CPU goes. Configs from 1.0.0-pre.2 keep working unchanged.

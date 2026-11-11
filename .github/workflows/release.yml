@@ -26,6 +26,10 @@ jobs:
         with:
           node-version: 22
 
+      - name: Changelog section
+        # Fail before building: without the section the release cannot be published.
+        run: bash scripts/check-changelog.sh "$GITHUB_REF_NAME"
+
       - name: Verify release
         run: |
           test -z "$(gofmt -l .)"

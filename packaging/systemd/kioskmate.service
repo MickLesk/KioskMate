@@ -6,6 +6,11 @@ StartLimitIntervalSec=5min
 StartLimitBurst=5
 
 [Service]
+# KioskMate reports READY once the Admin UI listens and pings the watchdog
+# while it is responsive; a hung process is restarted.
+Type=notify
+NotifyAccess=main
+WatchdogSec=2min
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=%t
 ExecStart=/usr/bin/kioskmate

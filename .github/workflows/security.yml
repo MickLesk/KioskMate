@@ -1,0 +1,36 @@
+name: Security
+
+# govulncheck reports known vulnerabilities in the Go standard library and
+# modules that KioskMate actually calls. Weekly, and when dependencies change.
+on:
+  push:
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - ".go-version"
+  pull_request:
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - ".go-version"
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+          GOOS=windows "$(go env GOPATH)/bin/govulncheck" ./...

@@ -115,6 +115,11 @@ export default async function templates({ browser, base, ok, errors, out, api, f
   await open("cam", "camera");
   ok("camera: two cells", await view.locator(".cell").count() === 2 && await view.locator("main.n2").count() === 1);
   ok("camera: snapshot loads", await view.locator(".cell img").first().evaluate((img) => img.complete && img.naturalWidth === 320));
+  const hiddenState = await view.evaluate(() => {
+    const set = (hidden) => { Object.defineProperty(document, "hidden", { value: hidden, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); return document.body.dataset.streams; };
+    return [set(true), set(false)].join(",");
+  });
+  ok("camera: streams stop while hidden and resume", hiddenState === "off,on", hiddenState);
 
   await open(immich.page_id, "immich");
   const photo = view.locator("img.shown");

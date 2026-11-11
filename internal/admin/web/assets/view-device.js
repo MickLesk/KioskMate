@@ -1,7 +1,7 @@
 // Device health: one readable checklist (power, touch, browser, network,
 // memory) with a fix for every warning, above the hardware controls.
 import { doctorMessage, loadBrowserDoctor } from "./actions-core.js";
-import { esc, formatValue, getJSON, formatMQTTState, renderApp, runAction, state, t } from "./app-core.js";
+import { esc, formatValue, getJSON, formatMQTTState, relativeTime, renderApp, runAction, state, t } from "./app-core.js";
 import { cpuCoresUsed, cpuShare, cpuShareValue, humanizeMessage, processSplit } from "./renderers.js";
 import { renderHardware } from "./view-system.js";
 
@@ -21,14 +21,16 @@ export function healthChecks() {
     else if (power.undervoltage_since_boot) checks.push(check("warn", t("checkPower"), t("undervoltageSinceBoot"), t("undervoltageHint"), power.throttled || ""));
     else checks.push(check("ok", t("checkPower"), t("powerOk")));
   }
-  if (Array.isArray(system.touch_devices)) {
+  if (Array.isArray(system.touch_devices_missing) && system.touch_devices_missing.length) {
+    checks.push(check("bad", t("touchInput"), t("touchDeviceMissing").replace("{name}", system.touch_devices_missing.join(", ")).replace("{when}", relativeTime(system.touch_last_seen)), t("touchDeviceMissingHint"), t("none")));
+  } else if (Array.isArray(system.touch_devices)) {
     checks.push(system.touch_devices.length
       ? check("ok", t("touchInput"), system.touch_devices.join(", "))
       : check("warn", t("touchInput"), t("noTouchDevice"), t("noTouchDeviceHint"), t("none")));
   }
   if (state.status?.browser) {
     const share = cpuShareValue(browser.stats?.cpu_percent);
-    const detail = browser.ready ? t("checkBrowserReady").replace("{page}", browser.page_name || "-") : browser.running ? t("displayConnecting") : (humanizeMessage(browser.last_error) || t("displayStoppedHint"));
+    const detail = browser.ready ? t("checkBrowserReady").replace("{page}", browser.page_name || "-") : browser.running ? t("displayConnecting") : (browser.last_error ? `${humanizeMessage(browser.last_error)}${relativeTime(browser.last_exit_details?.at) ? ` (${relativeTime(browser.last_exit_details?.at)})` : ""}` : t("displayStoppedHint"));
     const split = processSplit(browser.stats?.groups);
     const fix = [Number(share || 0) > 75 ? t("checkBrowserLoadHint") : "", split].filter(Boolean).join(" ");
     checks.push(check(browser.ready ? (Number(share || 0) > 75 ? "warn" : "ok") : browser.running ? "warn" : "bad", t("checkBrowser"), detail, fix, browser.running ? `${cpuShare(browser.stats?.cpu_percent)} · ${cpuCoresUsed(browser.stats?.cpu_percent)}` : ""));
@@ -37,7 +39,7 @@ export function healthChecks() {
   const recovery = browser.recovery || {};
   if (recovery.state && !["healthy", "idle"].includes(recovery.state)) checks.push(check(recovery.state === "failed" ? "bad" : "warn", t("recoveryState"), humanizeMessage(recovery.last_result || recovery.reason || recovery.state)));
   if (state.config?.mqtt?.enabled) {
-    checks.push(mqtt.connected ? check("ok", "MQTT", formatMQTTState(mqtt.state)) : check("bad", "MQTT", mqtt.last_error || formatMQTTState(mqtt.state), t("checkMQTTHint")));
+    checks.push(mqtt.connected ? check("ok", "MQTT", formatMQTTState(mqtt.state)) : check("bad", "MQTT", humanizeMessage(mqtt.last_error) || formatMQTTState(mqtt.state), t("checkMQTTHint")));
   }
   const memory = system.memory_usage_percent == null ? NaN : Number(system.memory_usage_percent);
   const temperature = system.processor_temperature_c == null ? NaN : Number(system.processor_temperature_c);

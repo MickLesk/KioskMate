@@ -1600,3 +1600,20 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 }
+
+.toast-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel-raised);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.offscreen {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  opacity: 0;
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -408,6 +409,20 @@ func sleepContext(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
+// reconnectDelay grows from 5 s to at most 2 minutes with ±20 % jitter, so
+// a broker that is down (Home Assistant restart) is not hammered and several
+// kiosks do not reconnect in lockstep. jitter is a number in [0, 1).
+func reconnectDelay(failures int, jitter float64) time.Duration {
+	delay := 5 * time.Second
+	for i := 1; i < failures && delay < 2*time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > 2*time.Minute {
+		delay = 2 * time.Minute
+	}
+	return time.Duration(float64(delay) * (0.8 + 0.4*jitter))
+}
+
 func mqttInterval(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return 30 * time.Second
@@ -586,7 +601,9 @@ func (s *MQTTService) commands(ctx context.Context) {
 	if rules := s.workflowRules(); rules != nil {
 		topics = append(topics, rules.Topics()...)
 	}
+	failures := 0
 	for {
+		subscribed := time.Now()
 		err := client.Subscribe(topics, func(topic string, payload []byte) {
 			s.handleCommand(ctx, topic, strings.TrimSpace(string(payload)))
 		})
@@ -594,8 +611,17 @@ func (s *MQTTService) commands(ctx context.Context) {
 			_ = client.Close()
 			return
 		}
-		s.logger.Warn("mqtt command subscription failed", "error", err)
-		if !sleepContext(ctx, 5*time.Second) {
+		// A subscription that held for a while was a working connection;
+		// start the backoff from the beginning.
+		if time.Since(subscribed) > time.Minute {
+			failures = 0
+		}
+		failures++
+		delay := reconnectDelay(failures, rand.Float64())
+		if failures <= 3 || failures%10 == 0 {
+			s.logger.Warn("mqtt command subscription failed", "error", err, "attempt", failures, "retry_in", delay.Round(time.Second).String())
+		}
+		if !sleepContext(ctx, delay) {
 			_ = client.Close()
 			return
 		}
@@ -1012,6 +1038,7 @@ func (s *MQTTService) publishAll() error {
 	}
 	_ = s.publishState(client, "rss", fmt.Sprintf("%d", status.Stats.RSSMB), false)
 	_ = s.publishState(client, "cpu", fmt.Sprintf("%.1f", status.Stats.CPUPercent), false)
+	s.publishPageCPU(client, cfg.Kiosk.EnabledPageID(status.Active))
 	_ = s.publishState(client, "version", s.version, true)
 	updateStatus := updater.ReleaseInfo{CurrentVersion: s.version, LatestVersion: s.version}
 	updateHistory := updater.HistoryInfo{}
@@ -1421,6 +1448,19 @@ func (s *MQTTService) publishDiscovery(client *mqttclient.Client, status hardwar
 				"unit_of_measurement": "%",
 				"state_class":         "measurement",
 				"device":              device,
+			},
+		},
+		{
+			Topic: s.discoveryTopic("sensor", "page_cpu"),
+			Data: map[string]any{
+				"name":                  "Page CPU",
+				"unique_id":             s.cfg.Snapshot().MQTT.Node + "_page_cpu",
+				"state_topic":           s.root() + "/page_cpu/state",
+				"json_attributes_topic": s.root() + "/page_cpu/attributes",
+				"unit_of_measurement":   "%",
+				"state_class":           "measurement",
+				"icon":                  "mdi:cpu-64-bit",
+				"device":                device,
 			},
 		},
 		s.diagnosticSensor(device, "browser_pid", "Browser PID", "mdi:identifier", ""),
@@ -1997,8 +2037,69 @@ func (s *MQTTService) sensor(device map[string]any, id string, name string, icon
 	if unit != "" {
 		data["unit_of_measurement"] = unit
 		data["state_class"] = "measurement"
+		if class := sensorDeviceClass(id, unit); class != "" {
+			data["device_class"] = class
+		}
 	}
 	return discoveryItem{Topic: s.discoveryTopic("sensor", id), Data: data}
+}
+
+// sensorDeviceClass gives Home Assistant the unit semantics, so it converts
+// units, picks the right icon and keeps long-term statistics.
+func sensorDeviceClass(id, unit string) string {
+	switch {
+	case unit == "°C":
+		return "temperature"
+	case unit == "lx":
+		return "illuminance"
+	case id == "battery_level" && unit == "%":
+		return "battery"
+	case unit == "min" || unit == "s":
+		return "duration"
+	case unit == "GiB" || unit == "MB" || unit == "GB":
+		return "data_size"
+	}
+	return ""
+}
+
+// pageTelemetrySource is implemented by the supervisor browser.
+type pageTelemetrySource interface {
+	PageTelemetrySummaries() []supervisor.PageSummary
+}
+
+// publishPageCPU reports the measured browser CPU of the page on screen (the
+// same numbers as Device → Display → Runtime telemetry), with the most
+// expensive page as attribute. Nothing is published until the page has samples.
+func (s *MQTTService) publishPageCPU(client *mqttclient.Client, pageID string) {
+	source, ok := s.browser.(pageTelemetrySource)
+	if !ok || pageID == "" {
+		return
+	}
+	state, attributes, ok := pageCPUState(source.PageTelemetrySummaries(), pageID)
+	if !ok {
+		return
+	}
+	payload, _ := json.Marshal(attributes)
+	_ = client.Publish(s.root()+"/page_cpu/attributes", payload, false)
+	_ = s.publishState(client, "page_cpu", state, false)
+}
+
+func pageCPUState(pages []supervisor.PageSummary, pageID string) (string, map[string]any, bool) {
+	for _, page := range pages {
+		if page.PageID != pageID {
+			continue
+		}
+		attributes := map[string]any{
+			"page_id": page.PageID, "page": page.Name, "samples": page.Samples,
+			"browser_cpu_average": page.CPUAverage, "rss_average_mb": page.RSSAverageMB,
+		}
+		if len(pages) > 0 {
+			attributes["most_expensive_page"] = pages[0].Name
+			attributes["most_expensive_cpu"] = pages[0].PagesCPUAverage
+		}
+		return trimFloat(page.PagesCPUAverage), attributes, true
+	}
+	return "", nil, false
 }
 
 func (s *MQTTService) diagnosticSensor(device map[string]any, id string, name string, icon string, unit string) discoveryItem {
@@ -2198,6 +2299,7 @@ func (s *MQTTService) discoveryResetEntries() [][2]string {
 		[2]string{"number", "scheduler_tick"},
 		[2]string{"sensor", "rss"},
 		[2]string{"sensor", "cpu"},
+		[2]string{"sensor", "page_cpu"},
 		[2]string{"sensor", "browser_pid"},
 		[2]string{"sensor", "browser_state"},
 		[2]string{"sensor", "browser_generation"},

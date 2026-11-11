@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -107,6 +106,9 @@ type Browser struct {
 	recovery           RecoveryStatus
 	telemetry          []TelemetrySample
 	telemetryVersions  []VersionTelemetry
+	pageTelemetry      map[string]*PageTelemetry
+	pageShownID        string
+	pageShownAt        time.Time
 	telemetryPersisted time.Time
 	version            string
 	coreStat           system.ProcessTreeStats
@@ -347,12 +349,10 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	cmd := exec.Command(command, args...)
 	logFile := b.openBrowserLog()
 	if logFile != nil {
-		writer := io.MultiWriter(os.Stdout, logFile)
-		cmd.Stdout, cmd.Stderr = writer, writer
 		writeBrowserLaunchLog(logFile, command, args)
-	} else {
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	}
+	filter := newLogFilter(os.Stdout, logFile)
+	cmd.Stdout, cmd.Stderr = filter, filter
 	cmd.SysProcAttr = processGroupAttr()
 	if err = cmd.Start(); err != nil {
 		if logFile != nil {
@@ -389,7 +389,7 @@ func (b *Browser) start(ctx context.Context) (err error) {
 	b.mu.Unlock()
 	b.logger.Info("browser started", "pid", cmd.Process.Pid, "command", command)
 	go b.persistRuntimeState()
-	go b.wait(cmd, logFile)
+	go b.wait(cmd, logFile, filter)
 	go b.watch(cmd.Process.Pid, done)
 	if supportsCDP(preset) {
 		go b.monitorDevTools(profile, cfg.Kiosk.Theme, done)
@@ -717,6 +717,12 @@ func (b *Browser) Status() Status {
 }
 
 func (b *Browser) RunScheduler(ctx context.Context) {
+	if b.cfg.Snapshot().Kiosk.Scheduler.Enabled {
+		started := time.Now()
+		if waitForTimeSync(ctx, timeSyncWait, timeSyncPoll) && b.logger != nil {
+			b.logger.Info("schedule waited for the clock to synchronize", "waited", time.Since(started).Round(time.Second).String())
+		}
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	changes := b.cfg.Changes()
@@ -1006,11 +1012,14 @@ func (b *Browser) schedulerInterval() time.Duration {
 	return tick
 }
 
-func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File) {
+func (b *Browser) wait(cmd *exec.Cmd, logFile *os.File, filter *logFilter) {
 	if logFile != nil {
 		defer logFile.Close()
 	}
 	err := cmd.Wait()
+	if filter != nil {
+		filter.Flush()
+	}
 	b.mu.Lock()
 	expected := b.stopping
 	stopReason := b.stopReason
@@ -1213,6 +1222,7 @@ func (b *Browser) watch(pid int, done <-chan struct{}) {
 			b.mu.Lock()
 			b.lastStat = stats
 			b.noteMemoryLocked(time.Now(), stats.RSSMB)
+			b.notePageSampleLocked(time.Now(), b.cfg.Snapshot().Kiosk, stats)
 			if !b.started.IsZero() && time.Since(b.started) >= stableRuntime && b.recovery.Attempts > 0 {
 				b.recovery.Attempts = 0
 				b.recovery.BackoffUntil = nil
@@ -1733,6 +1743,12 @@ func chromiumArgs(cfg *config.Config, page int) []string {
 		"--autoplay-policy=user-gesture-required",
 		"--disable-background-networking",
 		"--disable-component-update",
+		// No crash uploads, reliability beacons, hyperlink auditing pings or
+		// phishing model downloads: background work a kiosk never needs.
+		"--disable-breakpad",
+		"--disable-domain-reliability",
+		"--no-pings",
+		"--disable-client-side-phishing-detection",
 		"--disable-features=TranslateUI,MediaRouter,OptimizationHints,LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,InfiniteSessionRestore",
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
@@ -1909,15 +1925,7 @@ func (b *Browser) loadAuthGuard() {
 func performanceArgs(profile string) []string {
 	switch strings.TrimSpace(strings.ToLower(profile)) {
 	case "minimal", "conservative":
-		return []string{
-			"--disable-extensions",
-			"--disable-sync",
-			"--disable-print-preview",
-			"--disable-speech-api",
-			"--disable-notifications",
-			"--renderer-process-limit=1",
-			"--process-per-site",
-		}
+		return raspberryLowPowerArgs()
 	case "raspberry", "low-power":
 		return raspberryLowPowerArgs()
 	case "quality":
@@ -1931,6 +1939,11 @@ func performanceArgs(profile string) []string {
 	}
 }
 
+// lowPowerDiskCacheBytes caps Chromium's HTTP cache. The default grows to
+// several hundred MB and is rewritten constantly by dashboards and camera
+// snapshots, which wears the SD card for little gain on a LAN.
+const lowPowerDiskCacheBytes = 64 << 20
+
 func raspberryLowPowerArgs() []string {
 	return []string{
 		"--disable-extensions",
@@ -1940,6 +1953,10 @@ func raspberryLowPowerArgs() []string {
 		"--disable-notifications",
 		"--renderer-process-limit=1",
 		"--process-per-site",
+		fmt.Sprintf("--disk-cache-size=%d", lowPowerDiskCacheBytes),
+		// The back-forward cache keeps the previous page alive in memory
+		// after every page switch in navigate mode; a kiosk never goes back.
+		"--disable-features=BackForwardCache",
 	}
 }
 

@@ -79,6 +79,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer instanceLock.Close()
+	if limit := applyMemoryLimit(cfg.Snapshot().Performance.Profile); limit > 0 {
+		logger.Info("soft memory limit for the low-power profile", "mb", limit>>20)
+	}
 	eventJournal, journalErr := events.Open(config.EventJournalPath(cfg.Path), 500)
 	if journalErr != nil {
 		logger.Warn("event journal unavailable", "error", journalErr)
@@ -99,6 +102,7 @@ func main() {
 	updateService := updater.New(cfg, version, actionService)
 	updateService.SetEventJournal(eventJournal)
 	hardwareService := hardware.New()
+	hardwareService.SetStateDir(config.ConfigDir(cfg.Path))
 	browser.SetDisplayPower(hardwareService)
 	mqttService := integration.NewMQTTService(cfg, browser, hardwareService, updateService, actionService, version, logger.With("component", "mqtt"), eventJournal)
 	server := admin.NewServer(cfg, browser, mqttService, updateService, actionService, hardwareService, version, logger.With("component", "admin"), eventJournal)
@@ -118,21 +122,27 @@ func main() {
 		case <-ctx.Done():
 			return
 		}
+		sdNotify("READY=1")
+		go runWatchdog(ctx, watchdogInterval(), func() bool {
+			_ = cfg.Snapshot()
+			_ = browser.Status()
+			return true
+		})
 		startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := browser.Start(startCtx); err != nil {
 			logger.Warn("initial browser start failed", "error", err)
 		}
 	}()
-	go browser.RunScheduler(ctx)
-	go mqttService.Run(ctx)
+	go supervise(ctx, logger, "scheduler", browser.RunScheduler)
+	go supervise(ctx, logger, "mqtt", mqttService.Run)
 	browser.SetActivityHandler(func() { workflowEngine.HandleActivity(ctx) })
 	browser.SetRebootHandler(func(ctx context.Context) error {
 		_, err := actionService.Start(ctx, "reboot")
 		return err
 	})
-	go workflowEngine.Run(ctx)
-	go updateService.Run(ctx)
+	go supervise(ctx, logger, "workflow", workflowEngine.Run)
+	go supervise(ctx, logger, "updater", updateService.Run)
 
 	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
 	logger.Info("log file", "path", logFile)

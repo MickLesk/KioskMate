@@ -38,7 +38,7 @@ func refreshFastSystem(system map[string]any) map[string]any {
 	}
 	next["uptime_minutes"] = uptimeMinutes()
 	next["memory_usage_percent"] = memoryUsagePercent()
-	next["processor_usage_percent"] = processorUsagePercent()
+	next["processor_usage_percent"], next["processor_cores_percent"] = processorUsage()
 	next["load_average"] = loadAverage()
 	next["processor_temperature_c"] = processorTemperature()
 	next["battery_level"] = batteryLevel()
@@ -97,7 +97,7 @@ func throttledFlags(ctx context.Context) string {
 func collectStatus(ctx context.Context) Status {
 	ensureDisplayEnv()
 	support := detectSupport(ctx)
-	return Status{
+	status := Status{
 		Support: support,
 		Session: map[string]string{
 			"user":    userName(),
@@ -119,7 +119,6 @@ func collectStatus(ctx context.Context) Status {
 			"uptime_minutes":          uptimeMinutes(),
 			"memory_size_gib":         memorySizeGiB(),
 			"memory_usage_percent":    memoryUsagePercent(),
-			"processor_usage_percent": processorUsagePercent(),
 			"processor_count":         runtime.NumCPU(),
 			"load_average":            loadAverage(),
 			"processor_temperature_c": processorTemperature(),
@@ -144,6 +143,8 @@ func collectStatus(ctx context.Context) Status {
 			"source":     runText(ctx, "pactl", "get-default-source"),
 		},
 	}
+	status.System["processor_usage_percent"], status.System["processor_cores_percent"] = processorUsage()
+	return status
 }
 
 func (s *Service) SetDisplay(ctx context.Context, power string) error {
@@ -546,12 +547,15 @@ func memoryUsagePercent() any {
 // processorUsagePercent is the one-minute load average per core. It exceeds
 // 100 % when processes wait, including on swap I/O, so the Admin UI shows the
 // load average next to the core count instead.
-func processorUsagePercent() any {
-	load, ok := loadAverage().(float64)
-	if !ok {
-		return nil
+// processorUsage returns the busy share of all cores and of each core since
+// the previous call (nil on the first call).
+func processorUsage() (any, any) {
+	file, err := os.Open("/proc/stat")
+	if err != nil {
+		return nil, nil
 	}
-	return load / float64(runtime.NumCPU()) * 100
+	defer file.Close()
+	return readCPUUsage(file)
 }
 
 func loadAverage() any {

@@ -77,6 +77,9 @@ After=graphical-session.target
 Wants=network-online.target
 
 [Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=2min
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=%t
 ExecStart=/usr/bin/kioskmate

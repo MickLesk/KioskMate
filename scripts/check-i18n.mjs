@@ -40,6 +40,21 @@ for (const language of languages) {
   }
 }
 
+// Hard-coded UI text: element text or title/aria-label/placeholder written as
+// a literal instead of ${t("key")}. Brand names are allowed.
+const allowedLiterals = new Set(["KioskMate", "KioskMate Admin", "JavaScript", "MQTT", "JSON", "URL", "OK"]);
+for (const name of fs.readdirSync(assetsDir).filter((file) => file.endsWith(".js")).sort()) {
+  const source = fs.readFileSync(`${assetsDir}/${name}`, "utf8");
+  const patterns = [/>\s*([A-Za-zÄÖÜäöü][A-Za-zÄÖÜäöüß]{2,}(?: [A-Za-zÄÖÜäöüß.]+)*)\s*</g, /\b(?:title|aria-label|placeholder)="([A-Za-zÄÖÜäöü][^"$]{2,})"/g];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      if (allowedLiterals.has(match[1].trim()) || match[1].includes("://")) continue;
+      const line = source.slice(0, match.index).split("\n").length;
+      failures.push(`${name}:${line}: hard-coded text "${match[1].trim()}"; use t("key")`);
+    }
+  }
+}
+
 if (failures.length) {
   console.error(failures.join("\n"));
   process.exit(1);

@@ -39,6 +39,13 @@ jobs:
           for file in internal/admin/webmin/web/assets/*.js; do node --check "$file"; done
           go vet -tags minified ./internal/admin
           go test -tags minified -run 'TestAsset|TestIndex' ./internal/admin
+      - name: Shell scripts
+        run: |
+          # shellcheck is preinstalled on the GitHub Ubuntu runners.
+          git ls-files '*.sh' | xargs shellcheck -S warning
+          bash tests/image/firstboot-test.sh
+      - name: Changelog
+        run: bash scripts/check-changelog.sh
       - name: Build Linux binaries
         run: |
           GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/kioskmate-linux-arm64 ./cmd/kioskmate
@@ -72,9 +79,54 @@ jobs:
         run: go build -o /tmp/kioskmate ./cmd/kioskmate
       - name: Admin UI browser tests
         run: node tests/e2e/run.mjs /tmp/kioskmate /tmp/e2e-shots
+      - name: Admin UI browser tests (minified, as released)
+        run: |
+          go run ./tools/minify
+          go build -tags minified -o /tmp/kioskmate-min ./cmd/kioskmate
+          node tests/e2e/run.mjs /tmp/kioskmate-min /tmp/e2e-shots-min
       - name: Upload screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-screenshots
-          path: /tmp/e2e-shots
+          path: |
+            /tmp/e2e-shots
+            /tmp/e2e-shots-min
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+      - name: Tests
+        run: go test ./...
+      - name: install.ps1 syntax
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\packaging\windows\install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+      - name: Start and health check
+        shell: pwsh
+        run: |
+          go build -o "$env:RUNNER_TEMP\kioskmate.exe" ./cmd/kioskmate
+          $dir = Join-Path $env:RUNNER_TEMP "kioskmate-smoke"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $cfg = Get-Content tests/e2e/fixture/config.json -Raw | ConvertFrom-Json
+          $cfg.admin.bind = "127.0.0.1"
+          $cfg.admin.port = 33480
+          $cfg.kiosk | Add-Member -Force -NotePropertyName browser_command -NotePropertyValue "$env:SystemRoot\System32\whoami.exe"
+          $cfg.kiosk | Add-Member -Force -NotePropertyName user_data_dir -NotePropertyValue (Join-Path $dir "profile")
+          $cfg | ConvertTo-Json -Depth 32 | Set-Content (Join-Path $dir "config.json")
+          $proc = Start-Process -FilePath "$env:RUNNER_TEMP\kioskmate.exe" -ArgumentList "-config", (Join-Path $dir "config.json") -PassThru -RedirectStandardOutput (Join-Path $dir "out.log") -RedirectStandardError (Join-Path $dir "err.log")
+          $ok = $false
+          for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try { $health = Invoke-RestMethod http://127.0.0.1:33480/healthz; $ok = $health.status -eq "ok" } catch { }
+          }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { Get-Content (Join-Path $dir "out.log"), (Join-Path $dir "err.log") -ErrorAction SilentlyContinue; exit 1 }
+          Write-Output "healthz ok: version $($health.version)"

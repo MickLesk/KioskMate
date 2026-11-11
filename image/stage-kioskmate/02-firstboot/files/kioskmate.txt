@@ -32,6 +32,15 @@ ADMIN_PASSWORD=
 # http://homeassistant.local:8123/lovelace/0
 START_URL=
 
+# auto: on boards with 2 GB RAM or more, raise the memory for the hardware
+# video decoder (dtoverlay=vc4-kms-v3d,cma-512) so camera streams do not fall
+# back to software decoding. no: leave config.txt alone.
+VIDEO_MEMORY=auto
+
+# The image keeps the system journal in RAM to spare the SD card; logs are
+# lost on reboot. yes: keep logs on the card (useful when chasing problems).
+PERSISTENT_LOGS=no
+
 # yes: after applying everything above, turn on the Raspberry Pi OS overlay
 # file system and reboot. The SD card is then no longer written, but changes
 # made in the Admin UI are lost on every reboot until the overlay is turned

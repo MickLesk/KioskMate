@@ -1,5 +1,5 @@
 import { formatSchedulerReason } from "./actions-core.js";
-import { checked, esc, field, formatDate, formatDuration, formatValue, secondsToDuration, selectHtml, state, t, val } from "./app-core.js";
+import { checked, esc, field, setMessageFilter, formatDate, formatDuration, formatValue, secondsToDuration, selectHtml, state, t, val } from "./app-core.js";
 import { KioskMateUI } from "./ui-components.js";
 
 function renderPages(pages) {
@@ -63,7 +63,7 @@ function renderPages(pages) {
           <div class="grid">
             <strong>${esc(t("recentActions"))}</strong>
             <div class="workflow-line">
-			  ${entries.map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}" title="${esc(item.detail)}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString())}</span>`).join("")}
+			  ${entries.map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}" title="${esc(item.detail)}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString(state.lang || undefined))}</span>`).join("")}
             </div>
           </div>`;
       }
@@ -452,6 +452,12 @@ function renderPages(pages) {
             return Number(value) < 1440 ? `${formatValue(Number(value) / 60)} h` : `${formatValue(Number(value) / 1440)} ${t("days")}`;
           case "memory_size_gib":
             return formatValue(value, " GiB");
+          case "processor_cores_percent":
+            return Array.isArray(value) && value.length ? value.map((item) => formatValue(item, " %")).join(" · ") : "-";
+          case "touch_devices_missing":
+            return Array.isArray(value) ? value.join(", ") : "-";
+          case "touch_last_seen":
+            return value ? new Date(value).toLocaleString(state.lang || undefined) : "-";
           case "memory_usage_percent":
           case "processor_usage_percent":
           case "battery_level":
@@ -500,7 +506,8 @@ function renderPages(pages) {
 		  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 		};
 		const versions = history?.versions || [];
-		if (!samples.length && !versions.length) return "";
+		const pages = history?.pages || [];
+		if (!samples.length && !versions.length && !pages.length) return "";
 		const tiles = samples.length ? `<div class="telemetry-panel">
 		  ${statusTile(t("averagePagesCpu"), cpuShare(average("pages_cpu")), Number(cpuShareValue(average("pages_cpu")) || 0) >= 40 ? "warn" : "", t("averagePagesCpuHint"))}
 		  ${statusTile(t("averageCoreMemory"), formatValue(average("core_mb"), " MB"), "", `${cpuShare(average("core_cpu"))} CPU`)}
@@ -516,12 +523,32 @@ function renderPages(pages) {
 		  item.memory_average ? formatValue(item.memory_average, " %") : "-",
 		]);
 		const comparison = versions.length ? `<div class="body"><h4>${esc(t("versionComparison"))}</h4><p class="hint">${esc(t("versionComparisonHint"))}</p>${table([t("versionColumn"), t("periodColumn"), t("browserCpuColumn"), t("pagesCpuColumn"), t("browserMemoryColumn"), t("systemMemoryColumn")], rows)}</div>` : "";
-		return `<div class="telemetry-split">${tiles ? `<div class="body"><h4>${esc(t("telemetrySplit"))}</h4>${tiles}</div>` : ""}${comparison}</div>`;
+		return `<div class="telemetry-split">${tiles ? `<div class="body"><h4>${esc(t("telemetrySplit"))}</h4>${tiles}</div>` : ""}${renderPageCpu(pages)}${comparison}</div>`;
+	  }
+
+	  // CPU per page: which page costs the most while it is on screen.
+	  export function renderPageCpu(pages) {
+		if (!pages?.length) return "";
+		const seconds = Number(state.config?.watchdog?.check_interval || 15e9) / 1e9 || 15;
+		const max = Math.max(1, ...pages.map((item) => Number(item.pages_cpu_average || 0)));
+		const rows = pages.map((item) => {
+		  const share = Number(cpuShareValue(item.pages_cpu_average) || 0);
+		  const width = Math.max(2, Math.round(Number(item.pages_cpu_average || 0) / max * 100));
+		  return `<tr class="${share >= 40 ? "warn" : ""}"><td>${esc(item.name || item.page_id)}</td><td><span class="page-cpu-bar" aria-hidden="true"><i data-width="${width}"></i></span> ${esc(cpuShare(item.pages_cpu_average))}${share >= 40 ? ` <span class="tag warn">${esc(t("pageCpuHigh"))}</span>` : ""}</td><td>${esc(cpuShare(item.cpu_average))}</td><td>${esc(formatValue(item.rss_average_mb, " MB"))}</td><td>${esc(measuredFor(item.samples * seconds))}</td></tr>`;
+		}).join("");
+		return `<div class="body page-cpu"><h4>${esc(t("pageCpuTitle"))}</h4><p class="hint">${esc(t("pageCpuHint"))}</p><div class="table-wrap"><table><thead><tr><th>${esc(t("pageColumn"))}</th><th>${esc(t("pagesCpuColumn"))}</th><th>${esc(t("browserCpuColumn"))}</th><th>${esc(t("browserMemoryColumn"))}</th><th>${esc(t("measuredColumn"))}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+	  }
+
+	  function measuredFor(seconds) {
+		const minutes = Math.round(seconds / 60);
+		if (minutes < 60) return `${minutes} min`;
+		const hours = minutes / 60;
+		return hours < 48 ? `${formatValue(Math.round(hours * 10) / 10)} h` : `${Math.round(hours / 24)} ${t("daysShort")}`;
 	  }
 
 	  function shortDay(value) {
 		const date = new Date(value);
-		return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(undefined, { day: "numeric", month: "numeric" });
+		return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(state.lang || undefined, { day: "numeric", month: "numeric" });
 	  }
 
       export function stateBanner(tone, title, message, action = "") {
@@ -612,7 +639,40 @@ function renderPages(pages) {
         [/^rss (\d+)MB > (\d+)MB$/, "msgMemoryLimit"],
         [/^cpu ([\d.]+)% > ([\d.]+)%$/, "msgCPULimit"],
         [/Missing X server/i, "msgMissingXServer"],
+        [/^display power control unsupported: install wlopm/, "msgDisplayPowerWlopm"],
+        [/^display power control unsupported$/, "msgDisplayPowerUnsupported"],
+        [/^brightness control unsupported$/, "msgBrightnessUnsupported"],
+        [/^too many attempts$/, "msgTooManyAttempts"],
+        [/^invalid credentials$/, "msgInvalidCredentials"],
+        [/^invalid current password$/, "msgInvalidCurrentPassword"],
+        [/^password required$/, "msgPasswordRequired"],
+        [/^page index out of range$/, "msgPageIndexOutOfRange"],
+        [/^mqtt service unavailable$/, "msgMQTTUnavailable"],
+        [/^the running Chromium session is not connected to DevTools$/, "msgNoDevTools"],
+        [/^only http and https URLs can be (checked|rendered)$/, "msgOnlyHTTP"],
+        [/^request body too large/, "msgBodyTooLarge"],
+        [/^Failed to fetch$|^NetworkError|^Load failed$/, "msgNetwork"],
+        [/x509: certificate signed by unknown authority/, "msgTLSUnknownCA"],
+        [/x509: certificate is valid for/, "msgTLSWrongName"],
+        [/x509: certificate has expired/, "msgTLSExpired"],
+        [/tls: first record does not look like a TLS handshake/, "msgTLSPlainServer"],
+        [/connect: connection refused/, "msgConnectionRefused"],
+        [/no such host/, "msgNoSuchHost"],
+        [/i\/o timeout|context deadline exceeded/, "msgTimeout"],
+        [/not authori[sz]ed|bad user ?name or password/i, "msgBrokerAuth"],
       ];
+
+      // Workflow and job results list failures as "2 display: <message>";
+      // each part is translated on its own.
+      export function humanizeMessages(message) {
+        const text = String(message || "");
+        const parts = text.split(/;\s+/);
+        return parts.map((part) => {
+          const match = /^(\d+) ([a-z_]+): (.+)$/.exec(part);
+          return match ? `${match[1]} ${match[2]}: ${humanizeMessage(match[3])}` : humanizeMessage(part);
+        }).join("; ");
+      }
+      setMessageFilter(humanizeMessages);
 
       export function humanizeMessage(message) {
         const text = String(message || "").trim();

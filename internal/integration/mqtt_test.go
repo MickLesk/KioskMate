@@ -483,3 +483,51 @@ func mqttTestConfig(t *testing.T) *config.Config {
 		MQTT:        config.MQTTConfig{Node: "kioskmate_test", Discovery: "homeassistant", Version: "3.1.1"},
 	}
 }
+
+func TestReconnectDelayBacksOff(t *testing.T) {
+	if got := reconnectDelay(1, 0.5); got != 5*time.Second {
+		t.Fatalf("first delay = %v", got)
+	}
+	if got := reconnectDelay(3, 0.5); got != 20*time.Second {
+		t.Fatalf("third delay = %v", got)
+	}
+	if got := reconnectDelay(50, 0.5); got != 2*time.Minute {
+		t.Fatalf("capped delay = %v", got)
+	}
+	if low, high := reconnectDelay(2, 0), reconnectDelay(2, 0.999); low != 8*time.Second || high <= 11*time.Second {
+		t.Fatalf("jitter range %v..%v", low, high)
+	}
+}
+
+func TestPageCPUState(t *testing.T) {
+	pages := []supervisor.PageSummary{
+		{PageID: "cams", Name: "Kameras", Samples: 90, PagesCPUAverage: 180.5},
+		{PageID: "ha", Name: "Home Assistant", Samples: 400, PagesCPUAverage: 22.4},
+	}
+	state, attributes, ok := pageCPUState(pages, "ha")
+	if !ok || state != "22.4" {
+		t.Fatalf("state = %q ok=%v", state, ok)
+	}
+	if attributes["most_expensive_page"] != "Kameras" || attributes["page"] != "Home Assistant" {
+		t.Fatalf("attributes = %#v", attributes)
+	}
+	if _, _, ok := pageCPUState(pages, "unknown"); ok {
+		t.Fatal("unmeasured page must not publish")
+	}
+}
+
+func TestSensorDeviceClass(t *testing.T) {
+	cases := map[[2]string]string{
+		{"processor_temperature", "°C"}: "temperature",
+		{"battery_level", "%"}:          "battery",
+		{"memory_usage", "%"}:           "",
+		{"up_time", "min"}:              "duration",
+		{"memory_size", "GiB"}:          "data_size",
+		{"illuminance_level", "lx"}:     "illuminance",
+	}
+	for in, want := range cases {
+		if got := sensorDeviceClass(in[0], in[1]); got != want {
+			t.Errorf("%v: %q, want %q", in, got, want)
+		}
+	}
+}

@@ -324,7 +324,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	server := &http.Server{
 		Addr:              s.cfg.Snapshot().Admin.Addr(),
-		Handler:           securityHeaders(mux),
+		Handler:           securityHeaders(bodyLimit(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,
@@ -1407,10 +1407,25 @@ func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
 	if _, err := exec.LookPath("bash"); err == nil {
 		shell = "bash"
 	}
+	started := time.Now()
 	out, err := exec.CommandContext(ctx, shell, args...).CombinedOutput()
 	code := 0
 	if err != nil {
 		code = 1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
+			code = exitErr.ExitCode()
+		}
+	}
+	// The journal names only the program, never the arguments: commands can
+	// carry passwords or tokens.
+	if s.journal != nil {
+		program := strings.Fields(body.Command)[0]
+		status := "ok"
+		if code != 0 {
+			status = "error"
+		}
+		s.journal.Record("terminal", "command", status, "terminal command run from the Admin UI", map[string]string{"program": program, "exit_code": strconv.Itoa(code), "duration_ms": strconv.FormatInt(time.Since(started).Milliseconds(), 10)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"exit_code": code,
@@ -2226,6 +2241,10 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	if report, ok := collectSwap(); ok {
 		swapCheck(report, add)
 	}
+	if rt, ok := s.browser.(runtimeBrowser); ok {
+		pageCPUCheck(rt.Telemetry().Pages, 0, add)
+	}
+	timeZoneCheck(s.cfg.Snapshot().Time.Timezone, add)
 	if strings.Contains(model, "Raspberry Pi") {
 		report := collectVideoDecode(ctx, model)
 		report.ChromiumH264HW = h264HW
@@ -2861,12 +2880,37 @@ func hardwareDoctorChecks(status hardware.Status, add func(id, level, message st
 			add("power_supply", "ok", "No undervoltage reported.", power)
 		}
 	}
-	if devices, ok := status.System["touch_devices"].([]string); ok {
+	if missing, ok := status.System["touch_devices_missing"].([]string); ok && len(missing) > 0 {
+		add("touch_input", "error", "The touchscreen ("+strings.Join(missing, ", ")+") was detected before and is missing now. Its USB controller dropped out or the cable is loose; undervoltage is the most common cause. Re-plug the touch USB cable or reboot, and check the power supply.", missing)
+	} else if devices, ok := status.System["touch_devices"].([]string); ok {
 		if len(devices) == 0 {
 			add("touch_input", "warn", "No touch input device is registered with the kernel. If the screen should react to touch, check its USB cable and the power supply (see sudo libinput debug-events).", "")
 		} else {
 			add("touch_input", "ok", "Touch input device found.", devices)
 		}
+	}
+	diskSpaceCheck(status.System["disk_usage"], add)
+}
+
+// diskSpaceCheck warns before a full SD card breaks config saves, the browser
+// profile and the journal. Thresholds are absolute: percent alone is
+// misleading on a 128 GB card.
+func diskSpaceCheck(value any, add func(id, level, message string, detail any)) {
+	disk, ok := value.(map[string]any)
+	if !ok || disk == nil {
+		return
+	}
+	available, ok := disk["available_gb"].(float64)
+	if !ok {
+		return
+	}
+	switch {
+	case available < 0.2:
+		add("disk_space", "error", fmt.Sprintf("Only %.1f GB free on the system disk. Saving the configuration and the browser profile can fail. Free space with sudo apt clean and sudo journalctl --vacuum-size=50M.", available), disk)
+	case available < 1:
+		add("disk_space", "warn", fmt.Sprintf("Only %.1f GB free on the system disk. Free space with sudo apt clean and sudo journalctl --vacuum-size=50M.", available), disk)
+	default:
+		add("disk_space", "ok", fmt.Sprintf("%.1f GB free on the system disk.", available), disk)
 	}
 }
 

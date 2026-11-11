@@ -113,6 +113,7 @@ type TelemetryHistory struct {
 	Summary  TelemetrySummary  `json:"summary"`
 	Samples  []TelemetrySample `json:"samples"`
 	Versions []VersionSummary  `json:"versions,omitempty"`
+	Pages    []PageSummary     `json:"pages,omitempty"`
 }
 
 type ManualOverride struct {
@@ -131,6 +132,7 @@ type runtimeState struct {
 	Override     ManualOverride     `json:"override"`
 	Telemetry    []TelemetrySample  `json:"telemetry"`
 	Versions     []VersionTelemetry `json:"telemetry_versions,omitempty"`
+	Pages        []PageTelemetry    `json:"telemetry_pages,omitempty"`
 	Operations   []Operation        `json:"operations,omitempty"`
 	LastExit     ExitStatus         `json:"last_exit,omitempty"`
 	ExitCounts   map[string]int     `json:"exit_reason_counts,omitempty"`
@@ -357,6 +359,7 @@ func (b *Browser) ClearOverride() error {
 }
 
 func (b *Browser) Telemetry() TelemetryHistory {
+	kiosk := b.cfg.Snapshot().Kiosk
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	samples := append([]TelemetrySample(nil), b.telemetry...)
@@ -364,6 +367,7 @@ func (b *Browser) Telemetry() TelemetryHistory {
 	for _, version := range b.telemetryVersions {
 		history.Versions = append(history.Versions, version.summary())
 	}
+	history.Pages = b.pageSummariesLocked(kiosk)
 	return history
 }
 
@@ -378,6 +382,7 @@ func (b *Browser) ResetTelemetry() error {
 	b.mu.Lock()
 	b.telemetry = nil
 	b.telemetryVersions = nil
+	b.pageTelemetry = nil
 	b.mu.Unlock()
 	b.persistRuntimeState()
 	return nil
@@ -479,6 +484,7 @@ func (b *Browser) persistRuntimeState() {
 		RecoveryRuns: append([]time.Time(nil), b.recoveryRuns...), StartCount: b.startCount, RestartCount: b.restartCount,
 		Recovery: b.recovery, Override: b.override, Telemetry: append([]TelemetrySample(nil), b.telemetry...),
 		Versions:   append([]VersionTelemetry(nil), b.telemetryVersions...),
+		Pages:      pageTelemetryList(b.pageTelemetry),
 		Operations: append([]Operation(nil), b.operationHistory...),
 		LastExit:   b.lastExitDetails, ExitCounts: cloneIntMap(b.exitReasonCounts),
 	}
@@ -524,6 +530,16 @@ func (b *Browser) loadRuntimeState() {
 		b.operationHistory = b.operationHistory[len(b.operationHistory)-50:]
 	}
 	b.telemetryVersions = state.Versions
+	for _, entry := range state.Pages {
+		if entry.PageID == "" {
+			continue
+		}
+		if b.pageTelemetry == nil {
+			b.pageTelemetry = map[string]*PageTelemetry{}
+		}
+		copied := entry
+		b.pageTelemetry[entry.PageID] = &copied
+	}
 	cutoff := time.Now().Add(-telemetryRetention)
 	for _, sample := range state.Telemetry {
 		if sample.At.After(cutoff) {

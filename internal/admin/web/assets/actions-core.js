@@ -5,7 +5,7 @@ import { bindDeviceHealth } from "./view-device.js";
 import { bindMQTT } from "./actions-mqtt.js";
 import { bindSettings } from "./actions-settings.js";
 import { bindHardware, bindLogs, bindSystem, bindSystemMaintenance } from "./actions-system.js";
-import { closeModal, esc, getJSON, openModal, postJSON, refreshCore, renderApp, request, runAction, state, t } from "./app-core.js";
+import { closeModal, esc, getJSON, openModal, postJSON, refreshCore, renderApp, request, runAction, state, t, toast } from "./app-core.js";
 import { button } from "./renderers.js";
 
 export function bindView() {
@@ -251,6 +251,9 @@ export function bindView() {
         if (check.id === "swap" && detail.finding) {
           return t(`swap_${detail.finding}`).replace("{used}", detail.swap_used_mb || 0);
         }
+        if (check.id === "page_cpu" && detail.finding) {
+          return t(`pageCpu_${detail.finding}`).replace("{page}", detail.page || "").replace("{share}", Math.round(Number(detail.share_percent || 0)));
+        }
         if (check.id === "page_video" && detail.finding) {
           return t(`pageVideo_${detail.finding}`)
             .replace("{count}", detail.videos || 0)
@@ -261,6 +264,65 @@ export function bindView() {
         const key = `doctor_${check.id}_${check.level}`;
         const text = t(key);
         return text === key ? check.message || check.id || "-" : text;
+      }
+
+      // Technical details as a readable list: "swap_used_mb" becomes "Swap
+      // used (MB)", true/false become yes/no, lists are joined. Known keys
+      // have a translation (detailKey_<key>); nesting stays as a sub-list.
+      export function detailList(detail, depth = 0) {
+        if (detail == null || detail === "") return "";
+        if (typeof detail !== "object") return `<code>${esc(detailValue(detail))}</code>`;
+        if (Array.isArray(detail)) {
+          if (detail.every((item) => item == null || typeof item !== "object")) return `<code>${esc(detail.map(detailValue).join(", ") || "–")}</code>`;
+          return `<ol class="detail-list">${detail.map((item) => `<li>${detailList(item, depth + 1)}</li>`).join("")}</ol>`;
+        }
+        const rows = Object.entries(detail).filter(([, value]) => value !== undefined && value !== null && value !== "" && !(Array.isArray(value) && !value.length));
+        if (!rows.length) return "";
+        if (depth > 3) return `<code>${esc(JSON.stringify(detail))}</code>`;
+        return `<dl class="detail-list">${rows.map(([key, value]) => `<div><dt>${esc(detailLabel(key))}</dt><dd>${typeof value === "object" ? detailList(value, depth + 1) : esc(detailValue(value))}</dd></div>`).join("")}</dl>`;
+      }
+
+      function detailLabel(key) {
+        const translated = t(`detailKey_${key}`);
+        if (translated !== `detailKey_${key}`) return translated;
+        const words = String(key).replace(/([a-z])([A-Z])/g, "$1 $2").split(/[_\s]+/).filter(Boolean);
+        const units = { mb: "(MB)", gb: "(GB)", ms: "(ms)", c: "(°C)", percent: "(%)" };
+        const last = words[words.length - 1]?.toLowerCase();
+        const unit = words.length > 1 && units[last] ? ` ${units[last]}` : "";
+        const text = (unit ? words.slice(0, -1) : words).join(" ").toLowerCase();
+        return text.charAt(0).toUpperCase() + text.slice(1) + unit;
+      }
+
+      function detailValue(value) {
+        if (value === true) return t("yes");
+        if (value === false) return t("no");
+        if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+          const date = new Date(value);
+          if (!Number.isNaN(date.getTime())) return date.toLocaleString(state.lang || undefined);
+        }
+        return String(value);
+      }
+
+      // The Clipboard API only exists in secure contexts (https, localhost);
+      // the Admin UI usually runs on plain http in the LAN, so fall back to
+      // a hidden text field and the copy command.
+      export async function copyText(text) {
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch {}
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.className = "offscreen";
+        document.body.append(area);
+        area.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch {}
+        area.remove();
+        return ok;
       }
 
       export async function loadBrowserDoctor() {
@@ -277,7 +339,7 @@ export function bindView() {
             <li class="health-check ${check.level === "error" ? "bad" : check.level === "warn" ? "warn" : "ok"}">
               <span class="health-mark" aria-hidden="true">${check.level === "ok" ? "✓" : "!"}</span>
               <div><strong>${esc(t(`doctorCheck_${check.id}`) === `doctorCheck_${check.id}` ? check.id : t(`doctorCheck_${check.id}`))}</strong><span>${esc(doctorMessage(check))}</span>
-              ${check.detail && check.level !== "ok" && typeof check.detail !== "string" ? `<details class="tech-details"><summary>${esc(t("technicalDetails"))}</summary><pre class="logbox">${esc(JSON.stringify(check.detail, null, 2))}</pre></details>` : ""}</div>
+              ${check.detail && check.level !== "ok" && typeof check.detail !== "string" ? `<details class="tech-details"><summary>${esc(t("technicalDetails"))}</summary>${detailList(check.detail)}</details>` : ""}</div>
             </li>`).join("");
           openModal(`
             <div class="modal doctor-dialog" role="dialog" aria-modal="true" aria-labelledby="doctor-title">
@@ -291,8 +353,12 @@ export function bindView() {
               <div class="modal-body">
                 <ul class="health-checks">${checks}</ul>
               </div>
-              <div class="modal-foot">${offerHardware ? `<button class="primary" data-gpu-hardware>${esc(t("gpuTryHardware"))}</button>` : ""}<button data-modal-close>${esc(t("close"))}</button></div>
+              <div class="modal-foot">${offerHardware ? `<button class="primary" data-gpu-hardware>${esc(t("gpuTryHardware"))}</button>` : ""}<button data-doctor-copy>${esc(t("copyReport"))}</button><button data-modal-close>${esc(t("close"))}</button></div>
             </div>`);
+          document.querySelector("[data-doctor-copy]")?.addEventListener("click", async () => {
+            const text = [`KioskMate ${state.auth?.version || ""} · ${state.hardware?.device?.model || ""}`, ...sorted.map((check) => `[${check.level}] ${check.id}: ${check.message || ""}${check.detail && typeof check.detail === "object" ? `\n    ${JSON.stringify(check.detail)}` : check.detail ? `\n    ${check.detail}` : ""}`)].join("\n");
+            toast(await copyText(text) ? t("copied") : t("copyFailed"), "", "ok");
+          });
           document.querySelector("[data-gpu-hardware]")?.addEventListener("click", () => runAction("gpu-mode", async () => {
             await request("/api/browser/gpu-mode", { method: "POST", body: JSON.stringify({ mode: "hardware" }), timeout: 70000 });
             if (state.config?.performance) state.config.performance.gpu_mode = "hardware";

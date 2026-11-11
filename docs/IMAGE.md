@@ -2,13 +2,14 @@
 
 KioskMate can be built as a complete SD card image, in the spirit of FullPageOS or AnotterKiosk: flash it, put your Wi-Fi and dashboard URL into one text file, boot.
 
-The image is Raspberry Pi OS Lite (Bookworm, 64-bit) plus:
+The image is Raspberry Pi OS Lite (Trixie, 64-bit) plus:
 
 - `cage`, `wlr-randr` (and `wlopm` where the archive has it) for the [desktop-free Cage mode](HEADLESS-CAGE.md),
 - Chromium,
 - the KioskMate `.deb`,
 - a user `kiosk` that runs `kioskmate-cage@kiosk.service` on `tty1`,
-- a first-boot service that applies `/boot/firmware/kioskmate.txt`.
+- a first-boot service that applies `/boot/firmware/kioskmate.txt`,
+- fewer SD card writes: the journal in RAM and compressed swap in RAM (zram) instead of a swap file, unless the base image already sets up zram.
 
 It runs on 64-bit boards: Raspberry Pi 3, 4, 5, 400, 500 and Zero 2 W.
 
@@ -41,6 +42,8 @@ All keys are optional; an empty value keeps the image default (hostname `kioskma
 | `TIMEZONE` | `timedatectl set-timezone`, for example `America/New_York`. |
 | `ADMIN_PASSWORD` | `kioskmate --set-admin-password-stdin` as user `kiosk` (at least 8 characters). |
 | `START_URL` | `kioskmate --set-start-url`: replaces the URL of the first kiosk page. |
+| `VIDEO_MEMORY` | `auto` (default): on boards with 2 GB RAM or more, `dtoverlay=vc4-kms-v3d` becomes `dtoverlay=vc4-kms-v3d,cma-512` so camera streams keep hardware decoding (active after the next reboot). An already customised line is left alone. `no`: keep `config.txt`. |
+| `PERSISTENT_LOGS` | `yes` keeps the system journal on the card. Default: in RAM (48 MB), lost on reboot. |
 | `READ_ONLY` | `yes` turns on the overlay file system, see below. |
 
 ### What happens on the first boot
@@ -99,7 +102,7 @@ VERSION=0.9.0 bash image/build.sh
 `image/build.sh`:
 
 1. builds `dist/kioskmate_<version>_arm64.deb` with `scripts/package-deb.py` (or uses `KIOSKMATE_DEB=path/to.deb`),
-2. clones pi-gen at `PI_GEN_REF` (default `2026-09-15-raspios-bookworm-arm64`) into `build/image/pi-gen`,
+2. clones pi-gen at `PI_GEN_REF` (default `2026-10-06-raspios-trixie-arm64`) into `build/image/pi-gen`,
 3. copies `image/stage-kioskmate` into it as a stage after `stage2` (Raspberry Pi OS Lite) and the `.deb` into the stage, and disables the Lite image export,
 4. writes the pi-gen `config` (user `kiosk`, hostname `kioskmate`, `STAGE_LIST="stage0 stage1 stage2 stage-kioskmate"`),
 5. runs `build-docker.sh` and copies the result to `dist/image/` with a `SHA256SUMS` file.

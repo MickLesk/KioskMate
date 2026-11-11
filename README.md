@@ -35,20 +35,30 @@ The project is inspired by the Home Assistant kiosk workflow popularized by [Tou
 
 ## Status
 
-KioskMate `1.0.0-pre.2` is a pre-release with a redesigned Admin UI (Overview, Programme, Pages, Automations, Device) and inserts that show other pages in between on a fixed rhythm. The current stable release, `0.9.1`, reports undervoltage and missing touch devices, shows CPU per device instead of per core sum, and adds a display backend setting on top of 0.9.0 (workflows, tab mode, local pages, a renderer watchdog, a Raspberry Pi OS image and experimental Windows support). See [CHANGELOG.md](CHANGELOG.md).
+KioskMate `1.0.0-pre.4` is the current pre-release: less load on the Raspberry Pi (CPU per page, camera streams paused while hidden, capped browser cache and log), an offline page when a dashboard does not load, a systemd watchdog and many Admin UI improvements. `0.9.1` is the last stable release. See [CHANGELOG.md](CHANGELOG.md).
 
-The Admin UI is organized by task:
+The Admin UI is organized in five areas:
 
-- **Dashboard** for live status, quick display control and recovery.
-- **Kiosk -> Pages and workflow** for dashboard URLs, display order, rotations and fixed time rules.
-- **Kiosk -> Display and rendering** for appearance, Home Assistant theme behavior, performance and watchdog settings.
-- **MQTT** for broker connectivity and Home Assistant discovery.
-- **System** for device/time controls, maintenance jobs and logs.
-- **Settings** for access, backups and updates.
+- **Overview** for live status, what is on screen, what comes next and quick controls.
+- **Programme** for the base programme, time rules and inserts (pages shown in between on a fixed rhythm), with a timeline.
+- **Pages** for dashboards and local pages (clock, weather, cameras, photos, …).
+- **Automations** for workflows and MQTT / Home Assistant.
+- **Device** for display, performance, Browser Doctor, time, logs, updates and settings.
+
+## Documentation
+
+- [docs/HARDWARE.md](docs/HARDWARE.md) – Raspberry Pi recommendations (power supply, video memory, zram, cameras)
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) – touch, flicker, Home Assistant 403, high CPU, logs
+- [docs/MQTT.md](docs/MQTT.md) – all MQTT topics and commands
+- [docs/API.md](docs/API.md) – the Admin HTTP API
+- [docs/IMAGE.md](docs/IMAGE.md) – ready-to-flash Raspberry Pi image
+- [docs/HEADLESS-CAGE.md](docs/HEADLESS-CAGE.md) – desktop-free mode with Cage
+- [docs/WINDOWS.md](docs/WINDOWS.md) – Windows 10/11
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/RELEASE.md](docs/RELEASE.md) – development, tests, releases
 
 ## Requirements
 
-- Go `1.26.4` or newer for development.
+- Go (version in `.go-version`) for development.
 - Debian-based kiosk OS for packaged installs.
 - Chromium, Chromium Browser or Google Chrome on the kiosk device.
 - `systemd --user` for the packaged service.

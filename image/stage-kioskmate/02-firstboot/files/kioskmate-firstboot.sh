@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Apply /boot/firmware/kioskmate.txt once on the first boot of a KioskMate
-# image: Wi-Fi, hostname, time zone, Admin password, start URL and the
-# optional read-only root. Run by kioskmate-firstboot.service as root.
+# image: Wi-Fi, hostname, time zone, Admin password, start URL, video memory,
+# persistent logs and the optional read-only root. Run by kioskmate-firstboot.service as root.
 #
 # The file is parsed, never sourced. Secret values are blanked afterwards.
 set -uo pipefail
@@ -12,8 +12,11 @@ HOSTS_FILE="${KIOSKMATE_FIRSTBOOT_HOSTS:-/etc/hosts}"
 ZONEINFO="${KIOSKMATE_FIRSTBOOT_ZONEINFO:-/usr/share/zoneinfo}"
 KIOSK_USER="${KIOSK_USER:-kiosk}"
 KIOSKMATE_BIN="${KIOSKMATE_BIN:-/usr/bin/kioskmate}"
+BOOT_CONFIG="${KIOSKMATE_FIRSTBOOT_BOOTCONFIG:-/boot/firmware/config.txt}"
+MEMINFO="${KIOSKMATE_FIRSTBOOT_MEMINFO:-/proc/meminfo}"
+JOURNALD_DROPIN="${KIOSKMATE_FIRSTBOOT_JOURNALD:-/etc/systemd/journald.conf.d/50-kioskmate.conf}"
 WIFI_CONNECTION="kioskmate-wifi"
-KEYS="WIFI_SSID WIFI_PASSWORD WIFI_COUNTRY HOSTNAME TIMEZONE ADMIN_PASSWORD START_URL READ_ONLY"
+KEYS="WIFI_SSID WIFI_PASSWORD WIFI_COUNTRY HOSTNAME TIMEZONE ADMIN_PASSWORD START_URL VIDEO_MEMORY PERSISTENT_LOGS READ_ONLY"
 SECRET_KEYS="WIFI_PASSWORD ADMIN_PASSWORD"
 
 ERRORS=0
@@ -171,6 +174,50 @@ apply_start_url() {
   fi
 }
 
+# The hardware video decoder needs contiguous memory (CMA). With the default
+# size, several camera streams make cma_alloc fail and Chromium falls back to
+# software decoding at 100 %+ CPU. On boards with 2 GB or more, raise CMA to
+# 512 MB. Takes effect on the next reboot. VIDEO_MEMORY=no keeps config.txt.
+apply_video_memory() {
+  local mode mem_kb tmp
+  mode="$(get VIDEO_MEMORY)"
+  mode="${mode:-auto}"
+  [ "${mode,,}" = "auto" ] || { log "VIDEO_MEMORY=$mode: config.txt left unchanged"; return 0; }
+  [ -f "$BOOT_CONFIG" ] || return 0
+  mem_kb="$(awk '/^MemTotal:/ { print $2 }' "$MEMINFO" 2>/dev/null)"
+  if [ -z "$mem_kb" ] || [ "$mem_kb" -lt 1800000 ]; then
+    log "less than 2 GB RAM: keeping the default video memory"
+    return 0
+  fi
+  if ! grep -qE '^[[:space:]]*dtoverlay=vc4-kms-v3d[[:space:]]*$' "$BOOT_CONFIG"; then
+    log "config.txt has no plain dtoverlay=vc4-kms-v3d line (already customised): leaving it"
+    return 0
+  fi
+  tmp="$BOOT_CONFIG.tmp"
+  if sed -E 's/^([[:space:]]*)dtoverlay=vc4-kms-v3d[[:space:]]*$/\1dtoverlay=vc4-kms-v3d,cma-512/' "$BOOT_CONFIG" > "$tmp" && mv -f "$tmp" "$BOOT_CONFIG"; then
+    sync
+    log "video memory raised to 512 MB (dtoverlay=vc4-kms-v3d,cma-512); active after the next reboot"
+  else
+    rm -f "$tmp"
+    fail "could not update $BOOT_CONFIG"
+  fi
+}
+
+# The image keeps the journal in RAM (fewer SD card writes). PERSISTENT_LOGS=yes
+# removes that drop-in so logs survive a reboot, which helps when chasing
+# crashes or undervoltage.
+apply_persistent_logs() {
+  is_yes "$(get PERSISTENT_LOGS)" || return 0
+  [ -e "$JOURNALD_DROPIN" ] || return 0
+  if rm -f "$JOURNALD_DROPIN"; then
+    mkdir -p /var/log/journal 2>/dev/null || true
+    systemctl restart systemd-journald 2>/dev/null || true
+    log "journal is kept on disk"
+  else
+    fail "could not remove $JOURNALD_DROPIN"
+  fi
+}
+
 # Blank secret values in place and leave a status line for whoever opens the
 # file on a computer later. The boot partition is FAT: write a temp file in
 # the same directory and rename it.
@@ -213,6 +260,8 @@ main() {
   apply_timezone
   apply_admin_password
   apply_start_url
+  apply_video_memory
+  apply_persistent_logs
   mkdir -p "$STATE_DIR"
   date -u '+%Y-%m-%dT%H:%M:%SZ' > "$STATE_DIR/firstboot.done"
   finish_config_file

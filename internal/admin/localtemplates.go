@@ -258,30 +258,53 @@ function source(raw){
   return {kind:"video",src:raw};
 }
 function bust(src){return src+(src.includes("?")?"&":"?")+"_="+Date.now()}
+// Each camera has start and stop. While the page is hidden (a background tab
+// during an insert, or the display is off) every stream is disconnected:
+// a paused video keeps downloading and decoding, only removing the source
+// stops it.
+const cams=[];
 function camera(raw){
   const cell=document.createElement("div");cell.className="cell";grid.append(cell);
   const state=document.createElement("span");state.className="state";state.textContent=T.reconnect;state.hidden=true;
   const info=source(raw);
+  const cam={start(){},stop(){}};
+  let retry=0;
+  const later=(fn,ms)=>{clearTimeout(retry);retry=setTimeout(()=>{if(!document.hidden)fn()},ms)};
   if(info.kind==="video"){
     const video=document.createElement("video");video.muted=true;video.autoplay=true;video.playsInline=true;video.setAttribute("muted","");
     cell.append(video,state);
-    let last=-1,still=0;
-    const start=()=>{state.hidden=true;video.src=info.src;video.play().catch(()=>{})};
-    video.addEventListener("error",()=>{state.hidden=false;setTimeout(start,5000)});
-    // A stream that stops moving for 15 s is reconnected.
-    setInterval(()=>{if(video.currentTime===last){still+=5;if(still>=15){still=0;state.hidden=false;start()}}else{still=0;last=video.currentTime;state.hidden=true}},5000);
-    start();
+    let last=-1,still=0,watch=0;
+    cam.start=()=>{state.hidden=true;last=-1;still=0;video.src=info.src;video.play().catch(()=>{});
+      clearInterval(watch);
+      // A stream that stops moving for 15 s is reconnected.
+      watch=setInterval(()=>{if(video.currentTime===last){still+=5;if(still>=15){still=0;state.hidden=false;cam.start()}}else{still=0;last=video.currentTime;state.hidden=true}},5000)};
+    cam.stop=()=>{clearInterval(watch);clearTimeout(retry);video.pause();video.removeAttribute("src");video.load()};
+    video.addEventListener("error",()=>{if(!video.getAttribute("src"))return;state.hidden=false;later(cam.start,5000)});
   }else{
     const img=document.createElement("img");img.alt="";cell.append(img,state);
     if(info.kind==="mjpeg"){
-      img.addEventListener("error",()=>{state.hidden=false;setTimeout(()=>{img.src=bust(info.src)},5000)});
+      img.addEventListener("error",()=>{if(!img.getAttribute("src"))return;state.hidden=false;later(()=>{img.src=bust(info.src)},5000)});
       img.addEventListener("load",()=>{state.hidden=true});
-      img.src=info.src;
+      cam.start=()=>{img.src=bust(info.src)};
+      cam.stop=()=>{clearTimeout(retry);img.removeAttribute("src")};
     }else{
-      const next=()=>{const pre=new Image();pre.onload=()=>{img.src=pre.src;state.hidden=true;setTimeout(next,2000)};pre.onerror=()=>{state.hidden=false;setTimeout(next,5000)};pre.src=bust(info.src)};
-      next();
+      let on=false;
+      const next=()=>{if(!on)return;const pre=new Image();pre.onload=()=>{if(!on)return;img.src=pre.src;state.hidden=true;later(next,2000)};pre.onerror=()=>{if(!on)return;state.hidden=false;later(next,5000)};pre.src=bust(info.src)};
+      cam.start=()=>{on=true;next()};
+      cam.stop=()=>{on=false;clearTimeout(retry)};
     }
   }
+  cams.push(cam);
 }
 streams.forEach(camera);
+let running=false;
+function sync(){
+  const want=!document.hidden;
+  if(want===running)return;
+  running=want;
+  document.body.dataset.streams=want?"on":"off";
+  for(const cam of cams)want?cam.start():cam.stop();
+}
+document.addEventListener("visibilitychange",sync);
+sync();
 </script></body></html>`))

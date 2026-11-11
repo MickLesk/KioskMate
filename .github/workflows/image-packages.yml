@@ -1,0 +1,30 @@
+name: Image packages
+
+# The image itself is built manually (image.yml). This cheap check makes sure
+# the pinned pi-gen tag exists and every package of the image stage is in the
+# Raspberry Pi OS / Debian archives, so a rename shows up before a long build.
+on:
+  push:
+    paths:
+      - "image/**"
+      - "scripts/check-image-packages.py"
+      - ".github/workflows/image-packages.yml"
+  pull_request:
+    paths:
+      - "image/**"
+      - "scripts/check-image-packages.py"
+      - ".github/workflows/image-packages.yml"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check pi-gen tag and package names
+        run: python3 scripts/check-image-packages.py

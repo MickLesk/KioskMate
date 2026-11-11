@@ -182,7 +182,7 @@ export function bindHardware() {
 
       function formatEvents(events) {
         return events.slice().reverse().map((event) => {
-          const at = event.at ? new Date(event.at).toLocaleString() : "-";
+          const at = event.at ? new Date(event.at).toLocaleString(state.lang || undefined) : "-";
           const action = [event.component, event.action].filter(Boolean).join("/");
           const duration = event.duration_ms ? ` (${event.duration_ms} ms)` : "";
           const details = Object.entries(event.details || {}).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join(", ");

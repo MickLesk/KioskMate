@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/MickLesk/KioskMate/internal/config"
 )
 
 type devToolsTarget struct {
@@ -155,9 +158,30 @@ func (b *Browser) navigateDevTools(ctx context.Context, target string) error {
 		return err
 	}
 	if result.ErrorText != "" {
+		if offline, ok := offlineFallback(b.cfg.Snapshot(), target, result.ErrorText); ok {
+			b.logger.Warn("kiosk page unreachable, showing the offline page", "error", result.ErrorText)
+			return session.command(ctx, "Page.navigate", map[string]any{"url": offline}, nil)
+		}
 		return errors.New(result.ErrorText)
 	}
 	return nil
+}
+
+// offlineFallback returns the offline page for a network error while
+// opening an http(s) kiosk page. Aborted navigations (replaced by another
+// navigation, downloads) and local pages are not network problems.
+func offlineFallback(cfg *config.Config, target string, errorText string) (string, bool) {
+	if errorText == "" || strings.Contains(errorText, "ERR_ABORTED") {
+		return "", false
+	}
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		return "", false
+	}
+	base := config.LocalPageURL(cfg.Admin, "offline")
+	if strings.HasPrefix(target, strings.TrimSuffix(base, "offline")) {
+		return "", false
+	}
+	return base + "?u=" + url.QueryEscape(target), true
 }
 
 func (b *Browser) monitorDevTools(profile string, theme string, done <-chan struct{}) {
@@ -311,7 +335,14 @@ func (b *Browser) runDevTools(ctx context.Context, session *cdpSession, theme st
 			return err
 		}
 		if result.Error != "" {
-			return fmt.Errorf("navigate to kiosk page: %s", result.Error)
+			offline, ok := offlineFallback(cfg, target, result.Error)
+			if !ok {
+				return fmt.Errorf("navigate to kiosk page: %s", result.Error)
+			}
+			b.logger.Warn("kiosk page unreachable at start, showing the offline page", "error", result.Error)
+			if err := session.command(ctx, "Page.navigate", map[string]any{"url": offline}, nil); err != nil {
+				return err
+			}
 		}
 		*navigated = true
 		go b.preloadTabs(ctx, cfg)

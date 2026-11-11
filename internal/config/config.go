@@ -675,7 +675,24 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	syncDir(dir)
+	return nil
+}
+
+// syncDir flushes the directory entry after a rename. Without it a power
+// cut shortly after saving (common on a kiosk) can bring back the old file
+// or an empty one on ext4 with delayed allocation. Not supported on Windows,
+// where the error is ignored.
+func syncDir(dir string) {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = handle.Sync()
+	_ = handle.Close()
 }
 
 func ConfigDir(path string) string {
