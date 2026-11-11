@@ -45,6 +45,10 @@ func (s *Server) localPage(w http.ResponseWriter, r *http.Request) {
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/local/")
 	pageID, sub, _ := strings.Cut(rest, "/")
+	if pageID == OfflinePageID && sub == "" {
+		s.renderOfflinePage(w, r)
+		return
+	}
 	cfg := s.cfg.Snapshot()
 	var page *config.KioskPage
 	for index := range cfg.Kiosk.Pages {

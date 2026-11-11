@@ -652,6 +652,14 @@ function renderPages(pages) {
         [/^only http and https URLs can be (checked|rendered)$/, "msgOnlyHTTP"],
         [/^request body too large/, "msgBodyTooLarge"],
         [/^Failed to fetch$|^NetworkError|^Load failed$/, "msgNetwork"],
+        [/x509: certificate signed by unknown authority/, "msgTLSUnknownCA"],
+        [/x509: certificate is valid for/, "msgTLSWrongName"],
+        [/x509: certificate has expired/, "msgTLSExpired"],
+        [/tls: first record does not look like a TLS handshake/, "msgTLSPlainServer"],
+        [/connect: connection refused/, "msgConnectionRefused"],
+        [/no such host/, "msgNoSuchHost"],
+        [/i\/o timeout|context deadline exceeded/, "msgTimeout"],
+        [/not authori[sz]ed|bad user ?name or password/i, "msgBrokerAuth"],
       ];
 
       // Workflow and job results list failures as "2 display: <message>";

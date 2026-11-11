@@ -29,3 +29,14 @@ func TestPageCPUCheck(t *testing.T) {
 		t.Fatalf("cheap page: %#v", got)
 	}
 }
+
+func TestTimeZoneCheck(t *testing.T) {
+	var ids []string
+	add := func(id, level, message string, detail any) { ids = append(ids, id+":"+level) }
+	timeZoneCheck("Europe/Berlin", add)
+	timeZoneCheck("", add)
+	timeZoneCheck("Mars/Olympus", add)
+	if len(ids) != 1 || ids[0] != "time_zone:warn" {
+		t.Fatalf("checks = %v", ids)
+	}
+}

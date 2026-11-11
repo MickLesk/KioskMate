@@ -324,7 +324,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	server := &http.Server{
 		Addr:              s.cfg.Snapshot().Admin.Addr(),
-		Handler:           securityHeaders(mux),
+		Handler:           securityHeaders(bodyLimit(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,
@@ -1407,10 +1407,25 @@ func (s *Server) terminalRun(w http.ResponseWriter, r *http.Request) {
 	if _, err := exec.LookPath("bash"); err == nil {
 		shell = "bash"
 	}
+	started := time.Now()
 	out, err := exec.CommandContext(ctx, shell, args...).CombinedOutput()
 	code := 0
 	if err != nil {
 		code = 1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
+			code = exitErr.ExitCode()
+		}
+	}
+	// The journal names only the program, never the arguments: commands can
+	// carry passwords or tokens.
+	if s.journal != nil {
+		program := strings.Fields(body.Command)[0]
+		status := "ok"
+		if code != 0 {
+			status = "error"
+		}
+		s.journal.Record("terminal", "command", status, "terminal command run from the Admin UI", map[string]string{"program": program, "exit_code": strconv.Itoa(code), "duration_ms": strconv.FormatInt(time.Since(started).Milliseconds(), 10)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"exit_code": code,
@@ -2226,9 +2241,10 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	if report, ok := collectSwap(); ok {
 		swapCheck(report, add)
 	}
-	if runtime, ok := s.browser.(runtimeBrowser); ok {
-		pageCPUCheck(runtime.Telemetry().Pages, 0, add)
+	if rt, ok := s.browser.(runtimeBrowser); ok {
+		pageCPUCheck(rt.Telemetry().Pages, 0, add)
 	}
+	timeZoneCheck(s.cfg.Snapshot().Time.Timezone, add)
 	if strings.Contains(model, "Raspberry Pi") {
 		report := collectVideoDecode(ctx, model)
 		report.ChromiumH264HW = h264HW

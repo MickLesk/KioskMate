@@ -1334,5 +1334,15 @@
   "viewFailedHint": "Das ist ein Fehler in KioskMate. Die anderen Bereiche funktionieren weiter; bitte die Meldung unten mit der Diagnose melden.",
   "openDashboard": "Zur Übersicht",
   "copyReport": "Bericht kopieren",
-  "copyFailed": "Kopieren nicht möglich"
+  "copyFailed": "Kopieren nicht möglich",
+  "msgTLSUnknownCA": "Das Zertifikat des Servers ist nicht vertrauenswürdig (unbekannte Zertifizierungsstelle). CA-Datei eintragen oder die Prüfung ausschalten.",
+  "msgTLSWrongName": "Das Zertifikat passt nicht zum Servernamen. Adresse oder „Servername (SNI)“ prüfen.",
+  "msgTLSExpired": "Das Zertifikat des Servers ist abgelaufen.",
+  "msgTLSPlainServer": "Der Server spricht kein TLS: mqtt:// statt mqtts:// oder den TLS-Port verwenden.",
+  "msgConnectionRefused": "Der Server lehnt die Verbindung ab: läuft er, und stimmt der Port?",
+  "msgNoSuchHost": "Der Servername ist unbekannt (DNS). Adresse prüfen.",
+  "msgTimeout": "Der Server antwortet nicht (Zeitüberschreitung). Netzwerk und Adresse prüfen.",
+  "msgBrokerAuth": "Der Broker lehnt Benutzer oder Passwort ab.",
+  "doctorCheck_time_zone": "Zeitzone",
+  "doctor_time_zone_warn": "Die eingestellte Zeitzone ist unbekannt; Zeitpläne laufen deshalb in der Zeitzone des Systems. Unter Gerät → Zeit eine Zeitzone wählen."
 }

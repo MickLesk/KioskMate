@@ -39,7 +39,7 @@ export function healthChecks() {
   const recovery = browser.recovery || {};
   if (recovery.state && !["healthy", "idle"].includes(recovery.state)) checks.push(check(recovery.state === "failed" ? "bad" : "warn", t("recoveryState"), humanizeMessage(recovery.last_result || recovery.reason || recovery.state)));
   if (state.config?.mqtt?.enabled) {
-    checks.push(mqtt.connected ? check("ok", "MQTT", formatMQTTState(mqtt.state)) : check("bad", "MQTT", mqtt.last_error || formatMQTTState(mqtt.state), t("checkMQTTHint")));
+    checks.push(mqtt.connected ? check("ok", "MQTT", formatMQTTState(mqtt.state)) : check("bad", "MQTT", humanizeMessage(mqtt.last_error) || formatMQTTState(mqtt.state), t("checkMQTTHint")));
   }
   const memory = system.memory_usage_percent == null ? NaN : Number(system.memory_usage_percent);
   const temperature = system.processor_temperature_c == null ? NaN : Number(system.processor_temperature_c);

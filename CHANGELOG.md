@@ -29,6 +29,16 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - The browser tab title names the area and the kiosk and starts with ⚠ while the display browser is stopped.
 - The temperature tile says "No temperature sensor" instead of "-".
 
+### Robustness and security
+- Offline page: when a page cannot be loaded (no network, DNS, server down), the kiosk shows a dark offline page with clock, target and countdown instead of Chromium's error page, checks the target with growing pauses (5 s up to 60 s) and opens it again as soon as it answers.
+- Scheduled actions wait up to two minutes after boot for the clock to be synchronised (the Pi has no real-time clock), so a schedule does not switch the display at a wrong time right after a power cut.
+- systemd: the service reports ready and sends watchdog pings while the admin server and configuration respond; a hung KioskMate is restarted by systemd after two minutes. Existing installations get this with `install.sh update`.
+- Request size limits: login, setup and webhook triggers accept at most 64 KB, the API at most 8 MB.
+- Configuration saves also sync the directory, so a power cut right after saving cannot lose the renamed file.
+- Terminal commands from the admin UI are written to the journal with the program name, exit code and duration (not the full command line), and the real exit code is shown.
+- MQTT reconnects with growing pauses (5 s up to 2 min, with jitter) and logs repeated failures less often. TLS and connection errors (unknown certificate authority, wrong host name, expired certificate, refused, timeout, wrong credentials) are explained in German and English.
+- The Browser Doctor warns when the configured time zone does not exist (schedules would silently use the system time zone).
+
 ## v1.0.0-pre.3
 
 Third pre-release: inserts switch without blanking the display, no more white flashes, and telemetry that shows where the CPU goes. Configs from 1.0.0-pre.2 keep working unchanged.

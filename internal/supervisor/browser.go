@@ -717,6 +717,12 @@ func (b *Browser) Status() Status {
 }
 
 func (b *Browser) RunScheduler(ctx context.Context) {
+	if b.cfg.Snapshot().Kiosk.Scheduler.Enabled {
+		started := time.Now()
+		if waitForTimeSync(ctx, timeSyncWait, timeSyncPoll) && b.logger != nil {
+			b.logger.Info("schedule waited for the clock to synchronize", "waited", time.Since(started).Round(time.Second).String())
+		}
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	changes := b.cfg.Changes()

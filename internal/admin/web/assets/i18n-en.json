@@ -1334,5 +1334,15 @@
   "viewFailedHint": "This is a bug in KioskMate. The other areas keep working; please report the message below together with the diagnostics.",
   "openDashboard": "Go to overview",
   "copyReport": "Copy report",
-  "copyFailed": "Copying is not possible"
+  "copyFailed": "Copying is not possible",
+  "msgTLSUnknownCA": "The server certificate is not trusted (unknown certificate authority). Add the CA file or turn verification off.",
+  "msgTLSWrongName": "The certificate does not match the server name. Check the address or the server name (SNI).",
+  "msgTLSExpired": "The server certificate has expired.",
+  "msgTLSPlainServer": "The server does not speak TLS: use mqtt:// instead of mqtts:// or the TLS port.",
+  "msgConnectionRefused": "The server refuses the connection: is it running, and is the port right?",
+  "msgNoSuchHost": "The server name is unknown (DNS). Check the address.",
+  "msgTimeout": "The server does not answer (timeout). Check the network and the address.",
+  "msgBrokerAuth": "The broker rejects the user name or password.",
+  "doctorCheck_time_zone": "Time zone",
+  "doctor_time_zone_warn": "The configured time zone is unknown, so schedules run in the system time zone. Pick a zone under Device → Time."
 }

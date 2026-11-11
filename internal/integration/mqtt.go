@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -408,6 +409,20 @@ func sleepContext(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
+// reconnectDelay grows from 5 s to at most 2 minutes with ±20 % jitter, so
+// a broker that is down (Home Assistant restart) is not hammered and several
+// kiosks do not reconnect in lockstep. jitter is a number in [0, 1).
+func reconnectDelay(failures int, jitter float64) time.Duration {
+	delay := 5 * time.Second
+	for i := 1; i < failures && delay < 2*time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > 2*time.Minute {
+		delay = 2 * time.Minute
+	}
+	return time.Duration(float64(delay) * (0.8 + 0.4*jitter))
+}
+
 func mqttInterval(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return 30 * time.Second
@@ -586,7 +601,9 @@ func (s *MQTTService) commands(ctx context.Context) {
 	if rules := s.workflowRules(); rules != nil {
 		topics = append(topics, rules.Topics()...)
 	}
+	failures := 0
 	for {
+		subscribed := time.Now()
 		err := client.Subscribe(topics, func(topic string, payload []byte) {
 			s.handleCommand(ctx, topic, strings.TrimSpace(string(payload)))
 		})
@@ -594,8 +611,17 @@ func (s *MQTTService) commands(ctx context.Context) {
 			_ = client.Close()
 			return
 		}
-		s.logger.Warn("mqtt command subscription failed", "error", err)
-		if !sleepContext(ctx, 5*time.Second) {
+		// A subscription that held for a while was a working connection;
+		// start the backoff from the beginning.
+		if time.Since(subscribed) > time.Minute {
+			failures = 0
+		}
+		failures++
+		delay := reconnectDelay(failures, rand.Float64())
+		if failures <= 3 || failures%10 == 0 {
+			s.logger.Warn("mqtt command subscription failed", "error", err, "attempt", failures, "retry_in", delay.Round(time.Second).String())
+		}
+		if !sleepContext(ctx, delay) {
 			_ = client.Close()
 			return
 		}

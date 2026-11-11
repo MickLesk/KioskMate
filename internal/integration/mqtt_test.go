@@ -483,3 +483,18 @@ func mqttTestConfig(t *testing.T) *config.Config {
 		MQTT:        config.MQTTConfig{Node: "kioskmate_test", Discovery: "homeassistant", Version: "3.1.1"},
 	}
 }
+
+func TestReconnectDelayBacksOff(t *testing.T) {
+	if got := reconnectDelay(1, 0.5); got != 5*time.Second {
+		t.Fatalf("first delay = %v", got)
+	}
+	if got := reconnectDelay(3, 0.5); got != 20*time.Second {
+		t.Fatalf("third delay = %v", got)
+	}
+	if got := reconnectDelay(50, 0.5); got != 2*time.Minute {
+		t.Fatalf("capped delay = %v", got)
+	}
+	if low, high := reconnectDelay(2, 0), reconnectDelay(2, 0.999); low != 8*time.Second || high <= 11*time.Second {
+		t.Fatalf("jitter range %v..%v", low, high)
+	}
+}

@@ -2,14 +2,14 @@
 // top of the programme and then hand back to it, with ready-made templates.
 import { esc, formatMQTTState, isDirty, state, t } from "./app-core.js";
 import { icon } from "./icons.js";
-import { button } from "./renderers.js";
+import { button, humanizeMessage } from "./renderers.js";
 import { WORKFLOW_TEMPLATES, renderWorkflows } from "./workflows.js";
 
 function renderMQTTStatus() {
   const mqtt = state.status?.mqtt || {};
   const enabled = !!state.config?.mqtt?.enabled;
   const tone = !enabled ? "" : mqtt.connected ? "ok" : "bad";
-  const detail = !enabled ? t("mqttOffForAutomations") : mqtt.connected ? (state.config?.mqtt?.url || "") : (mqtt.last_error || formatMQTTState(mqtt.state));
+  const detail = !enabled ? t("mqttOffForAutomations") : mqtt.connected ? (state.config?.mqtt?.url || "") : (humanizeMessage(mqtt.last_error) || formatMQTTState(mqtt.state));
   return `<section class="automation-status ${tone}">
     <span class="dot" aria-hidden="true"></span>
     <div><strong>MQTT · ${esc(enabled ? formatMQTTState(mqtt.state) : t("disabled"))}</strong><span>${esc(detail)}</span></div>

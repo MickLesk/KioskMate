@@ -3,7 +3,7 @@
 import fs from "fs";
 import path from "path";
 
-export default async function pre4({ browser, base, ok, errors, out, api }) {
+export default async function pre4({ browser, base, ok, errors, out, api, fakes }) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: "de-DE" });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push("pre4 pageerror: " + String(e)));
@@ -88,6 +88,23 @@ export default async function pre4({ browser, base, ok, errors, out, api }) {
   // ---- Shell: skip link and tab title ----
   ok("shell: skip link targets the content", await page.locator('.skip-link[href="#main-content"]').count() === 1 && await page.locator("#main-content").count() === 1);
   ok("shell: tab title warns while the display is stopped", (await page.title()).startsWith("⚠ Gerät · KioskMate"), await page.title());
+
+  // ---- Offline page instead of Chromium's error page ----
+  const kiosk = await ctx.newPage();
+  await kiosk.goto(`${base}/local/offline?u=${encodeURIComponent("http://127.0.0.1:9/dashboard")}`);
+  await kiosk.waitForTimeout(3500);
+  ok("offline: calm page with the host", (await kiosk.textContent("#title")) === "Keine Verbindung" && (await kiosk.textContent("#target")) === "127.0.0.1:9");
+  ok("offline: counts down to the next attempt", /Nächster Versuch in \d+ s/.test(await kiosk.textContent("#state")), await kiosk.textContent("#state"));
+  await kiosk.screenshot({ path: `${out}/pre4-offline.png` });
+  await kiosk.goto(`${base}/local/offline?u=${encodeURIComponent(fakes.url + "/camera.png")}`);
+  await kiosk.waitForURL((url) => url.href.startsWith(fakes.url), { timeout: 10000 }).catch(() => {});
+  ok("offline: opens the page once it answers", kiosk.url().startsWith(fakes.url), kiosk.url());
+  const bad = await fetch(`${base}/local/offline?u=${encodeURIComponent("javascript:alert(1)")}`);
+  ok("offline: only http(s) targets", bad.status === 400);
+
+  // ---- Request size limit ----
+  const big = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "x".repeat(200000) }) });
+  ok("limits: oversized login body refused", big.status >= 400 && big.status < 500, String(big.status));
 
   await ctx.close();
 }

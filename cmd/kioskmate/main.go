@@ -122,6 +122,12 @@ func main() {
 		case <-ctx.Done():
 			return
 		}
+		sdNotify("READY=1")
+		go runWatchdog(ctx, watchdogInterval(), func() bool {
+			_ = cfg.Snapshot()
+			_ = browser.Status()
+			return true
+		})
 		startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := browser.Start(startCtx); err != nil {

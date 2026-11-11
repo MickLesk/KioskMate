@@ -91,7 +91,7 @@ export function renderDashboard() {
         ${hw.system?.processor_temperature_c == null
           ? statusTile(t("temperature"), "–", "", t("noTemperatureSensor"))
           : statusTile(t("temperature"), formatValue(hw.system.processor_temperature_c, " °C"), Number(hw.system.processor_temperature_c) >= 75 ? "warn" : "", hw.device?.model && hw.device.model !== "Generic" ? hw.device.model : "")}
-        ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.enabled ? cfg.mqtt?.url || "" : t("notConfigured")))}
+        ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", humanizeMessage(mqtt.last_error) || (cfg.mqtt?.enabled ? cfg.mqtt?.url || "" : t("notConfigured")))}
       </section>
 
       ${renderToday()}

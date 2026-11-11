@@ -3,6 +3,8 @@ package admin
 import (
 	"fmt"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/MickLesk/KioskMate/internal/supervisor"
 )
@@ -45,4 +47,16 @@ func pageCPUCheck(pages []supervisor.PageSummary, cores int, add func(id, level,
 	}
 	report.Finding = "ok"
 	add("page_cpu", "ok", fmt.Sprintf("The most demanding page, %q, needs %.0f %% of the processor on average.", report.Page, report.Share), report)
+}
+
+// timeZoneCheck reports a configured time zone that Go cannot load: the
+// schedule then silently runs in the system zone.
+func timeZoneCheck(zone string, add func(id, level, message string, detail any)) {
+	zone = strings.TrimSpace(zone)
+	if zone == "" {
+		return
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		add("time_zone", "warn", fmt.Sprintf("The configured time zone %q is unknown; schedules use the system time zone instead. Pick a zone under Device → Time.", zone), map[string]string{"timezone": zone, "error": err.Error()})
+	}
 }
