@@ -106,6 +106,37 @@ export default async function pre4({ browser, base, ok, errors, out, api, fakes 
   const big = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "x".repeat(200000) }) });
   ok("limits: oversized login body refused", big.status >= 400 && big.status < 500, String(big.status));
 
+  // ---- Accessibility basics on every view ----
+  const views = ["dashboard", "program", "pages", "automations", "automations-mqtt", "device", "device-display", "device-maintenance", "device-logs", "device-settings"];
+  const a11yProblems = [];
+  let a11yChecked = 0;
+  for (const view of views) {
+    await page.evaluate((v) => { localStorage.setItem("kioskmate.view", v); }, view);
+    await page.reload();
+    await page.waitForSelector("#main-content", { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    const found = await page.evaluate(() => {
+      const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      const name = (el) => (el.getAttribute("aria-label") || el.getAttribute("title") || el.textContent || "").trim() || (el.getAttribute("aria-labelledby") && document.getElementById(el.getAttribute("aria-labelledby"))?.textContent.trim());
+      const out = [];
+      for (const el of document.querySelectorAll("button, a[href], [role=button]")) {
+        if (visible(el) && !name(el)) out.push(`unnamed ${el.tagName.toLowerCase()} ${el.outerHTML.slice(0, 90)}`);
+      }
+      for (const el of document.querySelectorAll("input:not([type=hidden]), select, textarea")) {
+        if (!visible(el)) continue;
+        const labelled = el.labels?.length || el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || el.getAttribute("title") || el.closest("label");
+        if (!labelled) out.push(`unlabelled ${el.tagName.toLowerCase()} ${el.outerHTML.slice(0, 90)}`);
+      }
+      for (const el of document.querySelectorAll("img")) {
+        if (!el.hasAttribute("alt")) out.push(`img without alt ${el.outerHTML.slice(0, 90)}`);
+      }
+      return { out, count: document.querySelectorAll("button, a[href], input, select, textarea, img").length };
+    });
+    a11yChecked += found.count;
+    for (const problem of found.out) a11yProblems.push(`${view}: ${problem}`);
+  }
+  ok("a11y: buttons named, fields labelled, images with alt on all views", a11yProblems.length === 0 && a11yChecked > 200, a11yProblems.slice(0, 6).join(" | ") || `${a11yChecked} elements`);
+
   // ---- Session expired: back to the login instead of error toasts ----
   await ctx.clearCookies();
   await page.click('[data-action="refresh"]');

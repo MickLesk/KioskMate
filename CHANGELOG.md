@@ -43,6 +43,21 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - A crash in a background part (scheduler, MQTT, workflows, updater) no longer takes the whole kiosk down: the stack goes to the log and that part restarts with a growing pause (it stays stopped after five crashes).
 - The Browser Doctor warns when less than 1 GB is free on the system disk and reports an error below 200 MB, with the commands to free space.
 
+### Home Assistant
+- New sensor "Page CPU": the measured browser CPU of the page on screen, with the page and the most expensive page as attributes.
+- Sensors with a unit get a `device_class` (temperature, duration, data size, battery, illuminance), so Home Assistant converts units and keeps long-term statistics.
+
+### Raspberry Pi image
+- Based on Raspberry Pi OS Trixie (pi-gen `2026-10-06-raspios-trixie-arm64`) instead of Bookworm.
+- Fewer SD card writes: the journal stays in RAM (48 MB; `PERSISTENT_LOGS=yes` in `kioskmate.txt` keeps it on the card) and swap is compressed in RAM (zram) instead of a swap file.
+- `VIDEO_MEMORY=auto` (default): boards with 2 GB RAM or more get `dtoverlay=vc4-kms-v3d,cma-512`, so camera streams keep hardware decoding.
+- Not built on real hardware yet: please test before relying on it.
+
+### Development and documentation
+- CI: Windows job (tests, `install.ps1` syntax, start plus `/healthz`), shellcheck for all shell scripts, tests for the first-boot script, browser tests also against the minified UI, an accessibility check (button names, field labels, image alt texts) on every Admin view, and a CHANGELOG check. The release workflow checks the CHANGELOG section before building.
+- New workflows: "Image packages" checks the pinned pi-gen tag and every image package against the Trixie archives (weekly and on image changes), "Security" runs govulncheck (weekly and on dependency changes). Dependabot keeps Go modules, actions and the test tooling current.
+- New documentation: [HARDWARE](docs/HARDWARE.md), [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [MQTT](docs/MQTT.md), [API](docs/API.md), [CONTRIBUTING](CONTRIBUTING.md), [RELEASE](docs/RELEASE.md); README brought up to date.
+
 ## v1.0.0-pre.3
 
 Third pre-release: inserts switch without blanking the display, no more white flashes, and telemetry that shows where the CPU goes. Configs from 1.0.0-pre.2 keep working unchanged.

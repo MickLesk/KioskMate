@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a ready-to-flash Raspberry Pi OS Lite (Bookworm, arm64) image with
+# Build a ready-to-flash Raspberry Pi OS Lite (Trixie, arm64) image with
 # Cage, Chromium and KioskMate, using pi-gen in Docker. See docs/IMAGE.md.
 #
 #   image/build.sh                    build the .deb and the image
@@ -15,8 +15,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PI_GEN_REPO="${PI_GEN_REPO:-https://github.com/RPi-Distro/pi-gen.git}"
-# Pinned pi-gen release (Raspberry Pi OS Bookworm arm64). Update deliberately.
-PI_GEN_REF="${PI_GEN_REF:-2026-09-15-raspios-bookworm-arm64}"
+# Pinned pi-gen release (Raspberry Pi OS Trixie arm64). Update deliberately;
+# scripts/check-image-packages.py (CI job "image-packages") checks that the
+# tag exists and that every package of the stage is in the Trixie archives.
+PI_GEN_REF="${PI_GEN_REF:-2026-10-06-raspios-trixie-arm64}"
+RELEASE="${RELEASE:-trixie}"
 VERSION="${VERSION:-0.0.0-dev}"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build/image}"
 OUT_DIR="${OUT_DIR:-$ROOT/dist/image}"
@@ -62,7 +65,7 @@ umask 077
 {
   conf IMG_NAME "kioskmate-${VERSION}"
   conf PI_GEN_RELEASE "KioskMate ${VERSION}"
-  conf RELEASE bookworm
+  conf RELEASE "$RELEASE"
   conf DEPLOY_COMPRESSION "${DEPLOY_COMPRESSION:-xz}"
   conf TARGET_HOSTNAME kioskmate
   conf FIRST_USER_NAME kiosk
