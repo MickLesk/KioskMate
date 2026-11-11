@@ -30,6 +30,7 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - The temperature tile says "No temperature sensor" instead of "-".
 - An expired session (kiosk restarted, signed out elsewhere) returns to the login with a short note instead of failing every click with "Unauthorized".
 - Dates and times follow the language chosen in the admin UI instead of the browser language.
+- The programme timeline is also available as a list for screen readers (the coloured blocks only had tooltips).
 
 ### Robustness and security
 - Offline page: when a page cannot be loaded (no network, DNS, server down), the kiosk shows a dark offline page with clock, target and countdown instead of Chromium's error page, checks the target with growing pauses (5 s up to 60 s) and opens it again as soon as it answers.
@@ -54,7 +55,7 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - Not built on real hardware yet: please test before relying on it.
 
 ### Development and documentation
-- CI: Windows job (tests, `install.ps1` syntax, start plus `/healthz`), shellcheck for all shell scripts, tests for the first-boot script, browser tests also against the minified UI, an accessibility check (button names, field labels, image alt texts) on every Admin view, and a CHANGELOG check. The release workflow checks the CHANGELOG section before building.
+- CI: Windows job (tests, `install.ps1` syntax, start plus `/healthz`), shellcheck for all shell scripts, tests for the first-boot script, browser tests also against the minified UI, an accessibility check (button names, field labels, image alt texts) on every Admin view, a CHANGELOG check, and the translation check now also rejects hard-coded texts in the Admin UI. The release workflow checks the CHANGELOG section before building.
 - New workflows: "Image packages" checks the pinned pi-gen tag and every image package against the Trixie archives (weekly and on image changes), "Security" runs govulncheck (weekly and on dependency changes). Dependabot keeps Go modules, actions and the test tooling current.
 - New documentation: [HARDWARE](docs/HARDWARE.md), [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [MQTT](docs/MQTT.md), [API](docs/API.md), [CONTRIBUTING](CONTRIBUTING.md), [RELEASE](docs/RELEASE.md); README brought up to date.
 

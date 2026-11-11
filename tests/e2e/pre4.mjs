@@ -137,6 +137,12 @@ export default async function pre4({ browser, base, ok, errors, out, api, fakes 
   }
   ok("a11y: buttons named, fields labelled, images with alt on all views", a11yProblems.length === 0 && a11yChecked > 200, a11yProblems.slice(0, 6).join(" | ") || `${a11yChecked} elements`);
 
+  await page.evaluate(() => localStorage.setItem("kioskmate.view", "program"));
+  await page.reload();
+  await page.waitForSelector(".tl", { timeout: 8000 }).catch(() => {});
+  const spokenTimeline = await page.locator(".tl ul.offscreen li").count();
+  ok("a11y: timeline readable as a list", spokenTimeline > 0, `${spokenTimeline} entries`);
+
   // ---- Session expired: back to the login instead of error toasts ----
   await ctx.clearCookies();
   await page.click('[data-action="refresh"]');
