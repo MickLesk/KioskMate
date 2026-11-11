@@ -106,6 +106,14 @@ export default async function pre4({ browser, base, ok, errors, out, api, fakes 
   const big = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "x".repeat(200000) }) });
   ok("limits: oversized login body refused", big.status >= 400 && big.status < 500, String(big.status));
 
+  // ---- Session expired: back to the login instead of error toasts ----
+  await ctx.clearCookies();
+  await page.click('[data-action="refresh"]');
+  await page.waitForSelector("#auth-password", { timeout: 6000 }).catch(() => {});
+  ok("session: expired session returns to the login", await page.locator("#auth-password").isVisible().catch(() => false));
+  const toastText = await page.locator("#toasts").innerText();
+  ok("session: explains why without error toasts", /Sitzung abgelaufen/.test(toastText) && !/Unauthorized/.test(toastText), toastText);
+
   await ctx.close();
 }
 

@@ -1344,5 +1344,11 @@
   "msgTimeout": "Der Server antwortet nicht (Zeitüberschreitung). Netzwerk und Adresse prüfen.",
   "msgBrokerAuth": "Der Broker lehnt Benutzer oder Passwort ab.",
   "doctorCheck_time_zone": "Zeitzone",
-  "doctor_time_zone_warn": "Die eingestellte Zeitzone ist unbekannt; Zeitpläne laufen deshalb in der Zeitzone des Systems. Unter Gerät → Zeit eine Zeitzone wählen."
+  "doctor_time_zone_warn": "Die eingestellte Zeitzone ist unbekannt; Zeitpläne laufen deshalb in der Zeitzone des Systems. Unter Gerät → Zeit eine Zeitzone wählen.",
+  "sessionExpired": "Sitzung abgelaufen",
+  "sessionExpiredHint": "Bitte erneut anmelden.",
+  "doctorCheck_disk_space": "Speicherplatz",
+  "doctor_disk_space_ok": "Genug freier Speicher auf der Systemplatte.",
+  "doctor_disk_space_warn": "Weniger als 1 GB frei auf der Systemplatte. Platz schaffen mit sudo apt clean und sudo journalctl --vacuum-size=50M.",
+  "doctor_disk_space_error": "Weniger als 200 MB frei: Speichern der Konfiguration und das Browserprofil können fehlschlagen. Sofort Platz schaffen mit sudo apt clean und sudo journalctl --vacuum-size=50M."
 }

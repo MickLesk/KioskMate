@@ -58,7 +58,7 @@ import { describeClock } from "./clock.js";
           const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local.target || "");
           if (!match) return t("notConfigured");
           const date = new Date(+match[1], +match[2] - 1, +match[3], +match[4], +match[5]);
-          return `${local.title ? `${local.title} · ` : ""}${date.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+          return `${local.title ? `${local.title} · ` : ""}${date.toLocaleString(state.lang || undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
         }
         if (page.source_type === "news" || page.source_type === "camera") {
           const list = (page.source_type === "news" ? local.feeds : local.streams) || [];

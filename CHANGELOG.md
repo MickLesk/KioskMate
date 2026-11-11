@@ -28,6 +28,8 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - Accessibility: "Skip to content" link, dialogs keep the keyboard focus inside, close on Escape and return the focus to the button that opened them; light theme text colours raised to WCAG AA contrast.
 - The browser tab title names the area and the kiosk and starts with ⚠ while the display browser is stopped.
 - The temperature tile says "No temperature sensor" instead of "-".
+- An expired session (kiosk restarted, signed out elsewhere) returns to the login with a short note instead of failing every click with "Unauthorized".
+- Dates and times follow the language chosen in the admin UI instead of the browser language.
 
 ### Robustness and security
 - Offline page: when a page cannot be loaded (no network, DNS, server down), the kiosk shows a dark offline page with clock, target and countdown instead of Chromium's error page, checks the target with growing pauses (5 s up to 60 s) and opens it again as soon as it answers.
@@ -38,6 +40,8 @@ Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry
 - Terminal commands from the admin UI are written to the journal with the program name, exit code and duration (not the full command line), and the real exit code is shown.
 - MQTT reconnects with growing pauses (5 s up to 2 min, with jitter) and logs repeated failures less often. TLS and connection errors (unknown certificate authority, wrong host name, expired certificate, refused, timeout, wrong credentials) are explained in German and English.
 - The Browser Doctor warns when the configured time zone does not exist (schedules would silently use the system time zone).
+- A crash in a background part (scheduler, MQTT, workflows, updater) no longer takes the whole kiosk down: the stack goes to the log and that part restarts with a growing pause (it stays stopped after five crashes).
+- The Browser Doctor warns when less than 1 GB is free on the system disk and reports an error below 200 MB, with the commands to free space.
 
 ## v1.0.0-pre.3
 

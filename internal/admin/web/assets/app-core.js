@@ -389,7 +389,7 @@ const NAV = [
       export function formatDate(value) {
         if (!value) return t("never");
         const date = new Date(value);
-        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(state.lang || undefined);
       }
 
       export function formatMQTTState(value) {
@@ -464,8 +464,22 @@ const NAV = [
 		  return await KioskMateAPI.request(path, { ...options, csrf: state.auth?.csrf });
 		} catch (error) {
 		  if (error?.name === "AbortError") throw new Error(t("requestTimeout"));
+		  if (error?.status === 401 && !String(path).startsWith("/api/auth/")) {
+		    error.sessionExpired = true;
+		    if (state.auth?.authenticated) sessionExpired();
+		  }
 		  throw error;
 		}
+      }
+
+      // The session ended on the kiosk (restart with new secret, logout elsewhere, expiry):
+      // go back to the login once instead of failing every following request with a toast.
+      function sessionExpired() {
+        stopLiveUpdates();
+        closeModal();
+        state.auth = { authenticated: false, setupRequired: false };
+        renderLogin();
+        toast(t("sessionExpired"), t("sessionExpiredHint"), "warn");
       }
 
       export const getJSON = (path, options = {}) => request(path, options);
@@ -482,6 +496,7 @@ const NAV = [
           recordAction(success ?? t("actionDone"), name, "ok");
           return result;
         } catch (err) {
+          if (err?.sessionExpired) return undefined;
           toast(t("failed"), err.message, "error");
           if (err.data?.browser_log || err.data?.core_log) showActionFailureDetails(err);
           recordAction(t("failed"), `${name}: ${err.message}`, "error");

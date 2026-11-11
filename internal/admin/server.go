@@ -2889,6 +2889,29 @@ func hardwareDoctorChecks(status hardware.Status, add func(id, level, message st
 			add("touch_input", "ok", "Touch input device found.", devices)
 		}
 	}
+	diskSpaceCheck(status.System["disk_usage"], add)
+}
+
+// diskSpaceCheck warns before a full SD card breaks config saves, the browser
+// profile and the journal. Thresholds are absolute: percent alone is
+// misleading on a 128 GB card.
+func diskSpaceCheck(value any, add func(id, level, message string, detail any)) {
+	disk, ok := value.(map[string]any)
+	if !ok || disk == nil {
+		return
+	}
+	available, ok := disk["available_gb"].(float64)
+	if !ok {
+		return
+	}
+	switch {
+	case available < 0.2:
+		add("disk_space", "error", fmt.Sprintf("Only %.1f GB free on the system disk. Saving the configuration and the browser profile can fail. Free space with sudo apt clean and sudo journalctl --vacuum-size=50M.", available), disk)
+	case available < 1:
+		add("disk_space", "warn", fmt.Sprintf("Only %.1f GB free on the system disk. Free space with sudo apt clean and sudo journalctl --vacuum-size=50M.", available), disk)
+	default:
+		add("disk_space", "ok", fmt.Sprintf("%.1f GB free on the system disk.", available), disk)
+	}
 }
 
 func doctorAdvice(checks []map[string]any) []string {

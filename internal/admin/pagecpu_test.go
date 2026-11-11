@@ -40,3 +40,22 @@ func TestTimeZoneCheck(t *testing.T) {
 		t.Fatalf("checks = %v", ids)
 	}
 }
+
+func TestDiskSpaceCheck(t *testing.T) {
+	cases := []struct {
+		available float64
+		want      string
+	}{{0.1, "error"}, {0.6, "warn"}, {12, "ok"}}
+	for _, c := range cases {
+		var level string
+		diskSpaceCheck(map[string]any{"available_gb": c.available}, func(id, l, message string, detail any) {
+			if id == "disk_space" {
+				level = l
+			}
+		})
+		if level != c.want {
+			t.Fatalf("available %.1f: level %q, want %q", c.available, level, c.want)
+		}
+	}
+	diskSpaceCheck(nil, func(string, string, string, any) { t.Fatal("no check expected without data") })
+}

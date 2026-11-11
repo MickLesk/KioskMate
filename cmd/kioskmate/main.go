@@ -134,15 +134,15 @@ func main() {
 			logger.Warn("initial browser start failed", "error", err)
 		}
 	}()
-	go browser.RunScheduler(ctx)
-	go mqttService.Run(ctx)
+	go supervise(ctx, logger, "scheduler", browser.RunScheduler)
+	go supervise(ctx, logger, "mqtt", mqttService.Run)
 	browser.SetActivityHandler(func() { workflowEngine.HandleActivity(ctx) })
 	browser.SetRebootHandler(func(ctx context.Context) error {
 		_, err := actionService.Start(ctx, "reboot")
 		return err
 	})
-	go workflowEngine.Run(ctx)
-	go updateService.Run(ctx)
+	go supervise(ctx, logger, "workflow", workflowEngine.Run)
+	go supervise(ctx, logger, "updater", updateService.Run)
 
 	logger.Info("kioskmate core started", "version", version, "config", cfg.Path, "admin", cfg.Admin.Addr())
 	logger.Info("log file", "path", logFile)

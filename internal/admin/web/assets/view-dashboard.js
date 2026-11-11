@@ -129,7 +129,7 @@ function lastErrorRow(browser) {
   const age = at ? Date.now() - new Date(at).getTime() : 0;
   if (browser.ready && age > 24 * 3600 * 1000) return "";
   const when = relativeTime(at);
-  return `<div><dt>${esc(t("lastError"))}</dt><dd>${esc(humanizeMessage(browser.last_error))}${when ? ` <small class="muted" title="${esc(new Date(at).toLocaleString())}">(${esc(when)})</small>` : ""}</dd></div>`;
+  return `<div><dt>${esc(t("lastError"))}</dt><dd>${esc(humanizeMessage(browser.last_error))}${when ? ` <small class="muted" title="${esc(new Date(at).toLocaleString(state.lang || undefined))}">(${esc(when)})</small>` : ""}</dd></div>`;
 }
 
 // Up next: each insert once with its next run and rhythm, plus the next

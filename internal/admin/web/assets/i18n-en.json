@@ -1344,5 +1344,11 @@
   "msgTimeout": "The server does not answer (timeout). Check the network and the address.",
   "msgBrokerAuth": "The broker rejects the user name or password.",
   "doctorCheck_time_zone": "Time zone",
-  "doctor_time_zone_warn": "The configured time zone is unknown, so schedules run in the system time zone. Pick a zone under Device → Time."
+  "doctor_time_zone_warn": "The configured time zone is unknown, so schedules run in the system time zone. Pick a zone under Device → Time.",
+  "sessionExpired": "Session expired",
+  "sessionExpiredHint": "Please sign in again.",
+  "doctorCheck_disk_space": "Disk space",
+  "doctor_disk_space_ok": "Enough free space on the system disk.",
+  "doctor_disk_space_warn": "Less than 1 GB free on the system disk. Free space with sudo apt clean and sudo journalctl --vacuum-size=50M.",
+  "doctor_disk_space_error": "Less than 200 MB free: saving the configuration and the browser profile can fail. Free space now with sudo apt clean and sudo journalctl --vacuum-size=50M."
 }

@@ -63,7 +63,7 @@ function renderPages(pages) {
           <div class="grid">
             <strong>${esc(t("recentActions"))}</strong>
             <div class="workflow-line">
-			  ${entries.map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}" title="${esc(item.detail)}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString())}</span>`).join("")}
+			  ${entries.map((item) => `<span class="chip ${item.type === "error" ? "bad" : item.type === "warn" ? "warn" : "ok"}" title="${esc(item.detail)}">${esc(item.title)} - ${esc(new Date(item.at).toLocaleTimeString(state.lang || undefined))}</span>`).join("")}
             </div>
           </div>`;
       }
@@ -457,7 +457,7 @@ function renderPages(pages) {
           case "touch_devices_missing":
             return Array.isArray(value) ? value.join(", ") : "-";
           case "touch_last_seen":
-            return value ? new Date(value).toLocaleString() : "-";
+            return value ? new Date(value).toLocaleString(state.lang || undefined) : "-";
           case "memory_usage_percent":
           case "processor_usage_percent":
           case "battery_level":
@@ -548,7 +548,7 @@ function renderPages(pages) {
 
 	  function shortDay(value) {
 		const date = new Date(value);
-		return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(undefined, { day: "numeric", month: "numeric" });
+		return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(state.lang || undefined, { day: "numeric", month: "numeric" });
 	  }
 
       export function stateBanner(tone, title, message, action = "") {
