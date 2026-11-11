@@ -500,7 +500,8 @@ function renderPages(pages) {
 		  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 		};
 		const versions = history?.versions || [];
-		if (!samples.length && !versions.length) return "";
+		const pages = history?.pages || [];
+		if (!samples.length && !versions.length && !pages.length) return "";
 		const tiles = samples.length ? `<div class="telemetry-panel">
 		  ${statusTile(t("averagePagesCpu"), cpuShare(average("pages_cpu")), Number(cpuShareValue(average("pages_cpu")) || 0) >= 40 ? "warn" : "", t("averagePagesCpuHint"))}
 		  ${statusTile(t("averageCoreMemory"), formatValue(average("core_mb"), " MB"), "", `${cpuShare(average("core_cpu"))} CPU`)}
@@ -516,7 +517,27 @@ function renderPages(pages) {
 		  item.memory_average ? formatValue(item.memory_average, " %") : "-",
 		]);
 		const comparison = versions.length ? `<div class="body"><h4>${esc(t("versionComparison"))}</h4><p class="hint">${esc(t("versionComparisonHint"))}</p>${table([t("versionColumn"), t("periodColumn"), t("browserCpuColumn"), t("pagesCpuColumn"), t("browserMemoryColumn"), t("systemMemoryColumn")], rows)}</div>` : "";
-		return `<div class="telemetry-split">${tiles ? `<div class="body"><h4>${esc(t("telemetrySplit"))}</h4>${tiles}</div>` : ""}${comparison}</div>`;
+		return `<div class="telemetry-split">${tiles ? `<div class="body"><h4>${esc(t("telemetrySplit"))}</h4>${tiles}</div>` : ""}${renderPageCpu(pages)}${comparison}</div>`;
+	  }
+
+	  // CPU per page: which page costs the most while it is on screen.
+	  export function renderPageCpu(pages) {
+		if (!pages?.length) return "";
+		const seconds = Number(state.config?.watchdog?.check_interval || 15e9) / 1e9 || 15;
+		const max = Math.max(1, ...pages.map((item) => Number(item.pages_cpu_average || 0)));
+		const rows = pages.map((item) => {
+		  const share = Number(cpuShareValue(item.pages_cpu_average) || 0);
+		  const width = Math.max(2, Math.round(Number(item.pages_cpu_average || 0) / max * 100));
+		  return `<tr class="${share >= 40 ? "warn" : ""}"><td>${esc(item.name || item.page_id)}</td><td><span class="page-cpu-bar" aria-hidden="true"><i data-width="${width}"></i></span> ${esc(cpuShare(item.pages_cpu_average))}${share >= 40 ? ` <span class="tag warn">${esc(t("pageCpuHigh"))}</span>` : ""}</td><td>${esc(cpuShare(item.cpu_average))}</td><td>${esc(formatValue(item.rss_average_mb, " MB"))}</td><td>${esc(measuredFor(item.samples * seconds))}</td></tr>`;
+		}).join("");
+		return `<div class="body page-cpu"><h4>${esc(t("pageCpuTitle"))}</h4><p class="hint">${esc(t("pageCpuHint"))}</p><div class="table-wrap"><table><thead><tr><th>${esc(t("pageColumn"))}</th><th>${esc(t("pagesCpuColumn"))}</th><th>${esc(t("browserCpuColumn"))}</th><th>${esc(t("browserMemoryColumn"))}</th><th>${esc(t("measuredColumn"))}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+	  }
+
+	  function measuredFor(seconds) {
+		const minutes = Math.round(seconds / 60);
+		if (minutes < 60) return `${minutes} min`;
+		const hours = minutes / 60;
+		return hours < 48 ? `${formatValue(Math.round(hours * 10) / 10)} h` : `${Math.round(hours / 24)} ${t("daysShort")}`;
 	  }
 
 	  function shortDay(value) {

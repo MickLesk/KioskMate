@@ -1219,7 +1219,7 @@
   "newsSuggestions": "Suggestions:",
   "newsInterval": "Seconds per headline",
   "cameraStreams": "Cameras (one address per line, up to four)",
-  "cameraHint": "For go2rtc enter the address of its stream page, e.g. http://192.168.1.10:1984/stream.html?src=frontdoor. MJPEG and snapshot addresses work too. Browsers cannot play RTSP directly; use go2rtc for that. A stream that freezes for 15 seconds is reconnected.",
+  "cameraHint": "For go2rtc enter the address of its stream page, e.g. http://192.168.1.10:1984/stream.html?src=frontdoor. MJPEG and snapshot addresses work too. Browsers cannot play RTSP directly; use go2rtc for that. A stream that freezes for 15 seconds is reconnected. Saves a lot of CPU on a Raspberry Pi: add the camera's substream (e.g. 640×360 instead of 4K) as its own go2rtc source and use that here. Streams are disconnected while the page is in the background or the display is off.",
   "immichUrl": "Immich address",
   "immichKey": "API key",
   "immichKeySaved": "Saved, leave empty to keep it",
@@ -1279,5 +1279,18 @@
   "swap_disk_used": "{used} MB are swapped to the SD card. The dashboard stutters and the card wears. Use zram instead: sudo apt install zram-tools, then sudo dphys-swapfile swapoff && sudo systemctl disable dphys-swapfile and reboot.",
   "gpuTryHardware": "Try hardware mode",
   "gpuHardwareStarted": "Hardware mode is on and the browser restarted. Runtime telemetry shows the comparison after a few hours.",
-  "gpuShort": "GPU"
+  "gpuShort": "GPU",
+  "pageCpuTitle": "CPU per page",
+  "pageCpuHint": "Page CPU while the page is on screen (without the first 30 seconds after loading). Camera dashboards usually top the list; a substream or MSE instead of WebRTC helps there.",
+  "pageCpuHigh": "high",
+  "pageColumn": "Page",
+  "measuredColumn": "Measured",
+  "daysShort": "days",
+  "doctorCheck_page_cpu": "CPU per page",
+  "pageCpu_high": "The page “{page}” keeps {share} % of the processor busy while it is on screen. Camera streams are the usual cause: use a substream or MSE instead of WebRTC, or show fewer cameras at once.",
+  "pageCpu_ok": "The most demanding page, “{page}”, needs {share} % of the processor on average.",
+  "browserNotRunningShort": "Display browser not running",
+  "profileEffectLowPower": "Low-power profile: one renderer process, at most 2 open tabs, 64 MB browser cache (spares the SD card), no back-forward cache, page previews every 6 hours, KioskMate itself with a 48 MB memory limit.",
+  "profileEffectBalanced": "Balanced: Chromium's default processes, up to 3 open tabs, normal browser cache.",
+  "profileEffectQuality": "Quality: Chromium without restrictions. Only for devices with plenty of memory."
 }

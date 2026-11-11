@@ -2226,6 +2226,9 @@ func (s *Server) browserDoctor(w http.ResponseWriter, r *http.Request) {
 	if report, ok := collectSwap(); ok {
 		swapCheck(report, add)
 	}
+	if runtime, ok := s.browser.(runtimeBrowser); ok {
+		pageCPUCheck(runtime.Telemetry().Pages, 0, add)
+	}
 	if strings.Contains(model, "Raspberry Pi") {
 		report := collectVideoDecode(ctx, model)
 		report.ChromiumH264HW = h264HW

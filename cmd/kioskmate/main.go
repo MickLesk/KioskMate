@@ -79,6 +79,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer instanceLock.Close()
+	if limit := applyMemoryLimit(cfg.Snapshot().Performance.Profile); limit > 0 {
+		logger.Info("soft memory limit for the low-power profile", "mb", limit>>20)
+	}
 	eventJournal, journalErr := events.Open(config.EventJournalPath(cfg.Path), 500)
 	if journalErr != nil {
 		logger.Warn("event journal unavailable", "error", journalErr)

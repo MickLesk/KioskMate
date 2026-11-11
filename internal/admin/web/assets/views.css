@@ -2888,3 +2888,30 @@
 .telemetry-split h4 + .telemetry-panel {
   margin-top: 10px;
 }
+
+.page-cpu-bar {
+  display: inline-block;
+  width: 80px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.page-cpu-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+}
+
+.page-cpu tr.warn .page-cpu-bar i {
+  background: var(--amber);
+}
+
+.tag.warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+}

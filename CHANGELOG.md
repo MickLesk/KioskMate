@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## v1.0.0-pre.4
+
+Fourth pre-release: less load on the Raspberry Pi and its SD card, and telemetry that names the page that costs the most. Configs from 1.0.0-pre.3 keep working unchanged.
+
+### Performance
+- CPU per page: the telemetry credits the browser load to the page on screen (without the first 30 seconds after loading and while the display is off) and lists the pages by cost under Device → Display → Runtime telemetry. The Browser Doctor names a page that keeps 40 % or more of the processor busy.
+- Camera page: streams are disconnected while the page is hidden (a background tab during an insert, or the display is blanked) and reconnect when it is shown again. A paused video keeps downloading and decoding; only removing the source stops it. The editor now recommends substreams.
+- The low-power profiles cap Chromium's disk cache at 64 MB (it grew to several hundred MB and was rewritten constantly on the SD card) and turn off the back-forward cache, which kept the previous page in memory after every page switch.
+- Chromium no longer runs crash upload, domain reliability beacons, hyperlink auditing pings or the phishing model download.
+- KioskMate itself runs with a soft 48 MB memory limit in the low-power profiles, so the garbage collector returns memory earlier. A `GOMEMLIMIT` in the environment wins.
+- The browser log folds identical Chromium lines into one "repeated N times" line and stays below 5 MB while the browser runs (before, it was only rotated at browser start and could grow for weeks). Fewer writes to the SD card and the journal.
+- The processor temperature sensor is looked up once instead of scanning sysfs on every sample.
+- The performance profile setting explains what the selected profile changes.
+- The overview shows "–" for the browser load while the display browser is stopped instead of "0 % · 0 MB".
+
 ## v1.0.0-pre.3
 
 Third pre-release: inserts switch without blanking the display, no more white flashes, and telemetry that shows where the CPU goes. Configs from 1.0.0-pre.2 keep working unchanged.

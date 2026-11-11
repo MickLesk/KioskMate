@@ -304,7 +304,7 @@ func TestExpectedBrowserStopDoesNotRecordLastError(t *testing.T) {
 	browser.stopping = true
 	browser.mu.Unlock()
 
-	browser.wait(cmd, nil)
+	browser.wait(cmd, nil, nil)
 
 	status := browser.Status()
 	if status.LastError != "" {
@@ -328,7 +328,7 @@ func TestUnexpectedBrowserExitRecordsLastError(t *testing.T) {
 	browser.cmd = cmd
 	browser.mu.Unlock()
 
-	browser.wait(cmd, nil)
+	browser.wait(cmd, nil, nil)
 
 	status := browser.Status()
 	if status.LastError == "" {
@@ -350,7 +350,7 @@ func TestQuickSuccessfulBrowserExitRecordsLastError(t *testing.T) {
 	browser.started = time.Now()
 	browser.mu.Unlock()
 
-	browser.wait(cmd, nil)
+	browser.wait(cmd, nil, nil)
 
 	status := browser.Status()
 	if status.LastError == "" || !strings.Contains(status.LastError, "without error") {
@@ -423,6 +423,14 @@ func TestPerformanceProfileArgs(t *testing.T) {
 		if !contains(args, want) {
 			t.Fatalf("raspberry profile missing %s in %#v", want, args)
 		}
+	}
+	for _, want := range []string{"--disk-cache-size=67108864", "--disable-breakpad", "--no-pings"} {
+		if !contains(args, want) {
+			t.Fatalf("raspberry profile missing %s in %#v", want, args)
+		}
+	}
+	if !containsPrefix(args, "--disable-features=") || !strings.Contains(strings.Join(args, " "), "BackForwardCache") {
+		t.Fatalf("raspberry profile should disable the back-forward cache: %#v", args)
 	}
 	for _, risky := range []string{"--enable-low-end-device-mode", "--disable-gpu-rasterization", "--disable-zero-copy", "--disable-dev-shm-usage", "--num-raster-threads=1", "--disable-background-timer-throttling"} {
 		if contains(args, risky) {

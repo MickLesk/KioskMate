@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -242,24 +243,45 @@ func MemoryUsagePercent() float64 {
 	return (total - available) / total * 100
 }
 
-// ProcessorTemperature is the CPU temperature in °C, or 0 when unknown.
+// ProcessorTemperature is the CPU temperature in °C, or 0 when unknown. The
+// sensor is looked up once; later calls read a single sysfs file.
 func ProcessorTemperature() float64 {
-	entries, _ := os.ReadDir("/sys/class/thermal")
+	temperatureOnce.Do(func() { temperaturePath = findTemperatureSensor("/sys/class/thermal") })
+	if temperaturePath == "" {
+		return 0
+	}
+	return readTemperature(temperaturePath)
+}
+
+var (
+	temperatureOnce sync.Once
+	temperaturePath string
+)
+
+func findTemperatureSensor(root string) string {
+	entries, _ := os.ReadDir(root)
 	for _, wanted := range []string{"cpu-thermal", "x86_pkg_temp", "k10temp", "TCPU", "cpu", "acpitz"} {
 		for _, entry := range entries {
-			dir := filepath.Join("/sys/class/thermal", entry.Name())
+			dir := filepath.Join(root, entry.Name())
 			kind, err := os.ReadFile(filepath.Join(dir, "type"))
 			if err != nil || strings.TrimSpace(string(kind)) != wanted {
 				continue
 			}
-			raw, err := os.ReadFile(filepath.Join(dir, "temp"))
-			if err != nil {
-				continue
-			}
-			if value, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64); err == nil && value > 0 {
-				return value / 1000
+			if readTemperature(filepath.Join(dir, "temp")) > 0 {
+				return filepath.Join(dir, "temp")
 			}
 		}
+	}
+	return ""
+}
+
+func readTemperature(path string) float64 {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	if value, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64); err == nil && value > 0 {
+		return value / 1000
 	}
 	return 0
 }

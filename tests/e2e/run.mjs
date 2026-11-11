@@ -15,6 +15,7 @@ import admin from "./admin.mjs";
 import features from "./features.mjs";
 import setup from "./setup.mjs";
 import templates from "./templates.mjs";
+import pre4 from "./pre4.mjs";
 import { startFakes } from "./fakes.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,7 +35,7 @@ const results = [];
 const errors = [];
 const ok = (name, cond, detail = "") => results.push(`${cond ? "PASS" : "FAIL"}  ${name}${detail ? "  — " + detail : ""}`);
 
-async function withServer(fixture, port, run) {
+async function withServer(fixture, port, run, prepare) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kioskmate-e2e-"));
   const cfg = JSON.parse(fs.readFileSync(path.join(here, "fixture", fixture), "utf8"));
   cfg.admin.bind = "127.0.0.1";
@@ -43,6 +44,7 @@ async function withServer(fixture, port, run) {
   cfg.kiosk.user_data_dir = path.join(dir, "profile");
   const configPath = path.join(dir, "config.json");
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+  if (prepare) prepare(dir, cfg);
   const log = fs.openSync(path.join(out, `server-${port}.log`), "w");
   const env = { ...process.env, KIOSKMATE_OPEN_METEO_URL: `${fakes.url}/forecast`, KIOSKMATE_GITHUB_API_URL: `${fakes.url}/github` };
   const server = spawn(binary, ["-config", configPath], { cwd: dir, env, stdio: ["ignore", log, log] });
@@ -73,12 +75,14 @@ async function withServer(fixture, port, run) {
 const fakes = await startFakes();
 const { chromium } = loadPlaywright();
 const browser = await chromium.launch();
-const suites = [["config.json", 33481, admin], ["config.json", 33482, features], ["config-fresh.json", 33483, setup], ["config.json", 33484, templates]];
+const suites = [["config.json", 33481, admin], ["config.json", 33482, features], ["config-fresh.json", 33483, setup], ["config.json", 33484, templates], ["config.json", 33485, pre4]];
+// E2E_ONLY=pre4 runs a single suite while working on it.
+const only = process.env.E2E_ONLY;
 try {
-  for (const [fixture, port, suite] of suites) {
+  for (const [fixture, port, suite] of suites.filter(([, , suite]) => !only || suite.name === only)) {
     const before = results.length;
     try {
-      await withServer(fixture, port, (env) => suite({ browser, ok, errors, out, ...env }));
+      await withServer(fixture, port, (env) => suite({ browser, ok, errors, out, ...env }), suite.prepare);
     } catch (error) {
       ok(`${suite.name}: suite finished`, false, String(error?.stack || error));
     }

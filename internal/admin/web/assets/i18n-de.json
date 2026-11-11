@@ -1219,7 +1219,7 @@
   "newsSuggestions": "Vorschläge:",
   "newsInterval": "Sekunden pro Meldung",
   "cameraStreams": "Kameras (eine Adresse pro Zeile, bis zu vier)",
-  "cameraHint": "Für go2rtc die Adresse der Stream-Seite eintragen, z. B. http://192.168.1.10:1984/stream.html?src=haustuer. MJPEG- und Snapshot-Adressen gehen auch. RTSP kann der Browser nicht direkt abspielen, dafür go2rtc nutzen. Hängt ein Bild 15 Sekunden, verbindet die Seite neu.",
+  "cameraHint": "Für go2rtc die Adresse der Stream-Seite eintragen, z. B. http://192.168.1.10:1984/stream.html?src=haustuer. MJPEG- und Snapshot-Adressen gehen auch. RTSP kann der Browser nicht direkt abspielen, dafür go2rtc nutzen. Hängt ein Bild 15 Sekunden, verbindet die Seite neu. Spart auf dem Raspberry Pi viel CPU: in go2rtc den Substream der Kamera (z. B. 640×360 statt 4K) als eigene Quelle anlegen und hier eintragen. Im Hintergrund oder bei ausgeschaltetem Bildschirm werden die Streams getrennt.",
   "immichUrl": "Immich-Adresse",
   "immichKey": "API-Schlüssel",
   "immichKeySaved": "Gespeichert, leer lassen zum Behalten",
@@ -1279,5 +1279,18 @@
   "swap_disk_used": "{used} MB sind auf die SD-Karte ausgelagert. Das Dashboard ruckelt dadurch und die Karte nutzt sich ab. Besser zram: sudo apt install zram-tools, dann sudo dphys-swapfile swapoff && sudo systemctl disable dphys-swapfile und neu starten.",
   "gpuTryHardware": "Hardware-Modus testen",
   "gpuHardwareStarted": "Hardware-Modus aktiv, der Browser wurde neu gestartet. Den Vergleich zeigt die Laufzeit-Telemetrie nach ein paar Stunden.",
-  "gpuShort": "GPU"
+  "gpuShort": "GPU",
+  "pageCpuTitle": "CPU pro Seite",
+  "pageCpuHint": "Seiten-CPU, während die Seite auf dem Bildschirm ist (ohne die ersten 30 Sekunden nach dem Laden). Kamera-Dashboards stehen meist oben; dort hilft ein Substream oder MSE statt WebRTC.",
+  "pageCpuHigh": "hoch",
+  "pageColumn": "Seite",
+  "measuredColumn": "Gemessen",
+  "daysShort": "Tage",
+  "doctorCheck_page_cpu": "CPU pro Seite",
+  "pageCpu_high": "Die Seite „{page}“ lastet den Prozessor zu {share} % aus, solange sie angezeigt wird. Meist sind es Kamera-Streams: Substream oder MSE statt WebRTC nutzen oder weniger Kameras gleichzeitig zeigen.",
+  "pageCpu_ok": "Die anspruchsvollste Seite, „{page}“, braucht im Schnitt {share} % des Prozessors.",
+  "browserNotRunningShort": "Anzeige-Browser läuft nicht",
+  "profileEffectLowPower": "Sparprofil: ein Renderer-Prozess, höchstens 2 offene Tabs, 64 MB Browser-Cache (schont die SD-Karte), kein Zurück-Cache, Vorschaubilder alle 6 Stunden, KioskMate selbst mit 48 MB Speicherlimit.",
+  "profileEffectBalanced": "Ausgewogen: Chromium-Standardprozesse, bis zu 3 offene Tabs, normaler Browser-Cache.",
+  "profileEffectQuality": "Qualität: Chromium ohne Einschränkungen. Nur für Geräte mit viel Speicher."
 }

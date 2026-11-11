@@ -84,7 +84,9 @@ export function renderDashboard() {
       </section>
 
       <section class="status-strip" aria-label="${esc(t("status"))}">
-        ${statusTile(t("processorLoad"), cpuShare(stats.cpu_percent), Number(cpuShareValue(stats.cpu_percent) || 0) > 75 ? "warn" : "", `${cpuCoresUsed(stats.cpu_percent)} · ${formatValue(stats.rss_mb, " MB RAM")}`)}
+        ${browser.running
+          ? statusTile(t("processorLoad"), cpuShare(stats.cpu_percent), Number(cpuShareValue(stats.cpu_percent) || 0) > 75 ? "warn" : "", `${cpuCoresUsed(stats.cpu_percent)} · ${formatValue(stats.rss_mb, " MB RAM")}`)
+          : statusTile(t("processorLoad"), "–", "", t("browserNotRunningShort"))}
         ${statusTile(t("memory"), formatValue(hw.system?.memory_usage_percent, " %"), Number(hw.system?.memory_usage_percent || 0) > 85 ? "warn" : "", formatValue(hw.system?.memory_size_gib, " GiB"))}
         ${statusTile(t("temperature"), formatValue(hw.system?.processor_temperature_c, " °C"), Number(hw.system?.processor_temperature_c || 0) >= 75 ? "warn" : "", hw.device?.model || "")}
         ${statusTile("MQTT", formatMQTTState(mqtt.state), mqtt.connected ? "ok" : mqtt.state === "auth_error" || mqtt.state === "error" ? "bad" : "", mqtt.last_error || (cfg.mqtt?.enabled ? cfg.mqtt?.url || "" : t("notConfigured")))}

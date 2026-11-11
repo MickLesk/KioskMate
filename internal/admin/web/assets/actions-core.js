@@ -251,6 +251,9 @@ export function bindView() {
         if (check.id === "swap" && detail.finding) {
           return t(`swap_${detail.finding}`).replace("{used}", detail.swap_used_mb || 0);
         }
+        if (check.id === "page_cpu" && detail.finding) {
+          return t(`pageCpu_${detail.finding}`).replace("{page}", detail.page || "").replace("{share}", Math.round(Number(detail.share_percent || 0)));
+        }
         if (check.id === "page_video" && detail.finding) {
           return t(`pageVideo_${detail.finding}`)
             .replace("{count}", detail.videos || 0)
